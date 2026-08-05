@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Municípios | Sistema de Pregões{% endblock %}
+{% block page_title %}Cadastro de Municípios{% endblock %}
+{% block page_subtitle %}Gerencie os municípios utilizados nos cadastros de escolas e pregões{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        {% if modo_edicao %}
+        <h2>Editar Município</h2>
+        <p>
+            Editando:
+            <strong>{{ municipio_edicao.nome }}</strong>
+        </p>
+        {% else %}
+        <h2>Novo Município</h2>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label>Nome do Município</label>
+                {{ form.nome }}
+                {{ form.nome.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>UF</label>
+                {{ form.uf }}
+                {{ form.uf.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ form.ativo }}
+                    Ativo
+                </label>
+            </div>
+
+            <div class="actions">
+                {% if modo_edicao %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Alterações
+                </button>
+
+                <a class="btn btn-secondary" href="{% url 'cadastros:municipios' %}">
+                    Cancelar Edição
+                </a>
+                {% else %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Município
+                </button>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Municípios Cadastrados</h2>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Município</th>
+                        <th>UF</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for municipio in municipios %}
+                    <tr>
+                        <td>{{ municipio.nome }}</td>
+                        <td>{{ municipio.uf }}</td>
+                        <td>
+                            {% if municipio.ativo %}
+                            <span class="badge badge-success">Ativo</span>
+                            {% else %}
+                            <span class="badge badge-danger">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <a class="btn btn-primary" href="{% url 'cadastros:editar_municipio' municipio.id %}">
+                                    Editar
+                                </a>
+
+                                {% if municipio.ativo %}
+                                <a class="btn btn-danger"
+                                    href="{% url 'cadastros:alternar_status_municipio' municipio.id %}"
+                                    onclick="return confirm('Tem certeza que deseja inativar este município?');">
+                                    Inativar
+                                </a>
+                                {% else %}
+                                <a class="btn btn-success"
+                                    href="{% url 'cadastros:alternar_status_municipio' municipio.id %}"
+                                    onclick="return confirm('Tem certeza que deseja ativar este município?');">
+                                    Ativar
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="4">Nenhum município cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

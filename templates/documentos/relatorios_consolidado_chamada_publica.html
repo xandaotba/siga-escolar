@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Consolidado da Chamada Pública | Sistema de Certames{% endblock %}
+{% block page_title %}Consolidado da Chamada Pública{% endblock %}
+{% block page_subtitle %}Adjudicado, contratado e saldo da Chamada Pública por fornecedor e item{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .relatorio-filtros {
+        margin-bottom: 18px;
+    }
+
+    .relatorio-info {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .resumo-relatorio {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        color: #0f2f57;
+        font-size: 22px;
+        font-weight: 900;
+    }
+
+    .texto-direita {
+        text-align: right;
+    }
+
+    .print-header {
+        display: none;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-relatorio {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media print {
+        @page {
+            size: A4 landscape;
+            margin: 10mm;
+        }
+
+        body {
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        .sidebar,
+        .topbar,
+        .footer-space,
+        .no-print,
+        .relatorio-filtros {
+            display: none !important;
+        }
+
+        .app {
+            display: block !important;
+        }
+
+        .main {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+        }
+
+        .content {
+            padding: 0 !important;
+        }
+
+        .print-header {
+            display: block !important;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .print-header h1 {
+            margin: 0 0 4px;
+            font-size: 18px;
+            color: #000000 !important;
+        }
+
+        .print-header p {
+            margin: 0;
+            font-size: 11px;
+            color: #000000 !important;
+        }
+
+        .card,
+        .resumo-card {
+            box-shadow: none !important;
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .resumo-relatorio {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        }
+
+        .table-wrapper {
+            overflow: visible !important;
+        }
+
+        table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            font-size: 10px !important;
+        }
+
+        th,
+        td {
+            border: 1px solid #000000 !important;
+            padding: 4px !important;
+            color: #000000 !important;
+        }
+
+        th {
+            background: #e5e7eb !important;
+            font-weight: bold !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        a {
+            color: #000000 !important;
+            text-decoration: none !important;
+        }
+
+        .badge {
+            border: 1px solid #000000 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+    }
+</style>
+
+
+<div class="print-header">
+    <h1>Consolidado da Chamada Pública</h1>
+    <p>Adjudicado, contratado e saldo por fornecedor e item.</p>
+</div>
+
+<div class="actions no-print" style="margin-bottom: 16px;">
+    <button class="btn btn-primary" type="button" onclick="window.print()">
+        🖨️ Imprimir Relatório
+    </button>
+</div>
+
+
+<div class="card relatorio-filtros">
+    <h2>Filtros</h2>
+
+    {% if restrito_escola and escola_vinculada %}
+    <p class="relatorio-info">
+        Visualização restrita aos contratos da escola: <strong>{{ escola_vinculada.nome_escola }}</strong>.
+    </p>
+    {% endif %}
+
+    <form method="get">
+        <div class="form-group">
+            <label>Chamada Pública</label>
+            <select name="pregao" required>
+                <option value="">Selecione</option>
+                {% for chamada_item in chamadas %}
+                <option value="{{ chamada_item.id }}" {% if filtros.pregao == chamada_item.id|stringformat:"s" %}selected{% endif %}>
+                    Chamada Pública {{ chamada_item.numero }}/{{ chamada_item.ano }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar Relatório</button>
+            <a class="btn btn-secondary" href="{% url 'documentos:relatorios_consolidado_chamada_publica' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+
+{% if chamada %}
+<div class="resumo-relatorio">
+    <div class="resumo-card">
+        <div class="resumo-label">Valor adjudicado</div>
+        <div class="resumo-value">{{ totais.adjudicado|moeda_br }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Valor contratado</div>
+        <div class="resumo-value">{{ totais.contratado|moeda_br }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Saldo em valor</div>
+        <div class="resumo-value">{{ totais.saldo|moeda_br }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Chamada Pública {{ chamada.numero }}/{{ chamada.ano }}</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Fornecedor</th>
+                    <th>Item</th>
+                    <th>Unidade</th>
+                    <th>Qtd. Adjudicada</th>
+                    <th>Valor Adjudicado</th>
+                    <th>Qtd. Contratada</th>
+                    <th>Valor Contratado</th>
+                    <th>Saldo Qtd.</th>
+                    <th>Saldo Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.fornecedor.razao_social }}</td>
+                    <td><strong>{{ linha.item.nome_item }}</strong></td>
+                    <td>{{ linha.unidade }}</td>
+                    <td>{{ linha.quantidade_adjudicada|quantidade_br }}</td>
+                    <td class="texto-direita">{{ linha.valor_adjudicado|moeda_br }}</td>
+                    <td>{{ linha.quantidade_contratada|quantidade_br }}</td>
+                    <td class="texto-direita">{{ linha.valor_contratado|moeda_br }}</td>
+                    <td><strong>{{ linha.saldo_quantidade|quantidade_br }}</strong></td>
+                    <td class="texto-direita"><strong>{{ linha.saldo_valor|moeda_br }}</strong></td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9">Nenhum resultado adjudicado encontrado para esta Chamada Pública.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

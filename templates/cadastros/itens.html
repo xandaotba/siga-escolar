@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Itens | Sistema de Pregões{% endblock %}
+{% block page_title %}Cadastro de Itens{% endblock %}
+{% block page_subtitle %}Gerencie os itens que serão utilizados nos pregões{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            {% if modo_edicao %}
+            <h2>Editar Item</h2>
+            {% else %}
+            <h2>Novo Item</h2>
+            {% endif %}
+
+            <a class="btn btn-primary" href="{% url 'importacoes:itens' %}">
+                Importar de Planilha
+            </a>
+        </div>
+
+        {% if modo_edicao %}
+        <p>
+            Editando:
+            <strong>{{ item_edicao.nome_item }}</strong>
+        </p>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label>Nome do Item</label>
+                {{ form.nome_item }}
+                {{ form.nome_item.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>Unidade de Medida</label>
+                <select name="unidade_medida" required>
+                    <option value="">Selecione a unidade</option>
+
+                    {% for unidade in unidades_medida %}
+                    <option value="{{ unidade.codigo }}" {% if form.unidade_medida.value == unidade.codigo %}selected{% endif %}>
+                        {{ unidade.nome }}{% if unidade.sigla %} ({{ unidade.sigla }}){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                {{ form.unidade_medida.errors }}
+
+                <small>
+                    Para cadastrar ou alterar unidades, acesse o menu Cadastros → Unidades de Medida.
+                </small>
+            </div>
+
+            <div class="form-group">
+                <label>Descrição do Item</label>
+                {{ form.descricao }}
+                {{ form.descricao.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ form.ativo }}
+                    Ativo
+                </label>
+            </div>
+
+            <div class="actions">
+                {% if modo_edicao %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Alterações
+                </button>
+
+                <a class="btn btn-secondary" href="{% url 'cadastros:itens' %}">
+                    Cancelar Edição
+                </a>
+                {% else %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Item
+                </button>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Itens Cadastrados</h2>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Unidade</th>
+                        <th>Descrição</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for item in itens %}
+                    <tr>
+                        <td>{{ item.nome_item }}</td>
+                        <td>{{ item.get_unidade_medida_display }}</td>
+                        <td title="{{ item.descricao }}">{{ item.descricao|truncatechars:60 }}</td>
+                        <td>
+                            {% if item.ativo %}
+                            <span class="badge badge-success">Ativo</span>
+                            {% else %}
+                            <span class="badge badge-danger">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <a class="btn btn-primary" href="{% url 'cadastros:editar_item' item.id %}">
+                                    Editar
+                                </a>
+
+                                {% if item.ativo %}
+                                <a class="btn btn-danger" href="{% url 'cadastros:alternar_status_item' item.id %}"
+                                    onclick="return confirm('Tem certeza que deseja inativar este item?');">
+                                    Inativar
+                                </a>
+                                {% else %}
+                                <a class="btn btn-success" href="{% url 'cadastros:alternar_status_item' item.id %}"
+                                    onclick="return confirm('Tem certeza que deseja ativar este item?');">
+                                    Ativar
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5">Nenhum item cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if itens.has_other_pages %}
+        <div class="pagination" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:16px; flex-wrap:wrap;">
+            {% if itens.has_previous %}
+            <a class="btn btn-secondary" href="?page={{ itens.previous_page_number }}">Anterior</a>
+            {% endif %}
+
+            <span style="font-weight:700; color:#475569;">
+                Página {{ itens.number }} de {{ itens.paginator.num_pages }}
+            </span>
+
+            {% if itens.has_next %}
+            <a class="btn btn-secondary" href="?page={{ itens.next_page_number }}">Próxima</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

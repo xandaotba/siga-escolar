@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block title %}Prévia do Contrato | Sistema de Pregões{% endblock %}
+{% block page_title %}Prévia do Contrato{% endblock %}
+{% block page_subtitle %}Conferência dos itens selecionados antes da geração definitiva{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <h2>Dados do Contrato</h2>
+
+    <div class="grid grid-2">
+        <div>
+            <h3>Escola</h3>
+            <p>
+                <strong>Nome:</strong> {{ escola.nome_escola }}<br>
+                <strong>CNPJ:</strong> {{ escola.cnpj }}<br>
+                <strong>Endereço:</strong> {{ escola.endereco }}, {{ escola.numero }} - {{ escola.bairro }}<br>
+                <strong>Município:</strong> {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}<br>
+                <strong>Presidente do CDCE:</strong> {{ escola.presidente_cdce }}<br>
+                <strong>CPF do Presidente:</strong> {{ escola.cpf_presidente }}
+            </p>
+        </div>
+
+        <div>
+            <h3>Fornecedor</h3>
+            <p>
+                <strong>Razão Social:</strong> {{ fornecedor.razao_social }}<br>
+                <strong>CNPJ:</strong> {{ fornecedor.cnpj }}<br>
+                <strong>Endereço:</strong> {{ fornecedor.endereco }}<br>
+                <strong>Representante:</strong> {{ fornecedor.representante_legal }}<br>
+                <strong>CPF do Representante:</strong> {{ fornecedor.cpf_representante }}<br>
+                <strong>E-mail:</strong> {{ fornecedor.email }}
+            </p>
+        </div>
+    </div>
+
+    <p>
+        <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+        <strong>Data do Pregão:</strong> {{ pregao.data_pregao|date:"d/m/Y" }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Itens selecionados para este contrato</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nº</th>
+                    <th>Item</th>
+                    <th>Marca</th>
+                    <th>Quantidade Disponível</th>
+                    <th>Quantidade a Contratar</th>
+                    <th>Saldo para Futuro</th>
+                    <th>Unidade</th>
+                    <th>Valor Unitário</th>
+                    <th>Valor Total</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for item in itens_contrato %}
+                <tr>
+                    <td>{{ item.ordem }}</td>
+                    <td>{{ item.item.nome_item }}</td>
+                    <td>{{ item.marca }}</td>
+                    <td>{{ item.quantidade_disponivel }}</td>
+                    <td>{{ item.quantidade_contratar }}</td>
+                    <td>{{ item.saldo_nao_contratado }}</td>
+                    <td>{{ item.unidade }}</td>
+                    <td>R$ {{ item.valor_unitario }}</td>
+                    <td>R$ {{ item.valor_total_item }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <h3 style="text-align: right;">
+        Valor Total do Contrato: R$ {{ valor_total_contrato }}
+    </h3>
+</div>
+
+<div class="card">
+    <h2>Próxima etapa</h2>
+
+    <p>
+        Esta é apenas a prévia. Clique no botão abaixo para Gerar Contrato Definitivo.
+    </p>
+
+    <div class="actions">
+        <a class="btn btn-secondary" href="{% url 'documentos:contratos_pregao' pregao.id %}">
+            Voltar para Base de Contratos
+        </a>
+
+        <form method="post" action="{% url 'documentos:registrar_contrato' pregao.id escola.id fornecedor.id %}">
+            {% csrf_token %}
+        
+            {% for item in itens_contrato %}
+            <input type="hidden" name="quantitativo_escola_id" value="{{ item.quantitativo_escola_id }}">
+        
+            <input type="hidden" name="quantidade_contratar_{{ item.quantitativo_escola_id }}"
+                value="{{ item.quantidade_contratar }}">
+            {% endfor %}
+        
+            <button class="btn btn-success" type="submit"
+                onclick="return confirm('Confirmar geração deste contrato? Após confirmar, as quantidades serão abatidas do saldo disponível.');">
+                Gerar Contrato Definitivo
+            </button>
+        </form>
+    </div>
+</div>
+
+{% endblock %}

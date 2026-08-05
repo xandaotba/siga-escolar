@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Cancelar Nota Fiscal | Sistema de Certames{% endblock %}
+{% block page_title %}Cancelar Nota Fiscal{% endblock %}
+{% block page_subtitle %}Confirme o cancelamento do registro da nota fiscal{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .badge-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .badge-pendente { background: #fff7ed; color: #c2410c; }
+    .badge-vinculado { background: #ecfdf5; color: #047857; }
+    .badge-divergente { background: #fef2f2; color: #b91c1c; }
+    .texto-direita { text-align: right; }
+    .muted-text { color: #64748b; font-size: 13px; }
+</style>
+
+
+<div class="card">
+    <h2>Confirmar Cancelamento</h2>
+
+    <div class="warning-box">
+        Deseja realmente cancelar a NF-e <strong>{{ nota.numero_nota }}</strong> no valor de <strong>{{ nota.valor_total|moeda_br }}</strong>?
+    </div>
+
+    <p class="muted-text">
+        Nesta etapa, o cancelamento apenas altera o status do registro. A rotina de estorno será criada depois.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="actions">
+            <button class="btn btn-danger" type="submit">Sim, cancelar nota</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Voltar</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

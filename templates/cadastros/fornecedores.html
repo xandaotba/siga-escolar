@@ -1,0 +1,457 @@
+{% extends "base.html" %}
+
+{% block title %}Fornecedores | Sistema de Pregões{% endblock %}
+{% block page_title %}Cadastro de Fornecedores{% endblock %}
+{% block page_subtitle %}Gerencie os fornecedores participantes dos pregões{% endblock %}
+
+{% block content %}
+
+<style>
+    .fornecedor-chamada-box {
+        border: 1px solid #dbeafe;
+        background: #eff6ff;
+        border-radius: 14px;
+        padding: 14px;
+        margin: 14px 0;
+    }
+
+    .fornecedor-chamada-box h3 {
+        margin-top: 0;
+        color: #0f2f57;
+    }
+
+    .limite-chamada {
+        font-weight: 900;
+        color: #166534;
+    }
+
+    .texto-ajuda {
+        color: #64748b;
+        font-size: 12px;
+        margin-top: 4px;
+    }
+    .campo-oculto-fornecedor {
+        display: none !important;
+    }
+</style>
+
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            {% if modo_edicao %}
+            <h2>Editar Fornecedor</h2>
+            {% else %}
+            <h2>Novo Fornecedor</h2>
+            {% endif %}
+
+            <a class="btn btn-primary" href="{% url 'importacoes:fornecedores' %}">
+                Importar de Planilha
+            </a>
+        </div>
+
+        {% if modo_edicao %}
+        <p>
+            Editando:
+            <strong>{{ fornecedor_edicao.razao_social }}</strong>
+        </p>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="fornecedor-chamada-box">
+                <h3>Tipo de Fornecedor</h3>
+
+                <div class="form-group">
+                    <label>Classificação</label>
+                    {{ form.tipo_fornecedor_chamada }}
+                    {{ form.tipo_fornecedor_chamada.errors }}
+                    <div class="texto-ajuda">
+                        Use "Fornecedor Individual" ou "Grupo Formal / Cooperativa" para fornecedores da Chamada Pública.
+                    </div>
+                </div>
+
+                <div id="campos_agricultura_familiar">
+                    <div class="grid grid-2">
+                        <div class="form-group campo-tipo-fornecedor" id="campo_cpf_individual">
+                            <label>CPF do Fornecedor Individual</label>
+                            {{ form.cpf_fornecedor_individual }}
+                            {{ form.cpf_fornecedor_individual.errors }}
+                        </div>
+
+                        <div class="form-group campo-tipo-fornecedor" id="campo_caf_dap">
+                            <label>CAF/DAP</label>
+                            {{ form.caf_dap }}
+                            {{ form.caf_dap.errors }}
+                        </div>
+                    </div>
+
+                    <div class="form-group campo-tipo-fornecedor" id="campo_quantidade_caf_dap">
+                        <label>Quantidade de CAF/DAP vinculadas</label>
+                        {{ form.quantidade_caf_dap }}
+                        {{ form.quantidade_caf_dap.errors }}
+                        <div class="texto-ajuda">
+                            Para grupo formal/cooperativa, informe a quantidade de CAF/DAP vinculadas. Para fornecedor individual, o sistema considera automaticamente 1.
+                        </div>
+                    </div>
+
+                    <div class="texto-ajuda">
+                        Limite anual estimado:
+                        <span class="limite-chamada" id="limite_chamada_publica">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Razão Social / Nome do Fornecedor</label>
+                {{ form.razao_social }}
+                {{ form.razao_social.errors }}
+            </div>
+
+            <div class="form-group campo-tipo-fornecedor" id="campo_cnpj">
+                <label>CNPJ</label>
+                {{ form.cnpj }}
+                {{ form.cnpj.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>Endereço</label>
+                {{ form.endereco }}
+                {{ form.endereco.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>Telefone</label>
+                {{ form.telefone }}
+                {{ form.telefone.errors }}
+            </div>
+
+            <h3>Representante Legal</h3>
+
+            <div class="form-group">
+                <label>Representante Legal</label>
+                {{ form.representante_legal }}
+                {{ form.representante_legal.errors }}
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>RG</label>
+                    {{ form.rg_representante }}
+                    {{ form.rg_representante.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>Órgão Expedidor</label>
+                    {{ form.orgao_expedidor_representante }}
+                    {{ form.orgao_expedidor_representante.errors }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>CPF do Representante</label>
+                {{ form.cpf_representante }}
+                {{ form.cpf_representante.errors }}
+            </div>
+
+            <h3>Contato e Dados Bancários</h3>
+
+            <div class="form-group">
+                <label>E-mail</label>
+                {{ form.email }}
+                {{ form.email.errors }}
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Banco</label>
+                    {{ form.nome_banco }}
+                    {{ form.nome_banco.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>Agência</label>
+                    {{ form.agencia }}
+                    {{ form.agencia.errors }}
+                </div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Conta Corrente</label>
+                    {{ form.conta_corrente }}
+                    {{ form.conta_corrente.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>PIX</label>
+                    {{ form.pix }}
+                    {{ form.pix.errors }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ form.ativo }}
+                    Ativo
+                </label>
+            </div>
+
+            <div class="actions">
+                {% if modo_edicao %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Alterações
+                </button>
+
+                <a class="btn btn-secondary" href="{% url 'cadastros:fornecedores' %}">
+                    Cancelar Edição
+                </a>
+                {% else %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Fornecedor
+                </button>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Fornecedores Cadastrados</h2>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Razão Social</th>
+                        <th>Tipo</th>
+                        <th>CNPJ/CPF</th>
+                        <th>Limite Anual</th>
+                        <th>Telefone</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for fornecedor in fornecedores %}
+                    <tr>
+                        <td>{{ fornecedor.razao_social }}</td>
+                        <td>{{ fornecedor.get_tipo_fornecedor_chamada_display }}</td>
+                        <td>
+                            {% if fornecedor.tipo_fornecedor_chamada == "individual" and fornecedor.cpf_fornecedor_individual %}
+                            {{ fornecedor.cpf_fornecedor_individual }}
+                            {% else %}
+                            {{ fornecedor.cnpj }}
+                            {% endif %}
+                        </td>
+                        <td>{{ fornecedor.get_limite_anual_chamada_publica_display }}</td>
+                        <td>{{ fornecedor.telefone }}</td>
+                        <td>
+                            {% if fornecedor.ativo %}
+                            <span class="badge badge-success">Ativo</span>
+                            {% else %}
+                            <span class="badge badge-danger">Inativo</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <a class="btn btn-primary" href="{% url 'cadastros:editar_fornecedor' fornecedor.id %}">
+                                    Editar
+                                </a>
+
+                                {% if fornecedor.ativo %}
+                                <a class="btn btn-danger"
+                                    href="{% url 'cadastros:alternar_status_fornecedor' fornecedor.id %}"
+                                    onclick="return confirm('Tem certeza que deseja inativar este fornecedor?');">
+                                    Inativar
+                                </a>
+                                {% else %}
+                                <a class="btn btn-success"
+                                    href="{% url 'cadastros:alternar_status_fornecedor' fornecedor.id %}"
+                                    onclick="return confirm('Tem certeza que deseja ativar este fornecedor?');">
+                                    Ativar
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7">Nenhum fornecedor cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if fornecedores.has_other_pages %}
+        <div class="pagination" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:16px; flex-wrap:wrap;">
+            {% if fornecedores.has_previous %}
+            <a class="btn btn-secondary" href="?page={{ fornecedores.previous_page_number }}">Anterior</a>
+            {% endif %}
+
+            <span style="font-weight:700; color:#475569;">
+                Página {{ fornecedores.number }} de {{ fornecedores.paginator.num_pages }}
+            </span>
+
+            {% if fornecedores.has_next %}
+            <a class="btn btn-secondary" href="?page={{ fornecedores.next_page_number }}">Próxima</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+
+<script>
+    function mostrarCampo(elemento, mostrar) {
+        if (!elemento) {
+            return;
+        }
+
+        if (mostrar) {
+            elemento.classList.remove("campo-oculto-fornecedor");
+            elemento.style.display = "";
+        } else {
+            elemento.classList.add("campo-oculto-fornecedor");
+            elemento.style.display = "none";
+        }
+    }
+
+    function configurarObrigatorio(input, obrigatorio) {
+        if (!input) {
+            return;
+        }
+
+        if (obrigatorio) {
+            input.setAttribute("required", "required");
+            input.required = true;
+        } else {
+            input.removeAttribute("required");
+            input.required = false;
+        }
+    }
+
+    function atualizarCamposAgriculturaFamiliar() {
+        const tipo = document.getElementById("id_tipo_fornecedor_chamada") || document.querySelector('[name="tipo_fornecedor_chamada"]');
+
+        const campoCnpj = document.getElementById("campo_cnpj");
+        const campoCpf = document.getElementById("campo_cpf_individual");
+        const campoCafDap = document.getElementById("campo_caf_dap");
+        const campoQtd = document.getElementById("campo_quantidade_caf_dap");
+        const blocoAgricultura = document.getElementById("campos_agricultura_familiar");
+
+        const inputCnpj = document.getElementById("id_cnpj") || document.querySelector('[name="cnpj"]');
+        const inputCpf = document.getElementById("id_cpf_fornecedor_individual") || document.querySelector('[name="cpf_fornecedor_individual"]');
+        const inputCafDap = document.getElementById("id_caf_dap") || document.querySelector('[name="caf_dap"]');
+        const inputQtd = document.getElementById("id_quantidade_caf_dap") || document.querySelector('[name="quantidade_caf_dap"]');
+        const limite = document.getElementById("limite_chamada_publica");
+
+        if (!tipo) {
+            return;
+        }
+
+        const valorTipo = tipo.value;
+
+        if (valorTipo === "empresa_comum") {
+            mostrarCampo(blocoAgricultura, false);
+            mostrarCampo(campoCnpj, true);
+            mostrarCampo(campoCpf, false);
+            mostrarCampo(campoCafDap, false);
+            mostrarCampo(campoQtd, false);
+
+            configurarObrigatorio(inputCnpj, true);
+            configurarObrigatorio(inputCpf, false);
+            configurarObrigatorio(inputCafDap, false);
+            configurarObrigatorio(inputQtd, false);
+
+            if (inputCpf) { inputCpf.value = ""; }
+            if (inputCafDap) { inputCafDap.value = ""; }
+            if (inputQtd && !inputQtd.value) { inputQtd.value = "1"; }
+            if (limite) { limite.textContent = "-"; }
+
+            return;
+        }
+
+        if (valorTipo === "individual") {
+            mostrarCampo(blocoAgricultura, true);
+            mostrarCampo(campoCnpj, false);
+            mostrarCampo(campoCpf, true);
+            mostrarCampo(campoCafDap, true);
+            mostrarCampo(campoQtd, false);
+
+            configurarObrigatorio(inputCnpj, false);
+            configurarObrigatorio(inputCpf, true);
+            configurarObrigatorio(inputCafDap, true);
+            configurarObrigatorio(inputQtd, false);
+
+            if (inputCnpj) { inputCnpj.value = ""; }
+            if (inputQtd) { inputQtd.value = "1"; }
+            if (limite) { limite.textContent = "R$ 40.000,00"; }
+
+            return;
+        }
+
+        if (valorTipo === "grupo_formal") {
+            mostrarCampo(blocoAgricultura, true);
+            mostrarCampo(campoCnpj, true);
+            mostrarCampo(campoCpf, false);
+            mostrarCampo(campoCafDap, false);
+            mostrarCampo(campoQtd, true);
+
+            configurarObrigatorio(inputCnpj, true);
+            configurarObrigatorio(inputCpf, false);
+            configurarObrigatorio(inputCafDap, false);
+            configurarObrigatorio(inputQtd, true);
+
+            if (inputCpf) { inputCpf.value = ""; }
+            if (inputCafDap) { inputCafDap.value = ""; }
+
+            let quantidade = parseInt(inputQtd ? inputQtd.value || "1" : "1", 10);
+
+            if (isNaN(quantidade) || quantidade < 1) {
+                quantidade = 1;
+            }
+
+            const valorLimite = quantidade * 40000;
+
+            if (limite) {
+                limite.textContent = valorLimite.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+            }
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        const tipo = document.getElementById("id_tipo_fornecedor_chamada") || document.querySelector('[name="tipo_fornecedor_chamada"]');
+        const inputQtd = document.getElementById("id_quantidade_caf_dap") || document.querySelector('[name="quantidade_caf_dap"]');
+
+        if (tipo) {
+            tipo.addEventListener("change", atualizarCamposAgriculturaFamiliar);
+        }
+
+        if (inputQtd) {
+            inputQtd.addEventListener("input", atualizarCamposAgriculturaFamiliar);
+            inputQtd.addEventListener("change", atualizarCamposAgriculturaFamiliar);
+        }
+
+        atualizarCamposAgriculturaFamiliar();
+    });
+</script>
+
+
+{% endblock %}

@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Resumo Financeiro por Escola | Sistema de Certames{% endblock %}
+{% block page_title %}Resumo Financeiro por Escola{% endblock %}
+{% block page_subtitle %}Valores contratados, distratados, realinhados e estimativa atual por escola{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .relatorio-filtros {
+        margin-bottom: 18px;
+    }
+
+    .relatorio-info {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .resumo-relatorio {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        color: #0f2f57;
+        font-size: 22px;
+        font-weight: 900;
+    }
+
+    .texto-direita {
+        text-align: right;
+    }
+
+    .print-header {
+        display: none;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-relatorio {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media print {
+        @page {
+            size: A4 landscape;
+            margin: 10mm;
+        }
+
+        body {
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        .sidebar,
+        .topbar,
+        .footer-space,
+        .no-print,
+        .relatorio-filtros {
+            display: none !important;
+        }
+
+        .app {
+            display: block !important;
+        }
+
+        .main {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+        }
+
+        .content {
+            padding: 0 !important;
+        }
+
+        .print-header {
+            display: block !important;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .print-header h1 {
+            margin: 0 0 4px;
+            font-size: 18px;
+            color: #000000 !important;
+        }
+
+        .print-header p {
+            margin: 0;
+            font-size: 11px;
+            color: #000000 !important;
+        }
+
+        .card,
+        .resumo-card {
+            box-shadow: none !important;
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .resumo-relatorio {
+            grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        }
+
+        .table-wrapper {
+            overflow: visible !important;
+        }
+
+        table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            font-size: 10px !important;
+        }
+
+        th,
+        td {
+            border: 1px solid #000000 !important;
+            padding: 4px !important;
+            color: #000000 !important;
+        }
+
+        th {
+            background: #e5e7eb !important;
+            font-weight: bold !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        a {
+            color: #000000 !important;
+            text-decoration: none !important;
+        }
+
+        .badge {
+            border: 1px solid #000000 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+    }
+</style>
+
+
+<div class="print-header">
+    <h1>Resumo Financeiro por Escola</h1>
+    <p>Valores contratados, distratados, realinhados e estimativa atual por escola.</p>
+</div>
+
+<div class="actions no-print" style="margin-bottom: 16px;">
+    <button class="btn btn-primary" type="button" onclick="window.print()">
+        🖨️ Imprimir Relatório
+    </button>
+</div>
+
+
+<div class="card relatorio-filtros">
+    <h2>Filtros</h2>
+
+    {% if restrito_escola and escola_vinculada %}
+    <p class="relatorio-info">
+        Visualização restrita à escola: <strong>{{ escola_vinculada.nome_escola }}</strong>.
+    </p>
+    {% endif %}
+
+    <form method="get">
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao">
+                    <option value="">Todos</option>
+                    {% for certame in certames %}
+                    <option value="{{ certame.id }}" {% if filtros.pregao == certame.id|stringformat:"s" %}selected{% endif %}>
+                        {{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" {% if restrito_escola %}disabled{% endif %}>
+                    <option value="">Todas</option>
+                    {% for escola in escolas %}
+                    <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                        {{ escola.nome_escola }}{% if escola.municipio %} - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                {% if restrito_escola and escola_vinculada %}
+                    <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Filtrar</button>
+            <a class="btn btn-secondary" href="{% url 'documentos:relatorios_resumo_financeiro_escola' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+
+<div class="resumo-relatorio">
+    <div class="resumo-card">
+        <div class="resumo-label">Contratos</div>
+        <div class="resumo-value">{{ totais.contratos }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Valor contratado</div>
+        <div class="resumo-value">{{ totais.contratado|moeda_br }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Valor distratado</div>
+        <div class="resumo-value">{{ totais.distratado|moeda_br }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Valor atual estimado</div>
+        <div class="resumo-value">{{ totais.atual|moeda_br }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Resultado</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Escola</th>
+                    <th>Município</th>
+                    <th>Contratos</th>
+                    <th>Valor Contratado</th>
+                    <th>Valor Distratado</th>
+                    <th>Diferença Realinhada</th>
+                    <th>Valor Atual Estimado</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.escola.nome_escola }}</td>
+                    <td>{{ linha.escola.municipio.nome }}{% if linha.escola.municipio.uf %}/{{ linha.escola.municipio.uf }}{% endif %}</td>
+                    <td>{{ linha.total_contratos }}</td>
+                    <td class="texto-direita">{{ linha.valor_contratado|moeda_br }}</td>
+                    <td class="texto-direita">{{ linha.valor_distratado|moeda_br }}</td>
+                    <td class="texto-direita">{{ linha.valor_realinhado|moeda_br }}</td>
+                    <td class="texto-direita"><strong>{{ linha.valor_atual_estimado|moeda_br }}</strong></td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7">Nenhum registro financeiro encontrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

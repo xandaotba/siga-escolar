@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Editar Dados da Nota | Sistema de Certames{% endblock %}
+{% block page_title %}Editar Dados da Nota{% endblock %}
+{% block page_subtitle %}Atualize apenas os dados gerais da nota fiscal{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .badge-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .badge-pendente { background: #fff7ed; color: #c2410c; }
+    .badge-vinculado { background: #ecfdf5; color: #047857; }
+    .badge-divergente { background: #fef2f2; color: #b91c1c; }
+    .texto-direita { text-align: right; }
+    .muted-text { color: #64748b; font-size: 13px; }
+</style>
+
+
+<div class="page-actions">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">← Voltar</a>
+</div>
+
+<div class="card">
+    <h2>Dados Gerais</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Número da NF-e</label>
+                <input type="text" name="numero_nota" value="{{ nota.numero_nota }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Data de Emissão</label>
+                <input type="date" name="data_emissao" value="{% if nota.data_emissao %}{{ nota.data_emissao|date:'Y-m-d' }}{% endif %}">
+            </div>
+
+            <div class="form-group">
+                <label>Data de Recebimento</label>
+                <input type="date" name="data_recebimento" value="{{ nota.data_recebimento|date:'Y-m-d' }}" required>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Observações</label>
+            <textarea name="observacoes" rows="4">{{ nota.observacoes }}</textarea>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Salvar Alterações</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Cancelar</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

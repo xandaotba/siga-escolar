@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Resultado Final - Pregão {{ pregao.numero }}/{{ pregao.ano }}</title>
+
+    <style>
+        @page {
+            size: A4 portrait;
+            margin: 12mm;
+        }
+
+        body {
+            font-family: "Times New Roman", serif;
+            font-size: 11px;
+            color: #000;
+            background: #fff;
+            margin: 20px;
+        }
+
+        .no-print {
+            margin-bottom: 12px;
+        }
+
+        .btn-print {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .titulo {
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 18px;
+            text-transform: uppercase;
+        }
+
+        .texto-abertura {
+            text-align: justify;
+            font-size: 12px;
+            line-height: 1.25;
+            margin-bottom: 14px;
+        }
+
+        .tabela-resultado {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .tabela-resultado th,
+        .tabela-resultado td {
+            border: 1px solid #000;
+            padding: 4px;
+            vertical-align: middle;
+            line-height: 1.15;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .tabela-resultado th {
+            background: #bfbfbf;
+            text-align: center;
+            font-weight: bold;
+            font-size: 10px;
+        }
+
+        .col-item {
+            width: 5%;
+            text-align: center;
+        }
+
+        .col-genero {
+            width: 18%;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .col-unidade {
+            width: 11%;
+            text-align: center;
+        }
+
+        .col-quantidade {
+            width: 7%;
+            text-align: center;
+        }
+
+        .col-marca {
+            width: 11%;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        .col-fornecedor {
+            width: 24%;
+        }
+
+        .col-valor {
+            width: 11%;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .status-especial {
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .linha-total td {
+            font-weight: bold;
+            background: #d9d9d9;
+            font-size: 11px;
+        }
+
+        .local-data {
+            text-align: right;
+            margin-top: 34px;
+            font-size: 13px;
+        }
+
+        .assinatura {
+            width: 65%;
+            margin: 80px auto 0;
+            text-align: center;
+            border-top: 1px solid #000;
+            padding-top: 6px;
+            font-size: 13px;
+        }
+
+        @media print {
+            .no-print {
+                display: none;
+            }
+
+            body {
+                margin: 0;
+            }
+
+            table {
+                page-break-inside: auto;
+            }
+
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+
+            thead {
+                display: table-header-group;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="no-print">
+        <button class="btn-print" onclick="window.print()">
+            Imprimir / Salvar em PDF
+        </button>
+    </div>
+
+    <div class="titulo">
+        Resultado do Pregão Presencial
+    </div>
+
+    <div class="texto-abertura">
+        <strong>
+            RESULTADO DO PREGÃO PRESENCIAL SRP N.º {{ pregao.numero }}/{{ pregao.ano }}
+        </strong>
+        A CÂMARA DE NEGÓCIOS DA ALIMENTAÇÃO ESCOLAR
+        {% if municipios_texto %}
+        DO(S) MUNICÍPIO(S) DE {{ municipios_texto }},
+        {% endif %}
+        torna público para conhecimento dos interessados o Resultado do Certame Licitatório do
+        Pregão Presencial SRP de n.º {{ pregao.numero }}/{{ pregao.ano }},
+        cujo objeto é Aquisição de Gêneros Alimentícios, para atendimento dos alunos matriculados
+        nas Unidades Escolares da Rede Pública Estadual
+        {% if municipios_texto %}
+        no(s) Município(s) de {{ municipios_texto }},
+        {% endif %}
+        em observância ao FNDE/PNAE, nos termos do Edital, sendo declarado(s) vencedor(es):
+    </div>
+
+    <table class="tabela-resultado">
+        <thead>
+            <tr>
+                <th class="col-item">Item</th>
+                <th class="col-genero">Gênero Alimentício</th>
+                <th class="col-unidade">Unid.</th>
+                <th class="col-quantidade">Quant.</th>
+                <th class="col-marca">Marca</th>
+                <th class="col-fornecedor">Fornecedor</th>
+                <th class="col-valor">Valor Unit.</th>
+                <th class="col-valor">Valor Total</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for linha in relatorio %}
+            <tr>
+                <td class="col-item">{{ linha.ordem }}</td>
+
+                <td class="col-genero">
+                    {{ linha.genero }}
+                </td>
+
+                <td class="col-unidade">
+                    {{ linha.unidade }}
+                </td>
+
+                <td class="col-quantidade">
+                    {{ linha.quantidade }}
+                </td>
+
+                <td class="col-marca">
+                    {{ linha.marca }}
+                </td>
+
+                <td
+                    class="col-fornecedor {% if linha.fornecedor == 'DESERTO -' or linha.fornecedor == 'FRACASSADO -' %}status-especial{% endif %}">
+                    {{ linha.fornecedor }}
+                </td>
+
+                <td class="col-valor">
+                    {{ linha.valor_unitario }}
+                </td>
+
+                <td class="col-valor">
+                    {{ linha.valor_total }}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="8">
+                    Nenhum resultado encontrado para este pregão.
+                </td>
+            </tr>
+            {% endfor %}
+
+            <tr class="linha-total">
+                <td colspan="7">
+                    VALOR TOTAL DO PREGÃO
+                </td>
+                <td class="col-valor">
+                    {{ valor_total_pregao }}
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="local-data">
+        {% if municipios %}
+        {% for municipio in municipios %}
+        {{ municipio.nome }}{% if not forloop.last %}, {% endif %}
+        {% endfor %},
+        {% endif %}
+        {{ pregao.data_pregao|date:"d/m/Y" }}
+    </div>
+
+    <div class="assinatura">
+        Câmara de Negócios da Alimentação Escolar
+    </div>
+
+</body>
+
+</html>

@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+
+{% block title %}Usuários | Sistema de Pregões{% endblock %}
+{% block page_title %}Usuários{% endblock %}
+{% block page_subtitle %}Cadastro de usuários e perfis de acesso ao sistema{% endblock %}
+
+{% block content %}
+
+<style>
+    .usuarios-resumo {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .usuarios-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .usuarios-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .usuarios-value {
+        color: #0f2f57;
+        font-size: 26px;
+        font-weight: 900;
+    }
+
+    .perfil-badge {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        background: #e0f2fe;
+        color: #075985;
+    }
+
+    .perfil-admin {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .perfil-pregoeiro {
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .perfil-consulta {
+        background: #ede9fe;
+        color: #5b21b6;
+    }
+
+    .status-ativo {
+        color: #166534;
+        font-weight: 900;
+    }
+
+    .status-inativo {
+        color: #991b1b;
+        font-weight: 900;
+    }
+
+    .acoes-usuario {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    @media (max-width: 900px) {
+        .usuarios-resumo {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="usuarios-resumo">
+    <div class="usuarios-card">
+        <div class="usuarios-label">Total de Usuários</div>
+        <div class="usuarios-value">{{ total_usuarios }}</div>
+    </div>
+
+    <div class="usuarios-card">
+        <div class="usuarios-label">Usuários Ativos</div>
+        <div class="usuarios-value">{{ total_ativos }}</div>
+    </div>
+
+    <div class="usuarios-card">
+        <div class="usuarios-label">Usuários Inativos</div>
+        <div class="usuarios-value">{{ total_inativos }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display:flex; justify-content:space-between; gap:14px; align-items:center; flex-wrap:wrap;">
+        <div>
+            <h2 style="margin-bottom:4px;">Usuários cadastrados</h2>
+            <p style="margin:0; color:#64748b;">
+                Gerencie usuários, perfis e acesso ao sistema.
+            </p>
+        </div>
+
+        <a class="btn btn-primary" href="{% url 'usuarios:novo_usuario' %}" data-fix-url="true">
+            Novo Usuário
+        </a>
+    </div>
+
+    <div class="table-wrapper" style="margin-top:18px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Usuário</th>
+                    <th>E-mail</th>
+                    <th>Perfil</th>
+                    <th>Escola vinculada</th>
+                    <th>Status</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for usuario in usuarios %}
+                <tr>
+                    <td>
+                        <strong>{{ usuario.get_full_name|default:usuario.username }}</strong>
+                        {% if usuario.is_superuser %}
+                        <br><span style="color:#64748b; font-size:12px;">Superusuário</span>
+                        {% endif %}
+                    </td>
+
+                    <td>{{ usuario.username }}</td>
+                    <td>{{ usuario.email|default:"-" }}</td>
+
+                    <td>
+                        {% if usuario.perfil_acesso %}
+                            {% if usuario.perfil_acesso.perfil == "administrador" %}
+                            <span class="perfil-badge perfil-admin">{{ usuario.perfil_acesso.get_perfil_display }}</span>
+                            {% elif usuario.perfil_acesso.perfil == "pregoeiro" %}
+                            <span class="perfil-badge perfil-pregoeiro">{{ usuario.perfil_acesso.get_perfil_display }}</span>
+                            {% else %}
+                            <span class="perfil-badge perfil-consulta">{{ usuario.perfil_acesso.get_perfil_display }}</span>
+                            {% endif %}
+                        {% elif usuario.is_superuser %}
+                        <span class="perfil-badge perfil-admin">Administrador</span>
+                        {% else %}
+                        <span class="perfil-badge">Sem perfil</span>
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if usuario.perfil_acesso and usuario.perfil_acesso.escola %}
+                            {{ usuario.perfil_acesso.escola.nome_escola }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if usuario.is_active %}
+                        <span class="status-ativo">Ativo</span>
+                        {% else %}
+                        <span class="status-inativo">Inativo</span>
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        <div class="acoes-usuario">
+                            <a class="btn btn-secondary" href="{% url 'usuarios:editar_usuario' usuario.id %}">
+                                Editar
+                            </a>
+
+                            <a class="btn btn-warning" href="{% url 'usuarios:alterar_senha_usuario' usuario.id %}">
+                                Senha
+                            </a>
+
+                            {% if usuario != request.user and not usuario.is_superuser %}
+                            <form method="post" action="{% url 'usuarios:alternar_status_usuario' usuario.id %}" style="margin:0;">
+                                {% csrf_token %}
+                                {% if usuario.is_active %}
+                                <button class="btn btn-danger" type="submit">
+                                    Inativar
+                                </button>
+                                {% else %}
+                                <button class="btn btn-success" type="submit">
+                                    Ativar
+                                </button>
+                                {% endif %}
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7">Nenhum usuário cadastrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // Corrige fallback caso algum navegador preserve HTML antigo em cache.
+    document.querySelectorAll("[data-fix-url='true']").forEach(function(link) {
+        link.setAttribute("href", "{% url 'usuarios:novo_usuario' %}");
+    });
+</script>
+
+{% endblock %}

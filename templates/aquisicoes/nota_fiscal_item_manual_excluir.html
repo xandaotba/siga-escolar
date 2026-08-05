@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Excluir Item da Nota Fiscal | Sistema de Certames{% endblock %}
+{% block page_title %}Excluir Item da Nota Fiscal{% endblock %}
+{% block page_subtitle %}Confirme a exclusão do item lançado na nota{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .resumo-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .resumo-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; }
+    .resumo-label { color: #64748b; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+    .resumo-value { color: #0f2f57; font-size: 21px; font-weight: 900; }
+    .badge-status { display: inline-flex; align-items: center; justify-content: center; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .badge-pendente { background: #fff7ed; color: #c2410c; }
+    .badge-vinculado { background: #ecfdf5; color: #047857; }
+    .badge-divergente { background: #fef2f2; color: #b91c1c; }
+    .modo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 16px 0; }
+    .modo-card { border: 1px solid #e2e8f0; border-radius: 14px; padding: 15px; background: #ffffff; }
+    .modo-card h3 { margin: 0 0 8px; color: #0f2f57; font-size: 16px; }
+    .modo-card p { margin: 0; color: #64748b; font-size: 13px; line-height: 1.45; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .muted-text { color: #64748b; font-size: 13px; }
+    .texto-direita { text-align: right; }
+    .form-help { color: #64748b; font-size: 12px; margin-top: 4px; }
+    .mini-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    @media (max-width: 1100px) { .resumo-grid, .modo-grid { grid-template-columns: 1fr; } }
+</style>
+
+
+<div class="card">
+    <h2>Confirmar Exclusão</h2>
+
+    <p>
+        Deseja realmente excluir o item
+        <strong>{{ item.descricao_produto }}</strong>
+        da nota fiscal?
+    </p>
+
+    <p class="muted-text">
+        O valor total da nota será recalculado após a exclusão.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="actions">
+            <button class="btn btn-danger" type="submit">Sim, excluir</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Voltar</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

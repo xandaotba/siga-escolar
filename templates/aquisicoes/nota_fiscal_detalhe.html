@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Detalhe da NF-e | Sistema de Certames{% endblock %}
+{% block page_title %}Detalhe da Aquisição por NF-e{% endblock %}
+{% block page_subtitle %}Confira os dados da nota fiscal e confirme a aquisição{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .badge-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .badge-pendente { background: #fff7ed; color: #c2410c; }
+    .badge-vinculado { background: #ecfdf5; color: #047857; }
+    .badge-divergente { background: #fef2f2; color: #b91c1c; }
+    .texto-direita { text-align: right; }
+    .muted-text { color: #64748b; font-size: 13px; }
+</style>
+
+
+<div class="page-actions">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">← Voltar</a>
+    <a class="btn btn-primary" href="{% url 'aquisicoes:aquisicao_manual_nova' %}">➕ Nova Aquisição Manual</a>
+
+    {% if nota.status != "confirmada" and nota.status != "cancelada" %}
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_editar' nota.id %}">Editar Dados da Nota</a>
+    <a class="btn btn-success" href="{% url 'aquisicoes:nota_fiscal_confirmar' nota.id %}">✅ Confirmar Aquisição</a>
+    <a class="btn btn-danger" href="{% url 'aquisicoes:nota_fiscal_cancelar' nota.id %}">Cancelar Nota</a>
+    {% endif %}
+</div>
+
+{% if nota.status == "em_conferencia" %}
+<div class="warning-box">
+    Esta nota fiscal está <strong>Em conferência</strong>. Clique em <strong>Confirmar Aquisição</strong> para mudar o status para Confirmada.
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Dados Gerais</h2>
+
+    <div class="grid grid-3">
+        <div><strong>Status</strong><br><span class="badge-status badge-{{ nota.status }}">{{ nota.get_status_display }}</span></div>
+        <div><strong>Forma de Entrada</strong><br>{{ nota.get_metodo_entrada_display }}</div>
+        <div><strong>Valor Total da Nota</strong><br>{{ nota.valor_total|moeda_br }}</div>
+        <div><strong>Certame</strong><br>{{ nota.pregao.get_tipo_certame_display }} {{ nota.pregao.numero }}/{{ nota.pregao.ano }}</div>
+        <div><strong>Escola</strong><br>{{ nota.escola.nome_escola }}</div>
+        <div><strong>Fornecedor</strong><br>{{ nota.fornecedor.razao_social }}</div>
+        <div><strong>Número da NF-e</strong><br>{% if nota.numero_nota %}{{ nota.numero_nota }}{% else %}-{% endif %}</div>
+        <div><strong>Data de Emissão</strong><br>{% if nota.data_emissao %}{{ nota.data_emissao|date:"d/m/Y" }}{% else %}-{% endif %}</div>
+        <div><strong>Data de Recebimento</strong><br>{{ nota.data_recebimento|date:"d/m/Y" }}</div>
+    </div>
+
+    {% if nota.contrato %}
+    <p style="margin-top: 16px;"><strong>Contrato:</strong><br>{{ nota.contrato.numero_contrato|default:"Contrato" }} — {{ nota.contrato.valor_total|moeda_br }}</p>
+    {% endif %}
+
+    {% if nota.confirmado_em %}
+    <p><strong>Confirmado em:</strong> {{ nota.confirmado_em|date:"d/m/Y H:i" }}</p>
+    {% endif %}
+
+    {% if nota.observacoes %}
+    <p><strong>Observações:</strong><br>{{ nota.observacoes|linebreaksbr }}</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Itens da Nota Fiscal</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Unid.</th>
+                    <th>Quantidade</th>
+                    <th>Valor Unitário</th>
+                    <th>Valor Total</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens %}
+                <tr>
+                    <td>
+                        {% if item.contrato_item %}
+                            <strong>{{ item.contrato_item.item.nome_item }}</strong>
+                        {% elif item.item %}
+                            <strong>{{ item.item.nome_item }}</strong>
+                        {% else %}
+                            {{ item.descricao_produto }}
+                        {% endif %}
+                    </td>
+                    <td>{{ item.unidade }}</td>
+                    <td>{{ item.quantidade|quantidade_br }}</td>
+                    <td>{{ item.valor_unitario|moeda_br }}</td>
+                    <td>{{ item.valor_total|moeda_br }}</td>
+                    <td><span class="badge-status badge-{{ item.status }}">{{ item.get_status_display }}</span></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6">Nenhum item lançado nesta nota fiscal.</td></tr>
+                {% endfor %}
+            </tbody>
+            {% if itens %}
+            <tfoot>
+                <tr>
+                    <th colspan="4" class="texto-direita">Total</th>
+                    <th>{{ nota.valor_itens|moeda_br }}</th>
+                    <th></th>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+
+{% endblock %}

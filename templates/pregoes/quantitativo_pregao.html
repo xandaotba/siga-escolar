@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Quantitativo por Pregão | Sistema de Pregões{% endblock %}
+{% block page_title %}Quantitativo por Pregão{% endblock %}
+{% block page_subtitle %}Informe os itens e quantidades totais que farão parte do pregão{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <h2>Selecionar Pregão</h2>
+
+        <a class="btn btn-primary" href="{% url 'importacoes:quantitativo_pregao' %}">
+            Importar de Planilha
+        </a>
+    </div>
+
+    <form method="get">
+        <div class="form-group">
+            <label>Pregão</label>
+            <select name="pregao" required>
+                <option value="">Selecione um pregão</option>
+
+                {% for p in pregoes %}
+                <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                    Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <button class="btn btn-primary" type="submit">
+            Carregar Itens
+        </button>
+    </form>
+</div>
+
+{% if pregao %}
+<div class="card">
+    <h2>Itens do Pregão {{ pregao.numero }}/{{ pregao.ano }}</h2>
+
+    <p>
+        Preencha apenas os itens que farão parte deste pregão.
+        Os itens em branco não serão gravados.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="pregao" value="{{ pregao.id }}">
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Unidade</th>
+                        <th>Descrição</th>
+                        <th style="width: 180px;">Quantidade</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for item in itens %}
+                    <tr>
+                        <td>{{ item.nome_item }}</td>
+                        <td>{{ item.get_unidade_medida_display }}</td>
+                        <td title="{{ item.descricao }}">{{ item.descricao|truncatechars:60 }}</td>
+                        <td>
+                            <input type="text" name="quantidade_{{ item.id }}" placeholder="0"
+                                value="{{ quantitativos_salvos|get_item:item.id|quantidade_br }}">
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="4">Nenhum item ativo cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <br>
+
+        <button class="btn btn-success" type="submit">
+            Salvar Quantitativos
+        </button>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}

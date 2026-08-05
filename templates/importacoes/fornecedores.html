@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block title %}Importar Fornecedores | Sistema de Pregões{% endblock %}
+{% block page_title %}Importar Fornecedores{% endblock %}
+{% block page_subtitle %}Importe fornecedores em lote usando uma planilha Excel{% endblock %}
+
+{% block content %}
+
+<style>
+    .importacao-passos {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .passo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .passo-numero {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: #0d6efd;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        margin-bottom: 10px;
+    }
+
+    .passo-card h3 {
+        margin: 0 0 6px;
+        color: #0f2f57;
+    }
+
+    .passo-card p {
+        margin: 0;
+        color: #64748b;
+        line-height: 1.5;
+    }
+
+    .resumo-importacao {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-importacao-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .resumo-importacao-label {
+        color: #64748b;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+
+    .resumo-importacao-valor {
+        font-size: 24px;
+        color: #0f2f57;
+        font-weight: 900;
+    }
+
+    .badge-importacao {
+        display: inline-block;
+        padding: 5px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 900;
+    }
+
+    .badge-criar {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .badge-atualizar {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    .badge-erro {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+
+    @media (max-width: 900px) {
+        .importacao-passos,
+        .resumo-importacao {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% elif message.tags == "warning" %}
+<div class="alert alert-warning">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="importacao-passos">
+    <div class="passo-card">
+        <div class="passo-numero">1</div>
+        <h3>Baixe o modelo</h3>
+        <p>Use a planilha padrão para evitar erro nos nomes das colunas.</p>
+    </div>
+
+    <div class="passo-card">
+        <div class="passo-numero">2</div>
+        <h3>Envie a planilha</h3>
+        <p>O sistema valida CNPJ, CPF, e-mail e registros duplicados.</p>
+    </div>
+
+    <div class="passo-card">
+        <div class="passo-numero">3</div>
+        <h3>Confirme</h3>
+        <p>Confira a prévia e confirme para gravar os fornecedores.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display:flex; justify-content:space-between; gap:14px; align-items:center; flex-wrap:wrap;">
+        <div>
+            <h2>Importação</h2>
+            <p style="margin:0; color:#64748b;">
+                Baixe o modelo, preencha os dados e envie o arquivo preenchido.
+            </p>
+        </div>
+
+        <a class="btn btn-secondary" href="{% url 'importacoes:modelo_fornecedores' %}">
+            Baixar Modelo Excel
+        </a>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" style="margin-top:18px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="validar">
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.arquivo.label }}</label>
+                {{ form.arquivo }}
+                {% if form.arquivo.help_text %}
+                <small style="color:#64748b;">{{ form.arquivo.help_text }}</small>
+                {% endif %}
+                {{ form.arquivo.errors }}
+            </div>
+
+            <div class="form-group">
+                <label style="display:flex; align-items:center; gap:8px; margin-top:30px;">
+                    {{ form.atualizar_existentes }}
+                    {{ form.atualizar_existentes.label }}
+                </label>
+                {{ form.atualizar_existentes.errors }}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Validar Planilha
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'cadastros:fornecedores' %}">
+                Voltar para Fornecedores
+            </a>
+        </div>
+    </form>
+</div>
+
+{% if resumo %}
+<div class="resumo-importacao" style="margin-top:20px;">
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas lidas</div>
+        <div class="resumo-importacao-valor">{{ resumo.total }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas válidas</div>
+        <div class="resumo-importacao-valor">{{ resumo.validos }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas com erro</div>
+        <div class="resumo-importacao-valor">{{ resumo.erros }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Criar</div>
+        <div class="resumo-importacao-valor">{{ resumo.criar }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Atualizar</div>
+        <div class="resumo-importacao-valor">{{ resumo.atualizar }}</div>
+    </div>
+</div>
+{% endif %}
+
+{% if linhas %}
+<div class="card" style="margin-top:20px;">
+    <h2>Prévia da Importação</h2>
+
+    <div class="table-wrapper" style="margin-top:14px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Linha</th>
+                    <th>Ação</th>
+                    <th>Razão Social</th>
+                    <th>CNPJ</th>
+                    <th>Representante</th>
+                    <th>CPF Representante</th>
+                    <th>E-mail</th>
+                    <th>Erros</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.linha }}</td>
+                    <td>
+                        {% if linha.acao == "Criar" %}
+                        <span class="badge-importacao badge-criar">Criar</span>
+                        {% elif linha.acao == "Atualizar" %}
+                        <span class="badge-importacao badge-atualizar">Atualizar</span>
+                        {% else %}
+                        <span class="badge-importacao badge-erro">Erro</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ linha.dados.razao_social }}</td>
+                    <td>{{ linha.dados.cnpj }}</td>
+                    <td>{{ linha.dados.representante_legal }}</td>
+                    <td>{{ linha.dados.cpf_representante }}</td>
+                    <td>{{ linha.dados.email|default:"-" }}</td>
+                    <td>
+                        {% if linha.erros %}
+                        <ul style="margin:0; padding-left:18px;">
+                            {% for erro in linha.erros %}
+                            <li>{{ erro }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if resumo.erros == 0 %}
+    <form method="post" style="margin-top:18px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="confirmar">
+
+        <button class="btn btn-success" type="submit"
+            onclick="return confirm('Confirmar a importação dos fornecedores válidos?');">
+            Confirmar Importação
+        </button>
+    </form>
+    {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

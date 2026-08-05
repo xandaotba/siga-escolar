@@ -1,0 +1,1300 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Tela de Lances | Sistema de Pregões{% endblock %}
+{% block page_title %}Pregão {{ pregao.numero }}/{{ pregao.ano }}{% endblock %}
+{% block page_subtitle %}Modo telão — execução dos lances{% endblock %}
+
+{% block content %}
+
+<style>
+    .telao-grid {
+        display: grid;
+        grid-template-columns: 1.4fr 0.9fr;
+        gap: 22px;
+        align-items: start;
+    }
+
+    .painel-principal {
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: white;
+        border-radius: 20px;
+        padding: 28px;
+        box-shadow: 0 12px 32px rgba(15, 47, 87, 0.25);
+    }
+
+    .painel-principal h2 {
+        margin: 0 0 10px;
+        font-size: 22px;
+        color: rgba(255, 255, 255, 0.85);
+    }
+
+    .item-nome {
+        font-size: 36px;
+        font-weight: 800;
+        line-height: 1.15;
+        margin: 8px 0 16px;
+    }
+
+    .item-descricao {
+        font-size: 17px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.82);
+        margin-bottom: 20px;
+    }
+
+    .telao-metricas {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 18px;
+    }
+
+    .telao-metrica {
+        background: rgba(255, 255, 255, 0.13);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 16px;
+        padding: 16px;
+    }
+
+    .telao-metrica-label {
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.72);
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.7px;
+    }
+
+    .telao-metrica-valor {
+        font-size: 28px;
+        font-weight: 800;
+    }
+
+    .fornecedor-atual-card {
+        background: #ffffff;
+        border-radius: 20px;
+        padding: 26px;
+        box-shadow: 0 12px 32px rgba(15, 47, 87, 0.10);
+        border: 2px solid #1d7ff2;
+    }
+
+    .fornecedor-label {
+        color: #475569;
+        text-transform: uppercase;
+        font-size: 13px;
+        font-weight: bold;
+        letter-spacing: 0.8px;
+        margin-bottom: 8px;
+    }
+
+    .fornecedor-nome {
+        color: #0f2f57;
+        font-size: 32px;
+        font-weight: 800;
+        line-height: 1.15;
+        margin-bottom: 18px;
+    }
+
+    .proximo-fornecedor {
+        background: #f1f5f9;
+        border-radius: 14px;
+        padding: 14px;
+        margin-top: 14px;
+        border: 1px solid #e2e8f0;
+    }
+
+    .proximo-fornecedor strong {
+        color: #0f2f57;
+        font-size: 18px;
+    }
+
+    .lance-form input {
+        height: 58px;
+        font-size: 26px;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    .botoes-telao {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-top: 14px;
+    }
+
+    .btn-telao {
+        width: 100%;
+        padding: 16px 18px;
+        border-radius: 14px;
+        font-size: 17px;
+        font-weight: 800;
+    }
+
+    .acoes-item-telao {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+    }
+
+    .historico-telao table th {
+        font-size: 13px;
+    }
+
+    .historico-telao table td {
+        font-size: 15px;
+    }
+
+    .valor-lance-destaque {
+        font-weight: 800;
+        color: #0f2f57;
+    }
+
+    .participantes-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .participante-card {
+        border: 1px solid #e2e8f0;
+        background: white;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .participante-card.atual {
+        border: 2px solid #198754;
+        background: #f0fdf4;
+    }
+
+    .participante-card.proximo {
+        border: 2px solid #ffc107;
+        background: #fffbeb;
+    }
+
+    .participante-card.desistiu {
+        border: 2px solid #dc3545;
+        background: #fef2f2;
+        opacity: 0.8;
+    }
+
+    .participante-nome {
+        font-weight: 800;
+        color: #1e293b;
+        margin-bottom: 8px;
+    }
+
+    .resultado-telao {
+        border: 2px solid #198754;
+        background: #f0fdf4;
+    }
+
+    @media (max-width: 1100px) {
+
+        .telao-grid,
+        .telao-metricas,
+        .acoes-item-telao,
+        .participantes-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .item-nome {
+            font-size: 28px;
+        }
+
+        .fornecedor-nome {
+            font-size: 26px;
+        }
+    }
+
+    .modal-overlay {
+    display: none;
+    position: fixed;
+    z-index: 9999;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.72);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.modal-overlay.ativo {
+    display: flex;
+}
+
+.modal-box {
+    width: min(1100px, 96vw);
+    max-height: 90vh;
+    overflow-y: auto;
+    background: #ffffff;
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    border: 1px solid #e2e8f0;
+}
+
+.modal-header {
+    position: sticky;
+    top: 0;
+    background: #ffffff;
+    z-index: 2;
+    padding: 18px 22px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.modal-header h2 {
+    margin: 0;
+    color: #0f2f57;
+}
+
+.modal-body {
+    padding: 22px;
+}
+
+.modal-close {
+    border: none;
+    background: #f1f5f9;
+    color: #0f172a;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.modal-close:hover {
+    background: #e2e8f0;
+}
+
+.modal-footer {
+    position: sticky;
+    bottom: 0;
+    background: #ffffff;
+    padding: 16px 22px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.btn-outline {
+    background: #ffffff;
+    color: #0f2f57;
+    border: 1px solid #cbd5e1;
+}
+
+.btn-outline:hover {
+    background: #f8fafc;
+}
+
+
+.linha-nao-participa {
+    background: #f8fafc;
+    opacity: 0.75;
+}
+
+.participa-check-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 800;
+    color: #0f2f57;
+}
+
+.texto-nao-participa {
+    color: #dc3545;
+    font-size: 12px;
+    font-weight: 800;
+    display: none;
+    margin-top: 4px;
+}
+
+
+.alerta-media-lance-overlay {
+    display: none;
+    position: fixed;
+    z-index: 10000;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.72);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.alerta-media-lance-overlay.ativo { display: flex; }
+.alerta-media-lance-box {
+    width: min(720px, 96vw);
+    background: #ffffff;
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    border: 2px solid #dc3545;
+    overflow: hidden;
+}
+.alerta-media-lance-header {
+    background: #fef2f2;
+    border-bottom: 1px solid #fecaca;
+    padding: 18px 22px;
+}
+.alerta-media-lance-header h2 { margin: 0; color: #b91c1c; }
+.alerta-media-lance-body { padding: 22px; }
+.alerta-media-lance-body p { line-height: 1.55; }
+.alerta-media-lance-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+}
+.alerta-media-lance-metrica {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+    background: #f8fafc;
+}
+.alerta-media-lance-metrica span {
+    display: block;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}
+.alerta-media-lance-metrica strong {
+    color: #0f2f57;
+    font-size: 18px;
+}
+.alerta-media-lance-footer {
+    padding: 16px 22px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+@media (max-width: 700px) {
+    .alerta-media-lance-grid { grid-template-columns: 1fr; }
+}
+
+
+.acoes-lance-conferencia {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+.btn-lance-mini {
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 9px;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+    color: #ffffff;
+}
+.btn-lance-editar { background: #0d6efd; }
+.btn-lance-excluir { background: #dc3545; }
+.modal-editar-lance-overlay {
+    display: none;
+    position: fixed;
+    z-index: 10001;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.72);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.modal-editar-lance-overlay.ativo { display: flex; }
+.modal-editar-lance-box {
+    width: min(460px, 95vw);
+    background: #ffffff;
+    border-radius: 18px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+.modal-editar-lance-header {
+    padding: 18px 22px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+.modal-editar-lance-header h2 {
+    margin: 0;
+    color: #0f2f57;
+}
+.modal-editar-lance-body { padding: 22px; }
+.modal-editar-lance-footer {
+    padding: 16px 22px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+@media print {
+    .modal-overlay {
+        display: none !important;
+    }
+}
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if item_atual.status == "em_disputa" %}
+<div id="modalPropostasIniciais" class="modal-overlay {% if propostas_pendentes %}ativo{% endif %}">
+    <div class="modal-box">
+        <div class="modal-header">
+            <div>
+                <h2>Propostas Iniciais do Item</h2>
+                <p style="margin: 4px 0 0; color: #475569;">
+                    {{ item_atual.item.nome_item }} — marque os participantes e informe marca/preço inicial.
+                </p>
+            </div>
+
+            {% if not propostas_pendentes %}
+            <button type="button" class="modal-close" onclick="fecharModalPropostas()">
+                Fechar
+            </button>
+            {% endif %}
+        </div>
+
+        <form method="post">
+            {% csrf_token %}
+           
+
+            <div class="modal-body">
+                {% if propostas_pendentes %}
+                <div class="alert alert-error">
+                    Preencha a participação, marca e preço inicial dos fornecedores participantes antes de iniciar os lances deste item.
+                </div>
+                {% else %}
+                <div class="alert alert-success">
+                    As propostas iniciais deste item já foram registradas. Você pode alterar antes de finalizar o item.
+                </div>
+                {% endif %}
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Participa?</th>
+                                <th>Fornecedor</th>
+                                <th>Marca</th>
+                                <th>Preço Inicial</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {% for fornecedor in fornecedores %}
+                            {% with proposta=propostas_iniciais|get_item:fornecedor.id %}
+                            <tr id="linha_fornecedor_{{ fornecedor.id }}" {% if proposta and not proposta.participa %}class="linha-nao-participa"{% endif %}>
+                                <td>
+                                    <label class="participa-check-wrapper">
+                                        <input
+                                            type="checkbox"
+                                            name="participa_{{ fornecedor.id }}"
+                                            class="check-participa"
+                                            data-fornecedor-id="{{ fornecedor.id }}"
+                                            {% if not proposta or proposta.participa %}checked{% endif %}
+                                        >
+                                        Sim
+                                    </label>
+                                    <div class="texto-nao-participa" id="texto_nao_participa_{{ fornecedor.id }}">
+                                        Não participa deste item
+                                    </div>
+                                </td>
+
+                                <td>
+                                    <strong>{{ fornecedor.razao_social }}</strong>
+                                </td>
+
+                                <td>
+                                    <input
+                                        type="text"
+                                        name="marca_{{ fornecedor.id }}"
+                                        id="marca_{{ fornecedor.id }}"
+                                        placeholder="Marca do produto"
+                                        value="{% if proposta and proposta.participa %}{{ proposta.marca }}{% endif %}"
+                                        {% if proposta and not proposta.participa %}disabled{% endif %}
+                                    >
+                                </td>
+
+                                <td>
+                                    <input
+                                        type="text"
+                                        name="preco_inicial_{{ fornecedor.id }}"
+                                        id="preco_inicial_{{ fornecedor.id }}"
+                                        placeholder="0,00"
+                                        value="{% if proposta and proposta.participa and proposta.preco_inicial %}{{ proposta.preco_inicial|valor_br }}{% endif %}"
+                                        {% if proposta and not proposta.participa %}disabled{% endif %}
+                                    >
+                                </td>
+                            </tr>
+                            {% endwith %}
+                            {% empty %}
+                            <tr>
+                                <td colspan="4">Nenhum fornecedor vinculado ao pregão.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-warning" type="submit" name="acao" value="marcar_deserto"
+                    onclick="return confirm('Tem certeza que deseja marcar este item como DESERTO?');">
+                    Marcar como Deserto
+                </button>
+            
+                <button class="btn btn-danger" type="submit" name="acao" value="marcar_fracassado"
+                    onclick="return confirm('Tem certeza que deseja marcar este item como FRACASSADO?');">
+                    Marcar como Fracassado
+                </button>
+            
+                {% if not propostas_pendentes %}
+                <button type="button" class="btn btn-outline" onclick="fecharModalPropostas()">
+                    Cancelar
+                </button>
+                {% endif %}
+            
+                <button class="btn btn-success" type="submit" name="acao" value="salvar_propostas_iniciais">
+                    Salvar Propostas Iniciais
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<div class="telao-grid">
+    <div class="painel-principal">
+        <h2>Item em disputa</h2>
+
+        <div class="item-nome">
+            {{ item_atual.item.nome_item }}
+        </div>
+
+        <div class="item-descricao">
+            {{ item_atual.item.descricao }}
+        </div>
+
+        <div class="telao-metricas">
+            <div class="telao-metrica">
+                <div class="telao-metrica-label">Ordem</div>
+                <div class="telao-metrica-valor">{{ item_atual.ordem }}</div>
+            </div>
+
+            <div class="telao-metrica">
+                <div class="telao-metrica-label">Quantidade</div>
+                <div class="telao-metrica-valor">{{ item_atual.quantidade_total|quantidade_br }}</div>
+            </div>
+
+            <div class="telao-metrica">
+                <div class="telao-metrica-label">Rodada</div>
+                <div class="telao-metrica-valor">{{ item_atual.rodada_atual }}</div>
+            </div>
+        </div>
+
+        <div class="telao-metricas">
+            <div class="telao-metrica">
+                <div class="telao-metrica-label">Status</div>
+                <div class="telao-metrica-valor">
+                    {{ item_atual.get_status_display }}
+                </div>
+            </div>
+
+            <div class="telao-metrica">
+                <div class="telao-metrica-label">
+                    {% if menor_valor_origem == "proposta" %}
+                    Menor proposta
+                    {% else %}
+                    Menor lance
+                    {% endif %}
+                </div>
+                <div class="telao-metrica-valor">
+                    {% if menor_valor_exibicao %}
+                    {{ menor_valor_exibicao|moeda_br }}
+                    {% else %}
+                    --
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="telao-metrica">
+                <div class="telao-metrica-label">Vencedor atual</div>
+                <div style="font-size: 16px; font-weight: 800;">
+                    {% if item_atual.fornecedor_vencedor %}
+                    {{ item_atual.fornecedor_vencedor }}
+                    {% else %}
+                    Ainda não há
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="fornecedor-atual-card">
+        <div class="fornecedor-label">Fornecedor da vez</div>
+
+        <div class="fornecedor-nome">
+            {% if fornecedor_atual %}
+            {{ fornecedor_atual.razao_social }}
+            {% else %}
+            Nenhum fornecedor ativo
+            {% endif %}
+        </div>
+
+        {% if proximo_fornecedor %}
+        <div class="proximo-fornecedor">
+            <div class="fornecedor-label">Próximo fornecedor</div>
+            <strong>{{ proximo_fornecedor.razao_social }}</strong>
+        </div>
+        {% endif %}
+
+        {% if item_atual.status == "em_disputa" and fornecedor_atual and not propostas_pendentes %}
+        <form method="post" class="lance-form" id="formRegistrarLance"
+            data-media="{{ item_atual.media_preco|default:'' }}"
+            data-percentual="{{ item_atual.percentual_alerta_media|default:'25' }}">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="registrar_lance">
+            <input type="hidden" name="confirmar_media_lance" id="confirmar_media_lance" value="nao">
+
+            <div class="form-group">
+                <label for="valor_lance">Valor do Lance</label>
+                <input type="text" name="valor_lance" id="valor_lance" placeholder="0,00" required autofocus>
+            </div>
+
+            <div class="botoes-telao">
+                <button class="btn btn-primary btn-telao" type="submit">
+                    Próximo Lance
+                </button>
+            </div>
+        </form>
+
+        <div id="modalAlertaMediaLance" class="alerta-media-lance-overlay">
+            <div class="alerta-media-lance-box">
+                <div class="alerta-media-lance-header">
+                    <h2>Atenção: lance fora da média cadastrada</h2>
+                </div>
+                <div class="alerta-media-lance-body">
+                    <p id="textoAlertaMediaLance">
+                        O valor digitado está fora da faixa permitida em relação à média cadastrada.
+                    </p>
+                    <div class="alerta-media-lance-grid">
+                        <div class="alerta-media-lance-metrica">
+                            <span>Média cadastrada</span>
+                            <strong id="modalMediaLance">R$ 0,00</strong>
+                        </div>
+                        <div class="alerta-media-lance-metrica">
+                            <span>Valor digitado</span>
+                            <strong id="modalValorLance">R$ 0,00</strong>
+                        </div>
+                        <div class="alerta-media-lance-metrica">
+                            <span>Limite mínimo</span>
+                            <strong id="modalLimiteMinimoLance">R$ 0,00</strong>
+                        </div>
+                        <div class="alerta-media-lance-metrica">
+                            <span>Limite máximo</span>
+                            <strong id="modalLimiteMaximoLance">R$ 0,00</strong>
+                        </div>
+                    </div>
+                    <p>
+                        Você pode voltar e corrigir o valor do lance antes de seguir,
+                        ou confirmar o registro deste lance mesmo fora da média.
+                    </p>
+                </div>
+                <div class="alerta-media-lance-footer">
+                    <button type="button" class="btn btn-secondary" onclick="editarValorLanceForaMedia()">
+                        Editar Valor
+                    </button>
+                    <button type="button" class="btn btn-danger" onclick="confirmarLanceForaMedia()">
+                        Confirmar Lance Fora da Média
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="registrar_desistencia">
+
+            <div class="botoes-telao">
+                <button class="btn btn-danger btn-telao" type="submit">
+                    Desistir Fornecedor Atual
+                </button>
+            </div>
+        </form>
+    {% elif item_atual.status == "em_disputa" and propostas_pendentes %}
+    <div class="alert alert-error">
+        Registre as propostas iniciais antes de lançar.
+    </div>
+    {% elif item_atual.status == "em_disputa" %}
+    <div class="alert alert-error">
+        Não há fornecedor ativo para este item.
+    </div>
+        {% else %}
+        <div class="alert alert-success">
+            Este item já foi encerrado.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+
+{% if alerta_media %}
+<div class="card" style="margin-top: 22px; border: 2px solid #dc3545; background: #fef2f2;">
+    <h2 style="color: #b91c1c;">Atenção: valor fora da média cadastrada</h2>
+
+    <p>
+        {{ alerta_media.mensagem }}
+    </p>
+
+    <div class="grid grid-4">
+        <div class="metric-card">
+            <div class="metric-label">Média cadastrada</div>
+            <div class="metric-footer">
+                <strong>{{ alerta_media.media|moeda_br }}</strong>
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">Valor a adjudicar</div>
+            <div class="metric-footer">
+                <strong>{{ alerta_media.valor_adjudicado|moeda_br }}</strong>
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">Limite mínimo</div>
+            <div class="metric-footer">
+                <strong>{{ alerta_media.limite_minimo|moeda_br }}</strong>
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">Limite máximo</div>
+            <div class="metric-footer">
+                <strong>{{ alerta_media.limite_maximo|moeda_br }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <p style="margin-top: 12px;">
+        Percentual de alerta cadastrado: <strong>{{ alerta_media.percentual|percentual_br }}%</strong>.
+        Confira as informações antes de confirmar a finalização.
+    </p>
+
+    <form method="post" style="margin-top: 14px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="finalizar_item">
+        <input type="hidden" name="confirmar_media" value="sim">
+
+        <button class="btn btn-danger btn-telao" type="submit">
+            Confirmar Finalização Mesmo Fora da Média
+        </button>
+    </form>
+</div>
+{% endif %}
+
+<div class="card" style="margin-top: 22px;">
+    <h2>Ações do Item</h2>
+
+    {% if item_atual.status == "em_disputa" %}
+    <div class="acoes-item-telao">
+        <button class="btn btn-primary btn-telao" type="button" onclick="abrirModalPropostas()">
+            Alterar Propostas Iniciais
+        </button>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="finalizar_item">
+            <button class="btn btn-success btn-telao" type="submit">
+                Finalizar Item
+            </button>
+        </form>
+
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="marcar_deserto">
+            <button class="btn btn-warning btn-telao" type="submit">
+                Marcar como Deserto
+            </button>
+        </form>
+
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="marcar_fracassado">
+            <button class="btn btn-danger btn-telao" type="submit">
+                Marcar como Fracassado
+            </button>
+        </form>
+    </div>
+    {% else %}
+    <p><strong>Este item já foi encerrado.</strong></p>
+
+    {% if resultado %}
+    <a class="btn btn-primary btn-telao" href="{% url 'execucao:proximo_item' pregao.id %}">
+        Próximo Item
+    </a>
+    {% endif %}
+    {% endif %}
+</div>
+
+{% if resultado %}
+<div class="card resultado-telao">
+    <h2>Resultado do Item</h2>
+
+    <p>
+        <strong>Status:</strong>
+        <span class="badge badge-success">
+            {{ resultado.get_status_resultado_display }}
+        </span>
+    </p>
+
+    <div class="grid grid-3">
+        <div class="metric-card">
+            <div class="metric-label">1º lugar</div>
+            <div class="metric-footer">
+                {% if resultado.primeiro_fornecedor %}
+                <strong>{{ resultado.primeiro_fornecedor }}</strong><br>
+                {{ resultado.primeiro_valor|moeda_br }}
+                {% else %}
+                -
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">2º lugar</div>
+            <div class="metric-footer">
+                {% if resultado.segundo_fornecedor %}
+                <strong>{{ resultado.segundo_fornecedor }}</strong><br>
+                {{ resultado.segundo_valor|moeda_br }}
+                {% else %}
+                -
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-label">3º lugar</div>
+            <div class="metric-footer">
+                {% if resultado.terceiro_fornecedor %}
+                <strong>{{ resultado.terceiro_fornecedor }}</strong><br>
+                {{ resultado.terceiro_valor|moeda_br }}
+                {% else %}
+                -
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div style="margin-top: 15px;">
+        <a class="btn btn-primary btn-telao" href="{% url 'execucao:proximo_item' pregao.id %}">
+            Próximo Item
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        <h2>Participantes do Item</h2>
+
+        <div class="participantes-grid">
+            {% for fornecedor in fornecedores_participantes %}
+            {% if fornecedor.id in fornecedores_desistentes_ids %}
+            <div class="participante-card desistiu">
+                {% elif fornecedor_atual and fornecedor.id == fornecedor_atual.id %}
+                <div class="participante-card atual">
+                    {% elif proximo_fornecedor and fornecedor.id == proximo_fornecedor.id %}
+                    <div class="participante-card proximo">
+                        {% else %}
+                        <div class="participante-card">
+                            {% endif %}
+                            <div class="participante-nome">
+                                {{ fornecedor.razao_social }}
+                            </div>
+
+                            {% if fornecedor.id in fornecedores_desistentes_ids %}
+                            <span class="badge badge-danger">Desistiu</span>
+                            {% elif fornecedor_atual and fornecedor.id == fornecedor_atual.id %}
+                            <span class="badge badge-success">Fornecedor atual</span>
+                            {% elif proximo_fornecedor and fornecedor.id == proximo_fornecedor.id %}
+                            <span class="badge badge-warning">Próximo</span>
+                            {% else %}
+                            <span class="badge badge-primary">Aguardando</span>
+                            {% endif %}
+                        </div>
+                        {% empty %}
+                        <p>Nenhum fornecedor participante para este item.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="card historico-telao">
+                    <h2>Últimos Lances</h2>
+
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Ordem</th>
+                                    <th>Fornecedor</th>
+                                    <th>Marca</th>
+                                    <th>Valor</th>
+                                    {% if modo_conferencia_alteracao %}
+                                    <th>Ações</th>
+                                    {% endif %}
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                {% for item_lance in lances_com_marca %}
+                                {% with lance=item_lance.lance %}
+                                {% if item_atual.menor_lance and lance.valor_lance == item_atual.menor_lance %}
+                                <tr class="menor-lance">
+                                    {% else %}
+                                <tr>
+                                    {% endif %}
+                                    <td>{{ lance.ordem_lance }}</td>
+                                    <td>{{ lance.fornecedor.razao_social }}</td>
+                                    <td>{{ item_lance.marca }}</td>
+                                    <td class="valor-lance-destaque">{{ lance.valor_lance|moeda_br }}</td>
+                                    {% if modo_conferencia_alteracao %}
+                                    <td>
+                                        <div class="acoes-lance-conferencia">
+                                            <button type="button" class="btn-lance-mini btn-lance-editar"
+                                                onclick="abrirModalEditarLance('{% url 'execucao:alterar_lance_conferencia' pregao.id item_atual.id lance.id %}', '{{ lance.valor_lance|valor_br }}')">
+                                                Alterar
+                                            </button>
+
+                                            <form method="post" action="{% url 'execucao:excluir_lance_conferencia' pregao.id item_atual.id lance.id %}" style="margin:0;">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn-lance-mini btn-lance-excluir"
+                                                    onclick="return confirm('Deseja realmente excluir este lance? O resultado do item será recalculado quando você finalizar novamente.');">
+                                                    Excluir
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                    {% endif %}
+                                </tr>
+                                {% endwith %}
+                                {% empty %}
+                                <tr>
+                                    <td colspan="{% if modo_conferencia_alteracao %}5{% else %}4{% endif %}">Nenhum lance registrado para este item.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Histórico Completo de Lances</h2>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ordem</th>
+                                <th>Fornecedor</th>
+                                <th>Marca</th>
+                                <th>Valor do Lance</th>
+                                <th>Data/Hora</th>
+                                {% if modo_conferencia_alteracao %}
+                                <th>Ações</th>
+                                {% endif %}
+                            </tr>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {% for item_lance in lances_com_marca %}
+                            {% with lance=item_lance.lance %}
+                            {% if item_atual.menor_lance and lance.valor_lance == item_atual.menor_lance %}
+                            <tr class="menor-lance">
+                                {% else %}
+                            <tr>
+                                {% endif %}
+                                <td>{{ lance.ordem_lance }}</td>
+                                <td>{{ lance.fornecedor.razao_social }}</td>
+                                <td>{{ item_lance.marca }}</td>
+                                <td>{{ lance.valor_lance|moeda_br }}</td>
+                                <td>{{ lance.criado_em }}</td>
+                                {% if modo_conferencia_alteracao %}
+                                <td>
+                                    <div class="acoes-lance-conferencia">
+                                        <button type="button" class="btn-lance-mini btn-lance-editar"
+                                            onclick="abrirModalEditarLance('{% url 'execucao:alterar_lance_conferencia' pregao.id item_atual.id lance.id %}', '{{ lance.valor_lance|valor_br }}')">
+                                            Alterar
+                                        </button>
+
+                                        <form method="post" action="{% url 'execucao:excluir_lance_conferencia' pregao.id item_atual.id lance.id %}" style="margin:0;">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn-lance-mini btn-lance-excluir"
+                                                onclick="return confirm('Deseja realmente excluir este lance? O resultado do item será recalculado quando você finalizar novamente.');">
+                                                Excluir
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                                {% endif %}
+                            </tr>
+                            {% endwith %}
+                            {% empty %}
+                            <tr>
+                                <td colspan="{% if modo_conferencia_alteracao %}6{% else %}5{% endif %}">Nenhum lance registrado para este item.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <a class="btn btn-secondary" href="{% url 'execucao:execucao_pregao' %}">
+                Voltar para seleção de pregão
+            </a>
+
+{% if modo_conferencia_alteracao %}
+<div id="modalEditarLance" class="modal-editar-lance-overlay">
+    <div class="modal-editar-lance-box">
+        <form method="post" id="formEditarLance">
+            {% csrf_token %}
+            <div class="modal-editar-lance-header">
+                <h2>Alterar Lance</h2>
+            </div>
+
+            <div class="modal-editar-lance-body">
+                <div class="form-group">
+                    <label>Novo valor do lance</label>
+                    <input type="text" name="valor_lance" id="campoNovoValorLance" placeholder="0,00" required>
+                </div>
+
+                <p style="color:#64748b; line-height:1.5;">
+                    Após alterar o lance, finalize este item novamente para recalcular os vencedores.
+                </p>
+            </div>
+
+            <div class="modal-editar-lance-footer">
+                <button type="button" class="btn btn-secondary" onclick="fecharModalEditarLance()">
+                    Cancelar
+                </button>
+                <button type="submit" class="btn btn-success">
+                    Salvar Alteração
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<script>
+
+    function abrirModalEditarLance(actionUrl, valorAtual) {
+        const modal = document.getElementById("modalEditarLance");
+        const form = document.getElementById("formEditarLance");
+        const campo = document.getElementById("campoNovoValorLance");
+
+        if (!modal || !form || !campo) {
+            return;
+        }
+
+        form.action = actionUrl;
+        campo.value = valorAtual || "";
+        modal.classList.add("ativo");
+        campo.focus();
+        campo.select();
+    }
+
+    function fecharModalEditarLance() {
+        const modal = document.getElementById("modalEditarLance");
+
+        if (modal) {
+            modal.classList.remove("ativo");
+        }
+    }
+
+    function abrirModalPropostas() {
+        const modal = document.getElementById("modalPropostasIniciais");
+        if (modal) {
+            modal.classList.add("ativo");
+        }
+    }
+
+    function fecharModalPropostas() {
+        const modal = document.getElementById("modalPropostasIniciais");
+        if (modal) {
+            modal.classList.remove("ativo");
+        }
+    }
+
+
+    function atualizarCamposParticipacao(checkbox) {
+        const fornecedorId = checkbox.dataset.fornecedorId;
+        const participa = checkbox.checked;
+        const linha = document.getElementById(`linha_fornecedor_${fornecedorId}`);
+        const campoMarca = document.getElementById(`marca_${fornecedorId}`);
+        const campoPreco = document.getElementById(`preco_inicial_${fornecedorId}`);
+        const textoNaoParticipa = document.getElementById(`texto_nao_participa_${fornecedorId}`);
+
+        if (linha) {
+            if (participa) {
+                linha.classList.remove("linha-nao-participa");
+            } else {
+                linha.classList.add("linha-nao-participa");
+            }
+        }
+
+        if (campoMarca) {
+            campoMarca.disabled = !participa;
+            campoMarca.required = participa;
+            if (!participa) {
+                campoMarca.value = "";
+            }
+        }
+
+        if (campoPreco) {
+            campoPreco.disabled = !participa;
+            campoPreco.required = participa;
+            if (!participa) {
+                campoPreco.value = "";
+            }
+        }
+
+        if (textoNaoParticipa) {
+            textoNaoParticipa.style.display = participa ? "none" : "block";
+        }
+    }
+
+    document.querySelectorAll(".check-participa").forEach(function (checkbox) {
+        atualizarCamposParticipacao(checkbox);
+
+        checkbox.addEventListener("change", function () {
+            atualizarCamposParticipacao(this);
+        });
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+            const modal = document.getElementById("modalPropostasIniciais");
+            const propostasPendentes = "{{ propostas_pendentes|yesno:'sim,nao' }}";
+
+            if (modal && propostasPendentes === "nao") {
+                modal.classList.remove("ativo");
+            }
+        }
+    });
+
+    function normalizarNumeroDecimal(valor) {
+        if (!valor) { return NaN; }
+        valor = String(valor).trim().replace(/\s/g, "");
+        if (!valor) { return NaN; }
+        if (valor.includes(",") && valor.includes(".")) {
+            valor = valor.replace(/\./g, "").replace(",", ".");
+        } else {
+            valor = valor.replace(",", ".");
+        }
+        return parseFloat(valor);
+    }
+
+    function formatarMoeda(valor) {
+        if (isNaN(valor)) { return "R$ 0,00"; }
+        return valor.toLocaleString("pt-BR", {
+            style: "currency",
+            currency: "BRL",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+
+    function abrirModalAlertaMediaLance(dados) {
+        const modal = document.getElementById("modalAlertaMediaLance");
+        if (!modal) { return; }
+
+        document.getElementById("textoAlertaMediaLance").textContent = dados.mensagem;
+        document.getElementById("modalMediaLance").textContent = formatarMoeda(dados.media);
+        document.getElementById("modalValorLance").textContent = formatarMoeda(dados.valor);
+        document.getElementById("modalLimiteMinimoLance").textContent = formatarMoeda(dados.limiteMinimo);
+        document.getElementById("modalLimiteMaximoLance").textContent = formatarMoeda(dados.limiteMaximo);
+
+        modal.classList.add("ativo");
+    }
+
+    function editarValorLanceForaMedia() {
+        const modal = document.getElementById("modalAlertaMediaLance");
+        const confirmar = document.getElementById("confirmar_media_lance");
+        const campoValor = document.getElementById("valor_lance");
+
+        if (confirmar) { confirmar.value = "nao"; }
+        if (modal) { modal.classList.remove("ativo"); }
+        if (campoValor) {
+            campoValor.focus();
+            campoValor.select();
+        }
+    }
+
+    function confirmarLanceForaMedia() {
+        const form = document.getElementById("formRegistrarLance");
+        const confirmar = document.getElementById("confirmar_media_lance");
+
+        if (confirmar) { confirmar.value = "sim"; }
+        if (form) { form.submit(); }
+    }
+
+    const formLance = document.getElementById("formRegistrarLance");
+
+    if (formLance) {
+        formLance.addEventListener("submit", function (event) {
+            const confirmar = document.getElementById("confirmar_media_lance");
+
+            if (confirmar && confirmar.value === "sim") {
+                return;
+            }
+
+            const campoValor = document.getElementById("valor_lance");
+            const media = normalizarNumeroDecimal(formLance.dataset.media);
+            const percentual = normalizarNumeroDecimal(formLance.dataset.percentual || "25");
+            const valor = normalizarNumeroDecimal(campoValor ? campoValor.value : "");
+
+            if (isNaN(media) || media <= 0 || isNaN(percentual) || isNaN(valor) || valor <= 0) {
+                return;
+            }
+
+            const limiteMinimo = media * (100 - percentual) / 100;
+            const limiteMaximo = media * (100 + percentual) / 100;
+
+            if (valor >= limiteMinimo && valor <= limiteMaximo) {
+                return;
+            }
+
+            event.preventDefault();
+
+            const diferencaPercentual = ((valor - media) / media) * 100;
+            const tipo = valor < limiteMinimo ? "abaixo" : "acima";
+            const mensagem = `O valor do lance está ${Math.abs(diferencaPercentual).toFixed(2).replace(".", ",")}% ${tipo} da média cadastrada para este item.`;
+
+            abrirModalAlertaMediaLance({
+                mensagem: mensagem,
+                media: media,
+                valor: valor,
+                limiteMinimo: limiteMinimo,
+                limiteMaximo: limiteMaximo
+            });
+        });
+    }
+
+</script>
+
+            {% endblock %}

@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}{{ titulo }} | Sistema de Pregões{% endblock %}
+{% block page_title %}{{ titulo }}{% endblock %}
+{% block page_subtitle %}Informe os dados do usuário e o perfil de acesso{% endblock %}
+
+{% block content %}
+
+<style>
+    .ajuda-perfis {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+    .perfil-ajuda-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+        background: #ffffff;
+    }
+
+    .perfil-ajuda-card h3 {
+        margin: 0 0 8px;
+        color: #0f2f57;
+    }
+
+    .perfil-ajuda-card p {
+        margin: 0;
+        color: #64748b;
+        line-height: 1.5;
+        font-size: 13px;
+    }
+
+    .erro-form {
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fecaca;
+        border-radius: 12px;
+        padding: 12px;
+        margin-bottom: 14px;
+        font-weight: 700;
+    }
+
+    @media (max-width: 900px) {
+        .ajuda-perfis {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+<div class="ajuda-perfis">
+    <div class="perfil-ajuda-card">
+        <h3>Administrador</h3>
+        <p>Acesso total ao sistema, incluindo cadastros, usuários, pregões, documentos e contratos.</p>
+    </div>
+
+    <div class="perfil-ajuda-card">
+        <h3>Pregoeiro</h3>
+        <p>Perfil operacional para propostas, médias, execução, lances e finalização do pregão.</p>
+    </div>
+
+    <div class="perfil-ajuda-card">
+        <h3>Consulta/Escola</h3>
+        <p>Perfil de visualização de documentos, contratos e relatórios. A escola vinculada será usada na próxima etapa.</p>
+    </div>
+</div>
+
+<div class="card">
+    <h2>{{ titulo }}</h2>
+
+    {% if form.non_field_errors %}
+    <div class="erro-form">
+        {% for erro in form.non_field_errors %}
+        {{ erro }}<br>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.first_name.label }}</label>
+                {{ form.first_name }}
+                {{ form.first_name.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.last_name.label }}</label>
+                {{ form.last_name }}
+                {{ form.last_name.errors }}
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.username.label }}</label>
+                {{ form.username }}
+                {{ form.username.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.email.label }}</label>
+                {{ form.email }}
+                {{ form.email.errors }}
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.perfil.label }}</label>
+                {{ form.perfil }}
+                {{ form.perfil.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.escola.label }}</label>
+                {{ form.escola }}
+                {% if form.escola.help_text %}
+                <small style="color:#64748b;">{{ form.escola.help_text }}</small>
+                {% endif %}
+                {{ form.escola.errors }}
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.password1.label }}</label>
+                {{ form.password1 }}
+                {% if form.password1.help_text %}
+                <small style="color:#64748b;">{{ form.password1.help_text }}</small>
+                {% endif %}
+                {{ form.password1.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.password2.label }}</label>
+                {{ form.password2 }}
+                {{ form.password2.errors }}
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label style="display:flex; align-items:center; gap:8px;">
+                {{ form.is_active }}
+                {{ form.is_active.label }}
+            </label>
+            {{ form.is_active.errors }}
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">{{ botao }}</button>
+            <a class="btn btn-secondary" href="{% url 'usuarios:usuarios' %}">Voltar</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

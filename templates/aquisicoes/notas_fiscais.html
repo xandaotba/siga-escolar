@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Notas Fiscais Cadastradas | Sistema de Certames{% endblock %}
+{% block page_title %}Notas Fiscais Cadastradas{% endblock %}
+{% block page_subtitle %}Consulte as aquisições registradas por nota fiscal{% endblock %}
+
+{% block content %}
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .resumo-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .resumo-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; }
+    .resumo-label { color: #64748b; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+    .resumo-value { color: #0f2f57; font-size: 21px; font-weight: 900; }
+    .badge-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .muted-text { color: #64748b; font-size: 13px; }
+    .texto-direita { text-align: right; }
+    .loading-text { color: #64748b; font-size: 12px; margin-top: 4px; display: none; }
+</style>
+
+<div class="page-actions">
+    <a class="btn btn-primary" href="{% url 'aquisicoes:aquisicao_manual_nova' %}">➕ Adicionar manualmente</a>
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:upload_xml' %}">Upload XML da NF-e</a>
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:colar_tabela' %}">Colar Tabela Copiada</a>
+</div>
+
+<div class="resumo-grid">
+    <div class="resumo-card"><div class="resumo-label">Total</div><div class="resumo-value">{{ totais.total }}</div></div>
+    <div class="resumo-card"><div class="resumo-label">Rascunho</div><div class="resumo-value">{{ totais.rascunho }}</div></div>
+    <div class="resumo-card"><div class="resumo-label">Em conferência</div><div class="resumo-value">{{ totais.conferencia }}</div></div>
+    <div class="resumo-card"><div class="resumo-label">Confirmadas</div><div class="resumo-value">{{ totais.confirmada }}</div></div>
+    <div class="resumo-card"><div class="resumo-label">Canceladas</div><div class="resumo-value">{{ totais.cancelada }}</div></div>
+</div>
+
+<div class="card relatorio-filtros">
+    <h2>Filtros</h2>
+
+    {% if restrito_escola and escola_vinculada %}
+    <p class="muted-text">
+        Visualização restrita à escola: <strong>{{ escola_vinculada.nome_escola }}</strong>.
+    </p>
+    {% endif %}
+
+    <form method="get" id="form-filtros-notas">
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" id="id_filtro_pregao">
+                    <option value="">Todos</option>
+                    {% for certame in certames %}
+                    <option value="{{ certame.id }}" {% if filtros.pregao == certame.id|stringformat:"s" %}selected{% endif %}>
+                        {{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_filtro_escola" {% if restrito_escola %}disabled{% endif %}>
+                    <option value="">Todas</option>
+                    {% if not filtros.pregao %}
+                        {% for escola in escolas %}
+                        <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                            {{ escola.nome_escola }}
+                        </option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                {% if restrito_escola and escola_vinculada %}
+                    <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+                {% endif %}
+                <div class="loading-text" id="loading-escolas">Carregando escolas...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_filtro_fornecedor">
+                    <option value="">Todos</option>
+                    {% if not filtros.pregao and not filtros.escola %}
+                        {% for fornecedor in fornecedores %}
+                        <option value="{{ fornecedor.id }}" {% if filtros.fornecedor == fornecedor.id|stringformat:"s" %}selected{% endif %}>
+                            {{ fornecedor.razao_social }}
+                        </option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                <div class="loading-text" id="loading-fornecedores">Carregando fornecedores...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Status</label>
+                <select name="status">
+                    <option value="">Todos</option>
+                    {% for valor, rotulo in status_choices %}
+                    <option value="{{ valor }}" {% if filtros.status == valor %}selected{% endif %}>{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Buscar</label>
+                <input type="text" name="busca" value="{{ filtros.busca }}" placeholder="Número da NF-e, escola ou fornecedor">
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Filtrar</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Notas Fiscais Cadastradas</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Data Recebimento</th>
+                    <th>Certame</th>
+                    <th>Escola</th>
+                    <th>Fornecedor</th>
+                    <th>Nº NF-e</th>
+                    <th>Forma de Entrada</th>
+                    <th>Valor</th>
+                    <th>Status</th>
+                    <th style="width: 120px;">Ações</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for nota in notas %}
+                <tr>
+                    <td>{{ nota.data_recebimento|date:"d/m/Y" }}</td>
+                    <td>{{ nota.pregao.numero }}/{{ nota.pregao.ano }}</td>
+                    <td>{{ nota.escola.nome_escola }}</td>
+                    <td>{{ nota.fornecedor.razao_social }}</td>
+                    <td>{% if nota.numero_nota %}<strong>{{ nota.numero_nota }}</strong>{% else %}<span class="muted-text">Sem número</span>{% endif %}</td>
+                    <td>{{ nota.get_metodo_entrada_display }}</td>
+                    <td class="texto-direita">{{ nota.valor_total|moeda_br }}</td>
+                    <td><span class="badge-status badge-{{ nota.status }}">{{ nota.get_status_display }}</span></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Abrir</a></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="9">Nenhuma nota fiscal cadastrada.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
+const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
+const filtroPregaoSelecionado = "{{ filtros.pregao }}";
+const filtroEscolaSelecionada = "{% if restrito_escola and escola_vinculada %}{{ escola_vinculada.id }}{% else %}{{ filtros.escola }}{% endif %}";
+const filtroFornecedorSelecionado = "{{ filtros.fornecedor }}";
+const restritoEscola = {% if restrito_escola %}true{% else %}false{% endif %};
+
+function trocarIds(url, ids) {
+    let finalUrl = url;
+    ids.forEach(id => {
+        finalUrl = finalUrl.replace("/0/", `/${id}/`);
+    });
+    return finalUrl;
+}
+
+function resetSelect(select, texto) {
+    select.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = texto;
+    select.appendChild(option);
+}
+
+function setLoading(id, visivel) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = visivel ? "block" : "none";
+}
+
+async function carregarEscolas(selecionarId = "") {
+    const pregaoId = document.getElementById("id_filtro_pregao").value;
+    const escolaSelect = document.getElementById("id_filtro_escola");
+    const fornecedorSelect = document.getElementById("id_filtro_fornecedor");
+
+    resetSelect(fornecedorSelect, "Todos");
+
+    if (!pregaoId) {
+        resetSelect(escolaSelect, "Todas");
+        resetSelect(fornecedorSelect, "Todos");
+        return;
+    }
+
+    setLoading("loading-escolas", true);
+
+    try {
+        const url = trocarIds(urlEscolasTemplate, [pregaoId]);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        resetSelect(escolaSelect, "Todas");
+
+        data.escolas.forEach(escola => {
+            const option = document.createElement("option");
+            option.value = escola.id;
+            option.textContent = escola.municipio ? `${escola.nome} - ${escola.municipio}` : escola.nome;
+            escolaSelect.appendChild(option);
+        });
+
+        if (selecionarId) {
+            escolaSelect.value = selecionarId;
+            await carregarFornecedores(filtroFornecedorSelecionado);
+        }
+    } finally {
+        setLoading("loading-escolas", false);
+    }
+}
+
+async function carregarFornecedores(selecionarId = "") {
+    const pregaoId = document.getElementById("id_filtro_pregao").value;
+    const escolaId = document.getElementById("id_filtro_escola").value;
+    const fornecedorSelect = document.getElementById("id_filtro_fornecedor");
+
+    if (!pregaoId || !escolaId) {
+        resetSelect(fornecedorSelect, "Todos");
+        return;
+    }
+
+    setLoading("loading-fornecedores", true);
+
+    try {
+        const url = trocarIds(urlFornecedoresTemplate, [pregaoId, escolaId]);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        resetSelect(fornecedorSelect, "Todos");
+
+        data.fornecedores.forEach(fornecedor => {
+            const option = document.createElement("option");
+            option.value = fornecedor.id;
+            option.textContent = fornecedor.nome;
+            fornecedorSelect.appendChild(option);
+        });
+
+        if (selecionarId) {
+            fornecedorSelect.value = selecionarId;
+        }
+    } finally {
+        setLoading("loading-fornecedores", false);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", async function () {
+    const pregaoSelect = document.getElementById("id_filtro_pregao");
+    const escolaSelect = document.getElementById("id_filtro_escola");
+
+    pregaoSelect.addEventListener("change", async function () {
+        await carregarEscolas("");
+    });
+
+    escolaSelect.addEventListener("change", async function () {
+        await carregarFornecedores("");
+    });
+
+    if (filtroPregaoSelecionado) {
+        await carregarEscolas(filtroEscolaSelecionada);
+    }
+});
+</script>
+
+{% endblock %}

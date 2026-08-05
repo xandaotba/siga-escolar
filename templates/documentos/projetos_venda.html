@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Adjudicação da Chamada Pública | Sistema de Certames{% endblock %}
+{% block page_title %}Adjudicação da Chamada Pública{% endblock %}
+{% block page_subtitle %}Registre diretamente os fornecedores e quantidades adjudicadas na Chamada Pública{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Selecionar Chamada Pública</h2>
+
+    <form method="get">
+        <div class="form-group">
+            <label>Chamada Pública</label>
+            <select name="pregao">
+                <option value="">Todas as Chamadas Públicas</option>
+                {% for chamada in chamadas_publicas %}
+                    <option value="{{ chamada.id }}" {% if pregao and pregao.id == chamada.id %}selected{% endif %}>
+                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} — {{ chamada.get_status_display }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar</button>
+
+            {% if pregao %}
+                <a class="btn btn-success" href="{% url 'documentos:registrar_projeto_venda' pregao.id %}">
+                    Nova Adjudicação
+                </a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Adjudicações Registradas</h2>
+
+    {% if pregao %}
+        <p>
+            <strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+            <strong>Status:</strong> {{ pregao.get_status_display }}
+        </p>
+    {% else %}
+        <p>Exibindo adjudicações de todas as Chamadas Públicas.</p>
+    {% endif %}
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Chamada Pública</th>
+                    <th>Fornecedor</th>
+                    <th>Tipo</th>
+                    <th>Itens Adjudicados</th>
+                    <th>Valor Total</th>
+                    <th>Limite do Fornecedor</th>
+                    <th>Status</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for projeto in projetos %}
+                    <tr>
+                        <td>{{ projeto.pregao.numero }}/{{ projeto.pregao.ano }}</td>
+                        <td>{{ projeto.fornecedor.razao_social }}</td>
+                        <td>{{ projeto.fornecedor.get_tipo_fornecedor_chamada_display }}</td>
+                        <td>{{ projeto.itens.count }}</td>
+                        <td>{{ projeto.valor_total|moeda_br }}</td>
+                        <td>{{ projeto.fornecedor.get_limite_anual_chamada_publica_display }}</td>
+                        <td>
+                            {% if projeto.status == "registrado" %}
+                                <span class="badge badge-success">Adjudicado</span>
+                            {% else %}
+                                <span class="badge badge-danger">Cancelado</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                {% if projeto.status == "registrado" %}
+                                    <a class="btn btn-primary" href="{% url 'documentos:editar_projeto_venda' projeto.id %}">
+                                        Editar
+                                    </a>
+
+                                    <form method="post" action="{% url 'documentos:cancelar_projeto_venda' projeto.id %}" style="display:inline;">
+                                        {% csrf_token %}
+                                        <button class="btn btn-danger" type="submit" onclick="return confirm('Deseja cancelar esta adjudicação?');">
+                                            Cancelar
+                                        </button>
+                                    </form>
+                                {% else %}
+                                    <span class="badge badge-danger">Cancelado</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="8">Nenhuma adjudicação registrada.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

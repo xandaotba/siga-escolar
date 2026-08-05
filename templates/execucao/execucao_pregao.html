@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Execução do Pregão Presencial | Sistema de Certames{% endblock %}
+{% block page_title %}Execução do Pregão Presencial{% endblock %}
+{% block page_subtitle %}Selecione um Pregão Presencial para iniciar ou continuar a sessão de lances{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Número</th>
+                    <th>Ano</th>
+                    <th>Pregoeiro</th>
+                    <th>Data</th>
+                    <th>Status</th>
+                    <th>Ação</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for pregao in pregoes %}
+                <tr>
+                    <td>{{ pregao.numero }}</td>
+                    <td>{{ pregao.ano }}</td>
+                    <td>{{ pregao.nome_pregoeiro }}</td>
+                    <td>{{ pregao.data_pregao }}</td>
+                    <td>
+                        {% if pregao.status == "nao_iniciado" %}
+                        <span class="badge badge-warning">{{ pregao.get_status_display }}</span>
+                        {% elif pregao.status == "em_andamento" %}
+                        <span class="badge badge-primary">{{ pregao.get_status_display }}</span>
+                        {% else %}
+                        <span class="badge badge-success">{{ pregao.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a class="btn btn-primary" href="{% url 'execucao:abrir_execucao' pregao.id %}">
+                            Abrir Execução
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6">Nenhum Pregão Presencial disponível para execução.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

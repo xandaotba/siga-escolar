@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}{{ titulo_documento }} | Sistema de Pregões{% endblock %}
+{% block page_title %}{{ titulo_documento }}{% endblock %}
+{% block page_subtitle %}Informe os dados necessários para gerar o documento do realinhamento{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Dados do Realinhamento</h2>
+    <p>
+        <strong>Contrato:</strong> {{ contrato.numero_contrato }}<br>
+        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Escola:</strong> {{ contrato.escola.nome_escola }}<br>
+        <strong>Fornecedor:</strong> {{ contrato.fornecedor.razao_social }}<br>
+        <strong>Data do Realinhamento:</strong> {{ realinhamento.data_realinhamento|date:"d/m/Y" }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Informações para o documento</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        {% if campos %}
+        <div class="grid grid-2">
+            {% for campo in campos %}
+            <div class="form-group">
+                <label>{{ campo.1 }}</label>
+                <input type="{{ campo.2 }}" name="{{ campo.0 }}" {% if campo.3 %}required{% endif %}>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p>Este documento não exige informações complementares. Clique no botão abaixo para gerar.</p>
+        {% endif %}
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Gerar {{ titulo_documento }} {% if formato == "pdf" %}PDF{% else %}Word{% endif %}
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:realinhamento_precos' %}?contrato={{ contrato.id }}">
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

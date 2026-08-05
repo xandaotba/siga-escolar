@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}Registrar Distrato | Sistema de Pregões{% endblock %}
+{% block page_title %}Registrar Distrato de Contrato{% endblock %}
+{% block page_subtitle %}Registre distrato total ou parcial, escolhendo itens e quantidades{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Dados do Contrato</h2>
+
+    <p>
+        <strong>Nº Contrato:</strong> {{ contrato.numero_contrato }}<br>
+        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Escola:</strong> {{ contrato.escola.nome_escola }}<br>
+        <strong>Município:</strong>
+        {{ contrato.escola.municipio.nome }}{% if contrato.escola.municipio.uf %}/{{ contrato.escola.municipio.uf }}{% endif %}<br>
+        <strong>Fornecedor:</strong> {{ contrato.fornecedor.razao_social }}<br>
+        <strong>Valor Total Original:</strong> R$ {{ contrato.valor_total }}<br>
+        <strong>Status Atual:</strong> {{ contrato.get_status_display }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Registrar Distrato</h2>
+
+    <div class="alert alert-error">
+        Selecione os itens e informe a quantidade a distratar. Apenas a quantidade distratada deixará de contar como contratada
+        e voltará a ficar disponível para contratação futura.
+    </div>
+
+    <form method="post" onsubmit="return confirm('Tem certeza que deseja registrar este distrato? A quantidade informada voltará ao saldo disponível.');">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Data do Distrato</label>
+                <input type="date" name="data_distrato" value="{{ data_padrao|date:'Y-m-d' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Motivo do Distrato</label>
+                <textarea name="motivo_distrato" rows="3" required placeholder="Descreva o motivo do distrato"></textarea>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Distratar?</th>
+                        <th>Item</th>
+                        <th>Marca</th>
+                        <th>Unidade</th>
+                        <th>Qtd. Contratada</th>
+                        <th>Já Distratada</th>
+                        <th>Saldo Ativo</th>
+                        <th>Qtd. a Distratar</th>
+                        <th>Valor Unitário</th>
+                        <th>Valor Ativo</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for item_ctx in itens_contexto %}
+                    {% with item=item_ctx.item_contrato %}
+                    <tr>
+                        <td style="text-align: center;">
+                            {% if item_ctx.saldo_ativo > 0 %}
+                            <input
+                                type="checkbox"
+                                name="selecionar_item"
+                                value="{{ item.id }}"
+                                class="check-distrato"
+                                data-item-id="{{ item.id }}"
+                            >
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+
+                        <td>{{ item.item.nome_item }}</td>
+                        <td>{{ item.marca }}</td>
+                        <td>{{ item.unidade }}</td>
+                        <td>{{ item.quantidade_contratada }}</td>
+                        <td>{{ item_ctx.quantidade_ja_distratada }}</td>
+                        <td>
+                            <strong>{{ item_ctx.saldo_ativo }}</strong>
+                        </td>
+                        <td>
+                            {% if item_ctx.saldo_ativo > 0 %}
+                            <input
+                                type="text"
+                                name="quantidade_distratar_{{ item.id }}"
+                                id="quantidade_distratar_{{ item.id }}"
+                                value="{{ item_ctx.saldo_ativo }}"
+                                disabled
+                            >
+                            <small>Pode informar quantidade menor para distrato parcial do item.</small>
+                            {% else %}
+                            <span class="badge badge-warning">Sem saldo ativo</span>
+                            {% endif %}
+                        </td>
+                        <td>R$ {{ item.valor_unitario }}</td>
+                        <td>R$ {{ item_ctx.valor_ativo }}</td>
+                    </tr>
+                    {% endwith %}
+                    {% empty %}
+                    <tr>
+                        <td colspan="10">Nenhum item encontrado neste contrato.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-danger" type="submit">
+                Confirmar Distrato
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:contratos_gerados' %}">
+                Cancelar
+            </a>
+        </div>
+    </form>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const checks = document.querySelectorAll(".check-distrato");
+
+        checks.forEach(function (check) {
+            const itemId = check.dataset.itemId;
+            const input = document.getElementById("quantidade_distratar_" + itemId);
+
+            function atualizarCampo() {
+                if (!input) {
+                    return;
+                }
+
+                input.disabled = !check.checked;
+            }
+
+            check.addEventListener("change", atualizarCampo);
+            atualizarCampo();
+        });
+    });
+</script>
+
+{% endblock %}

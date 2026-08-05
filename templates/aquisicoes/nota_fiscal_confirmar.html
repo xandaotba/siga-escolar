@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Confirmar Aquisição | Sistema de Certames{% endblock %}
+{% block page_title %}Confirmar Aquisição{% endblock %}
+{% block page_subtitle %}Confirme a nota fiscal para finalizar a conferência{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .badge-status { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .badge-pendente { background: #fff7ed; color: #c2410c; }
+    .badge-vinculado { background: #ecfdf5; color: #047857; }
+    .badge-divergente { background: #fef2f2; color: #b91c1c; }
+    .texto-direita { text-align: right; }
+    .muted-text { color: #64748b; font-size: 13px; }
+</style>
+
+
+<div class="card">
+    <h2>Confirmar Aquisição</h2>
+
+    <div class="info-box">
+        Ao confirmar, a nota fiscal passará de <strong>Em conferência</strong> para <strong>Confirmada</strong>.
+    </div>
+
+    <div class="grid grid-3">
+        <div><strong>NF-e</strong><br>{{ nota.numero_nota }}</div>
+        <div><strong>Escola</strong><br>{{ nota.escola.nome_escola }}</div>
+        <div><strong>Fornecedor</strong><br>{{ nota.fornecedor.razao_social }}</div>
+        <div><strong>Certame</strong><br>{{ nota.pregao.numero }}/{{ nota.pregao.ano }}</div>
+        <div><strong>Contrato</strong><br>{% if nota.contrato %}{{ nota.contrato.numero_contrato }}{% else %}-{% endif %}</div>
+        <div><strong>Valor Total</strong><br>{{ nota.valor_itens|moeda_br }}</div>
+    </div>
+
+    <form method="post" style="margin-top: 16px;">
+        {% csrf_token %}
+        <div class="actions">
+            <button class="btn btn-success" type="submit">✅ Confirmar Aquisição</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Voltar</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

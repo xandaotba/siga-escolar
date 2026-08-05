@@ -1,0 +1,622 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Realinhamento de Preços | Sistema de Pregões{% endblock %}
+{% block page_title %}Realinhamento de Preços{% endblock %}
+{% block page_subtitle %}Selecione contratos ativos de Pregão Presencial e registre novos valores unitários para os itens{% endblock %}
+
+{% block content %}
+
+<style>
+    .realinhamento-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .contrato-destaque {
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: #ffffff;
+        border-radius: 16px;
+        padding: 18px;
+        margin-bottom: 18px;
+    }
+
+    .contrato-destaque h2 {
+        color: #ffffff;
+        margin-top: 0;
+    }
+
+    .contrato-destaque p {
+        margin-bottom: 0;
+        line-height: 1.6;
+    }
+
+    .input-valor {
+        min-width: 120px;
+    }
+
+    .texto-muted {
+        color: #64748b;
+        font-size: 13px;
+    }
+
+    .realinhamento-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 12px;
+        background: #ffffff;
+    }
+
+    .realinhamento-card h3 {
+        margin-top: 0;
+        color: #0f2f57;
+    }
+
+
+    .termo-status {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .termo-status.registrado {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+
+    .documentos-realinhamento {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 14px 0 18px;
+    }
+
+    .documento-grupo {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 12px;
+        background: #f8fafc;
+    }
+
+    .documento-grupo-titulo {
+        color: #0f2f57;
+        font-size: 13px;
+        font-weight: 900;
+        margin-bottom: 8px;
+        line-height: 1.3;
+    }
+
+    .documento-grupo-acoes {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .documento-grupo-acoes .btn {
+        font-size: 12px;
+        padding: 8px 10px;
+        border-radius: 10px;
+    }
+
+    .acoes-realinhamento-principais {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 12px 0;
+    }
+
+    @media (max-width: 1200px) {
+        .documentos-realinhamento {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 700px) {
+        .documentos-realinhamento {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .realinhamento-acoes {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 12px 0;
+    }
+
+    @media (max-width: 1000px) {
+        .realinhamento-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Filtros</h2>
+
+    <form method="get">
+        <div class="realinhamento-grid">
+            <div class="form-group">
+                <label>Pregão</label>
+                <select name="pregao" id="id_pregao_filtro">
+                    <option value="">Todos</option>
+                    {% for pregao in pregoes %}
+                    <option value="{{ pregao.id }}" {% if filtros.pregao == pregao.id|stringformat:"s" %}selected{% endif %}>
+                        Pregão {{ pregao.numero }}/{{ pregao.ano }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_escola_filtro" data-valor-selecionado="{{ filtros.escola }}">
+                    <option value="">Todas</option>
+                    {% for escola in escolas %}
+                    <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                        {{ escola.nome_escola }}{% if escola.municipio %} - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_fornecedor_filtro" data-valor-selecionado="{{ filtros.fornecedor }}">
+                    <option value="">Todos</option>
+                    {% for fornecedor in fornecedores %}
+                    <option value="{{ fornecedor.id }}" {% if filtros.fornecedor == fornecedor.id|stringformat:"s" %}selected{% endif %}>
+                        {{ fornecedor.razao_social }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Contrato</label>
+                <select name="contrato" id="id_contrato_filtro" data-valor-selecionado="{{ filtros.contrato }}" required>
+                    <option value="">Selecione</option>
+                    {% for item_contrato in contratos %}
+                    <option value="{{ item_contrato.id }}" {% if filtros.contrato == item_contrato.id|stringformat:"s" %}selected{% endif %}>
+                        {{ item_contrato.numero_contrato }} - {{ item_contrato.escola.nome_escola }} - {{ item_contrato.fornecedor.razao_social }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar Contrato</button>
+            <a class="btn btn-secondary" href="{% url 'documentos:realinhamento_precos' %}">Limpar Filtros</a>
+        </div>
+    </form>
+</div>
+
+{% if contrato %}
+<div class="contrato-destaque">
+    <h2>Contrato {{ contrato.numero_contrato }}</h2>
+    <p>
+        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Escola:</strong> {{ contrato.escola.nome_escola }}{% if contrato.escola.municipio %} - {{ contrato.escola.municipio.nome }}{% if contrato.escola.municipio.uf %}/{{ contrato.escola.municipio.uf }}{% endif %}{% endif %}<br>
+        <strong>Fornecedor:</strong> {{ contrato.fornecedor.razao_social }}<br>
+        <strong>Status:</strong> {{ contrato.get_status_display }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Registrar Realinhamento</h2>
+
+    {% if itens_contexto %}
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="contrato" value="{{ contrato.id }}">
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Data de Vigência do Realinhamento</label>
+                <input type="date" name="data_realinhamento" value="{{ data_padrao|date:'Y-m-d' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Justificativa/Motivo</label>
+                <textarea name="justificativa" rows="3" required placeholder="Descreva o motivo do realinhamento de preços"></textarea>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Realinhar?</th>
+                        <th>Item</th>
+                        <th>Marca</th>
+                        <th>Unidade</th>
+                        <th>Qtd. Contratada</th>
+                        <th>Qtd. Distratada</th>
+                        <th>Qtd. Ativa</th>
+                        <th>Valor Atual</th>
+                        <th>Novo Valor Unitário</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for item in itens_contexto %}
+                    <tr>
+                        <td style="text-align:center;">
+                            <input type="checkbox" name="selecionar_item" value="{{ item.item_contrato.id }}">
+                        </td>
+                        <td>
+                            <strong>{{ item.item_contrato.item.nome_item }}</strong><br>
+                            <span class="texto-muted">Valor original: {{ item.valor_unitario_original|moeda_br }}</span>
+                        </td>
+                        <td>{{ item.item_contrato.marca }}</td>
+                        <td>{{ item.item_contrato.unidade }}</td>
+                        <td>{{ item.quantidade_contratada|quantidade_br }}</td>
+                        <td>{{ item.quantidade_distratada|quantidade_br }}</td>
+                        <td><strong>{{ item.quantidade_ativa|quantidade_br }}</strong></td>
+                        <td>{{ item.valor_unitario_atual|moeda_br }}</td>
+                        <td>
+                            <input class="input-valor" type="text" name="valor_novo_{{ item.item_contrato.id }}" placeholder="0,00">
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Registrar Realinhamento
+            </button>
+        </div>
+    </form>
+    {% else %}
+    <div class="alert alert-error">
+        Este contrato não possui itens com quantidade ativa para realinhamento.
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Realinhamentos Registrados</h2>
+
+    {% for realinhamento in realinhamentos %}
+    <div class="realinhamento-card">
+        <h3>Contrato {{ realinhamento.contrato.numero_contrato }} — {{ realinhamento.data_realinhamento|date:"d/m/Y" }}</h3>
+        <p>
+            <strong>Escola:</strong> {{ realinhamento.contrato.escola.nome_escola }}<br>
+            <strong>Fornecedor:</strong> {{ realinhamento.contrato.fornecedor.razao_social }}<br>
+            <strong>Valor anterior:</strong> {{ realinhamento.valor_total_anterior|moeda_br }}<br>
+            <strong>Novo valor:</strong> {{ realinhamento.valor_total_novo|moeda_br }}<br>
+            <strong>Diferença:</strong> {{ realinhamento.diferenca_total|moeda_br }}<br>
+            <strong>Justificativa:</strong> {{ realinhamento.justificativa }}<br>
+            {% if realinhamento.numero_termo_aditivo and realinhamento.data_termo_aditivo %}
+            <span class="termo-status registrado">
+                Termo aditivo registrado: {{ realinhamento.numero_termo_aditivo }} em {{ realinhamento.data_termo_aditivo|date:"d/m/Y" }}
+            </span>
+            {% else %}
+            <span class="termo-status">
+                Termo aditivo ainda não registrado
+            </span>
+            {% endif %}
+        </p>
+
+        <div class="acoes-realinhamento-principais">
+            <a class="btn btn-primary" href="{% url 'documentos:registrar_termo_aditivo' realinhamento.id %}">
+                {% if realinhamento.numero_termo_aditivo and realinhamento.data_termo_aditivo %}
+                Editar Dados do Termo Aditivo
+                {% else %}
+                Registrar Dados do Termo Aditivo
+                {% endif %}
+            </a>
+        </div>
+
+        <div class="documentos-realinhamento">
+            <div class="documento-grupo">
+                <div class="documento-grupo-titulo">Termo Aditivo de Valor</div>
+                <div class="documento-grupo-acoes">
+                    <a class="btn btn-success" href="{% url 'documentos:gerar_termo_aditivo_word' realinhamento.id %}">
+                        Word
+                    </a>
+                    <a class="btn btn-danger" href="{% url 'documentos:gerar_termo_aditivo_pdf' realinhamento.id %}">
+                        PDF
+                    </a>
+                </div>
+            </div>
+
+            <div class="documento-grupo">
+                <div class="documento-grupo-titulo">Extrato do Termo Aditivo</div>
+                <div class="documento-grupo-acoes">
+                    <a class="btn btn-success" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'extrato' 'word' %}">
+                        Word
+                    </a>
+                    <a class="btn btn-danger" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'extrato' 'pdf' %}">
+                        PDF
+                    </a>
+                </div>
+            </div>
+
+            <div class="documento-grupo">
+                <div class="documento-grupo-titulo">Parecer de Revisão de Preços</div>
+                <div class="documento-grupo-acoes">
+                    <a class="btn btn-success" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'parecer' 'word' %}">
+                        Word
+                    </a>
+                    <a class="btn btn-danger" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'parecer' 'pdf' %}">
+                        PDF
+                    </a>
+                </div>
+            </div>
+
+            <div class="documento-grupo">
+                <div class="documento-grupo-titulo">Ata de Revisão de Preços</div>
+                <div class="documento-grupo-acoes">
+                    <a class="btn btn-success" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'ata' 'word' %}">
+                        Word
+                    </a>
+                    <a class="btn btn-danger" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'ata' 'pdf' %}">
+                        PDF
+                    </a>
+                </div>
+            </div>
+
+            <div class="documento-grupo">
+                <div class="documento-grupo-titulo">Resultado Final da Revisão</div>
+                <div class="documento-grupo-acoes">
+                    <a class="btn btn-success" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'resultado' 'word' %}">
+                        Word
+                    </a>
+                    <a class="btn btn-danger" href="{% url 'documentos:gerar_documento_realinhamento' realinhamento.id 'resultado' 'pdf' %}">
+                        PDF
+                    </a>
+                </div>
+            </div>
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Qtd. Ativa</th>
+                        <th>Valor Anterior</th>
+                        <th>Novo Valor</th>
+                        <th>Diferença</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in realinhamento.itens.all %}
+                    <tr>
+                        <td>{{ item.contrato_item.item.nome_item }}</td>
+                        <td>{{ item.quantidade_ativa|quantidade_br }}</td>
+                        <td>{{ item.valor_unitario_anterior|moeda_br }}</td>
+                        <td>{{ item.valor_unitario_novo|moeda_br }}</td>
+                        <td>{{ item.diferenca_valor|moeda_br }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% empty %}
+    <p>Nenhum realinhamento registrado ainda.</p>
+    {% endfor %}
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const campoPregao = document.getElementById("id_pregao_filtro");
+        const campoEscola = document.getElementById("id_escola_filtro");
+        const campoFornecedor = document.getElementById("id_fornecedor_filtro");
+        const campoContrato = document.getElementById("id_contrato_filtro");
+
+        if (!campoPregao || !campoEscola || !campoFornecedor || !campoContrato) {
+            return;
+        }
+
+        function limparSelect(select, textoInicial) {
+            select.innerHTML = "";
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = textoInicial;
+            select.appendChild(option);
+        }
+
+        function adicionarOption(select, valor, texto, selecionado) {
+            const option = document.createElement("option");
+            option.value = valor;
+            option.textContent = texto;
+            if (selecionado) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        }
+
+        function carregarEscolas(pregaoId) {
+            if (!pregaoId) {
+                limparSelect(campoEscola, "Todas");
+                return Promise.resolve();
+            }
+
+            limparSelect(campoEscola, "Carregando escolas...");
+
+            return fetch(`/documentos/ajax/escolas-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar escolas.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    const escolaSelecionada = campoEscola.dataset.valorSelecionado || campoEscola.value;
+
+                    limparSelect(campoEscola, "Todas");
+
+                    data.escolas.forEach(function (escola) {
+                        let texto = escola.nome;
+
+                        if (escola.municipio) {
+                            texto += " - " + escola.municipio;
+
+                            if (escola.uf) {
+                                texto += "/" + escola.uf;
+                            }
+                        }
+
+                        adicionarOption(
+                            campoEscola,
+                            escola.id,
+                            texto,
+                            String(escola.id) === String(escolaSelecionada)
+                        );
+                    });
+
+                    campoEscola.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoEscola, "Erro ao carregar escolas");
+                });
+        }
+
+        function carregarFornecedores(pregaoId) {
+            if (!pregaoId) {
+                limparSelect(campoFornecedor, "Todos");
+                return Promise.resolve();
+            }
+
+            limparSelect(campoFornecedor, "Carregando fornecedores...");
+
+            return fetch(`/documentos/ajax/fornecedores-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar fornecedores.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    const fornecedorSelecionado = campoFornecedor.dataset.valorSelecionado || campoFornecedor.value;
+
+                    limparSelect(campoFornecedor, "Todos");
+
+                    data.fornecedores.forEach(function (fornecedor) {
+                        let texto = fornecedor.nome;
+
+                        if (fornecedor.cnpj) {
+                            texto += " - " + fornecedor.cnpj;
+                        }
+
+                        adicionarOption(
+                            campoFornecedor,
+                            fornecedor.id,
+                            texto,
+                            String(fornecedor.id) === String(fornecedorSelecionado)
+                        );
+                    });
+
+                    campoFornecedor.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoFornecedor, "Erro ao carregar fornecedores");
+                });
+        }
+
+        function carregarContratos() {
+            const pregaoId = campoPregao.value || "";
+            const escolaId = campoEscola.value || "";
+            const fornecedorId = campoFornecedor.value || "";
+            const contratoSelecionado = campoContrato.dataset.valorSelecionado || campoContrato.value;
+
+            limparSelect(campoContrato, "Carregando contratos...");
+
+            const params = new URLSearchParams();
+
+            if (pregaoId) {
+                params.append("pregao", pregaoId);
+            }
+
+            if (escolaId) {
+                params.append("escola", escolaId);
+            }
+
+            if (fornecedorId) {
+                params.append("fornecedor", fornecedorId);
+            }
+
+            fetch(`/documentos/ajax/contratos-por-filtros/?${params.toString()}`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar contratos.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    limparSelect(campoContrato, "Selecione");
+
+                    if (data.contratos.length === 0) {
+                        limparSelect(campoContrato, "Nenhum contrato encontrado");
+                        return;
+                    }
+
+                    data.contratos.forEach(function (contrato) {
+                        adicionarOption(
+                            campoContrato,
+                            contrato.id,
+                            contrato.texto,
+                            String(contrato.id) === String(contratoSelecionado)
+                        );
+                    });
+
+                    campoContrato.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoContrato, "Erro ao carregar contratos");
+                });
+        }
+
+        campoPregao.addEventListener("change", function () {
+            campoEscola.dataset.valorSelecionado = "";
+            campoFornecedor.dataset.valorSelecionado = "";
+            campoContrato.dataset.valorSelecionado = "";
+            limparSelect(campoContrato, "Selecione primeiro os filtros");
+
+            const pregaoId = this.value;
+
+            Promise.all([
+                carregarEscolas(pregaoId),
+                carregarFornecedores(pregaoId),
+            ]).then(function () {
+                carregarContratos();
+            });
+        });
+
+        campoEscola.addEventListener("change", function () {
+            campoContrato.dataset.valorSelecionado = "";
+            carregarContratos();
+        });
+
+        campoFornecedor.addEventListener("change", function () {
+            campoContrato.dataset.valorSelecionado = "";
+            carregarContratos();
+        });
+    });
+</script>
+
+{% endblock %}

@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Calendário de Certames | Sistema de Certames{% endblock %}
+{% block page_title %}Calendário de Certames{% endblock %}
+{% block page_subtitle %}Acompanhe as datas, situações e prazos dos certames cadastrados{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .relatorio-filtros {
+        margin-bottom: 18px;
+    }
+
+    .relatorio-info {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .tempo-passado {
+        color: #b45309;
+        font-weight: 800;
+    }
+
+    .tempo-futuro {
+        color: #0d6efd;
+        font-weight: 800;
+    }
+
+    .tempo-hoje {
+        color: #198754;
+        font-weight: 800;
+    }
+
+    .resumo-relatorio {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        color: #0f2f57;
+        font-size: 24px;
+        font-weight: 900;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-relatorio {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .print-header {
+        display: none;
+    }
+
+    @media print {
+        @page {
+            size: A4 landscape;
+            margin: 10mm;
+        }
+
+        body {
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        .sidebar,
+        .topbar,
+        .footer-space,
+        .no-print,
+        .relatorio-filtros {
+            display: none !important;
+        }
+
+        .app {
+            display: block !important;
+        }
+
+        .main {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+        }
+
+        .content {
+            padding: 0 !important;
+        }
+
+        .print-header {
+            display: block !important;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .print-header h1 {
+            margin: 0 0 4px;
+            font-size: 18px;
+            color: #000000 !important;
+        }
+
+        .print-header p {
+            margin: 0;
+            font-size: 11px;
+            color: #000000 !important;
+        }
+
+        .card,
+        .resumo-card {
+            box-shadow: none !important;
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .resumo-relatorio {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+
+        .table-wrapper {
+            overflow: visible !important;
+        }
+
+        table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            font-size: 10px !important;
+        }
+
+        th,
+        td {
+            border: 1px solid #000000 !important;
+            padding: 4px !important;
+            color: #000000 !important;
+        }
+
+        th {
+            background: #e5e7eb !important;
+            font-weight: bold !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        a {
+            color: #000000 !important;
+            text-decoration: none !important;
+        }
+
+        .badge {
+            border: 1px solid #000000 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+    }
+
+</style>
+
+
+<div class="print-header">
+    <h1>Calendário de Certames</h1>
+    <p>Datas, situações e prazos dos certames cadastrados.</p>
+</div>
+
+
+<div class="actions no-print" style="margin-bottom: 16px;">
+    <button class="btn btn-primary" type="button" onclick="window.print()">
+        🖨️ Imprimir Relatório
+    </button>
+</div>
+
+
+
+
+<div class="card">
+    <h2>Calendário de Certames</h2>
+    <p class="relatorio-info">
+        A coluna <strong>Tempo</strong> mostra se o certame já passou ou quantos dias faltam para sua realização.
+    </p>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Certame</th>
+                    <th>Tipo</th>
+                    <th>Municípios</th>
+                    <th>Data do Certame</th>
+                    <th>Situação</th>
+                    <th>Tempo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td><strong>{{ linha.certame.numero }}/{{ linha.certame.ano }}</strong></td>
+                    <td>{{ linha.certame.get_tipo_certame_display }}</td>
+                    <td>
+                        {% for municipio in linha.certame.municipios.all %}
+                            {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+                        {% empty %}
+                            -
+                        {% endfor %}
+                    </td>
+                    <td>{{ linha.certame.data_pregao|date:"d/m/Y" }}</td>
+                    <td>
+                        {% if linha.certame.status == "nao_iniciado" %}
+                            <span class="badge badge-warning">{{ linha.certame.get_status_display }}</span>
+                        {% elif linha.certame.status == "em_andamento" %}
+                            <span class="badge badge-primary">{{ linha.certame.get_status_display }}</span>
+                        {% else %}
+                            <span class="badge badge-success">{{ linha.certame.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="tempo-{{ linha.tempo_status }}">
+                            {{ linha.tempo }}
+                        </span>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6">Nenhum certame cadastrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

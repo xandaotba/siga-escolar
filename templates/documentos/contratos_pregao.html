@@ -1,0 +1,815 @@
+{% extends "base.html" %}
+
+{% block title %}Contratos do Pregão | Sistema de Pregões{% endblock %}
+{% block page_title %}Base para Geração de Contratos{% endblock %}
+{% block page_subtitle %}Contratos organizados por escola e fornecedor vencedor{% endblock %}
+
+{% block content %}
+
+<div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-box">
+        <div class="loading-spinner"></div>
+
+        <div class="loading-title">
+            Gerando arquivo...
+        </div>
+
+        <div class="loading-text">
+            Aguarde alguns segundos.<br>
+            Não feche nem recarregue a página.
+        </div>
+    </div>
+</div>
+
+<style>
+    .resumo-contratos {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        font-size: 24px;
+        font-weight: 800;
+        color: #0f2f57;
+    }
+
+    .escola-bloco {
+        border: 1px solid #dbe3ef;
+        border-radius: 18px;
+        background: #ffffff;
+        margin-bottom: 28px;
+        overflow: hidden;
+        box-shadow: 0 8px 24px rgba(15, 47, 87, 0.06);
+    }
+
+    .escola-header {
+        padding: 18px;
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+    }
+
+    .escola-header h2 {
+        margin: 0 0 6px;
+        color: white;
+    }
+
+    .escola-info {
+        color: rgba(255, 255, 255, 0.85);
+        line-height: 1.5;
+    }
+
+    .escola-total {
+        min-width: 220px;
+        text-align: right;
+    }
+
+    .escola-total-label {
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.75);
+    }
+
+    .escola-total-valor {
+        font-size: 24px;
+        font-weight: 800;
+        color: white;
+    }
+
+    .fornecedor-contrato {
+        margin: 18px;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        overflow: hidden;
+        background: #ffffff;
+    }
+
+    .fornecedor-contrato-header {
+        padding: 16px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+    }
+
+    .fornecedor-contrato-header h3 {
+        margin: 0 0 6px;
+        color: #0f2f57;
+    }
+
+    .fornecedor-info {
+        color: #475569;
+        line-height: 1.5;
+    }
+
+    .valor-contrato {
+        text-align: right;
+        min-width: 220px;
+    }
+
+    .valor-contrato-label {
+        color: #64748b;
+        font-size: 13px;
+    }
+
+    .valor-contrato-total {
+        color: #198754;
+        font-size: 22px;
+        font-weight: 800;
+    }
+
+    .fornecedor-contrato-body {
+        padding: 16px;
+    }
+
+
+    .contrato-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+        align-items: center;
+    }
+
+    .detalhes-itens {
+        margin-top: 14px;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        overflow: hidden;
+        background: #ffffff;
+    }
+
+    .detalhes-itens summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 13px 16px;
+        font-weight: 800;
+        color: #0f2f57;
+        background: #f8fafc;
+        border-bottom: 1px solid transparent;
+    }
+
+    .detalhes-itens summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .detalhes-itens[open] summary {
+        border-bottom-color: #e2e8f0;
+    }
+
+    .detalhes-itens-conteudo {
+        padding: 14px;
+    }
+
+    .resumo-fornecedor-contrato {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+    }
+
+    .mini-metrica {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 10px 12px;
+    }
+
+    .mini-metrica-label {
+        color: #64748b;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+
+    .mini-metrica-valor {
+        color: #0f2f57;
+        font-weight: 800;
+    }
+
+    .btn-disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+    }
+
+
+    .acoes-contrato {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 260px;
+    }
+
+    .btn-acao-principal {
+        padding: 8px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .menu-acao {
+        position: relative;
+    }
+
+    .menu-acao summary {
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        color: #0f2f57;
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.2;
+        box-shadow: 0 2px 8px rgba(15, 47, 87, 0.06);
+    }
+
+    .menu-acao summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .menu-acao[open] summary {
+        background: #f1f5f9;
+        border-color: #94a3b8;
+    }
+
+    .menu-acao-opcoes {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 8px);
+        z-index: 50;
+        min-width: 220px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 8px;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+    }
+
+    .menu-acao-opcoes a,
+    .menu-acao-opcoes button {
+        width: 100%;
+        display: block;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        color: #0f172a;
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+        font-family: inherit;
+    }
+
+    .menu-acao-opcoes a:hover,
+    .menu-acao-opcoes button:hover {
+        background: #f1f5f9;
+    }
+
+    .menu-acao-opcoes .acao-perigo {
+        color: #dc3545;
+    }
+
+    .menu-acao-opcoes .acao-destaque {
+        color: #198754;
+    }
+
+    .menu-acao-opcoes .acao-alerta {
+        color: #b7791f;
+    }
+
+    .menu-separador {
+        height: 1px;
+        background: #e2e8f0;
+        margin: 6px 0;
+    }
+
+    
+
+
+    @media (max-width: 900px) {
+        .resumo-contratos {
+            grid-template-columns: 1fr;
+        }
+
+        .escola-header,
+        .fornecedor-contrato-header {
+            flex-direction: column;
+        }
+
+        .escola-total,
+        .valor-contrato {
+            text-align: left;
+        }
+
+        .resumo-fornecedor-contrato {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .loading-overlay {
+    display: none;
+    position: fixed;
+    z-index: 99999;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.75);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.loading-box {
+    background: #ffffff;
+    border-radius: 18px;
+    padding: 28px;
+    width: min(420px, 95vw);
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.loading-spinner {
+    width: 52px;
+    height: 52px;
+    border: 5px solid #e2e8f0;
+    border-top-color: #0d6efd;
+    border-radius: 50%;
+    margin: 0 auto 18px;
+    animation: loading-spin 0.9s linear infinite;
+}
+
+@keyframes loading-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.loading-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #0f2f57;
+    margin-bottom: 8px;
+}
+
+.loading-text {
+    color: #475569;
+    line-height: 1.5;
+}
+</style>
+
+<div class="card">
+    <h2>Dados do Pregão</h2>
+
+    <p>
+        <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+        <strong>Data:</strong> {{ pregao.data_pregao|date:"d/m/Y" }}<br>
+        <strong>Pregoeiro:</strong> {{ pregao.nome_pregoeiro }}<br>
+        <strong>Município(s):</strong>
+        {% for municipio in municipios %}
+        {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+        {% empty %}
+        -
+        {% endfor %}
+    </p>
+</div>
+
+<div class="resumo-contratos">
+    <div class="resumo-card">
+        <div class="resumo-label">Escolas com saldo</div>
+        <div class="resumo-value">{{ escolas_contratos|length }}</div>
+    </div>
+
+    <div class="resumo-card">
+        <div class="resumo-label">Contratos possíveis agora</div>
+        <div class="resumo-value">{{ total_contratos }}</div>
+    </div>
+
+    <div class="resumo-card">
+        <div class="resumo-label">Itens disponíveis</div>
+        <div class="resumo-value">{{ total_itens_disponiveis }}</div>
+    </div>
+
+    <div class="resumo-card">
+        <div class="resumo-label">Valor Disponível Geral</div>
+        <div class="resumo-value">R$ {{ valor_total_geral }}</div>
+    </div>
+</div>
+
+
+<div class="card">
+    <h2>Geração de Contratos em Lote</h2>
+    <p>
+        Gere automaticamente todos os contratos possíveis deste pregão, respeitando saldo disponível,
+        distratos, contratação de 2º/3º colocado e a numeração independente por escola e ano.
+    </p>
+
+    <form id="formContratosLoteSelecionados" method="post" action="{% url 'documentos:contratos_lote' pregao.id %}">
+        {% csrf_token %}
+    </form>
+
+    <div class="actions">
+        <button class="btn btn-success" type="button" onclick="enviarContratosLoteSelecionados()">
+            Gerar em lote com seleção atual
+        </button>
+
+        <a class="btn btn-primary" href="{% url 'documentos:contratos_lote' pregao.id %}">
+            Abrir geração em lote completa
+        </a>
+
+        <a class="btn btn-secondary" href="{% url 'documentos:contratos_gerados' %}?pregao={{ pregao.id }}">
+            Ver contratos gerados deste pregão
+        </a>
+    </div>
+
+    <p style="margin-top: 12px; color: #64748b; font-size: 13px; line-height: 1.5;">
+        A opção <strong>Gerar em lote com seleção atual</strong> respeita os itens marcados e as quantidades informadas
+        em cada bloco de escola/fornecedor abaixo.
+    </p>
+</div>
+
+{% if escolas_contratos %}
+{% for escola_grupo in escolas_contratos %}
+<div class="escola-bloco">
+    <div class="escola-header">
+        <div>
+            <h2>{{ escola_grupo.escola.nome_escola }}</h2>
+
+            <div class="escola-info">
+                <strong>CNPJ:</strong> {{ escola_grupo.escola.cnpj }}<br>
+                <strong>Município:</strong> {{ escola_grupo.escola.municipio.nome }}{% if escola_grupo.escola.municipio.uf %}/{{ escola_grupo.escola.municipio.uf }}{% endif %}<br>
+                <strong>Presidente do CDCE:</strong> {{ escola_grupo.escola.presidente_cdce }}
+            </div>
+        </div>
+
+        <div class="escola-total">
+            <div class="escola-total-label">Valor total da escola</div>
+            <div class="escola-total-valor">
+                R$ {{ escola_grupo.valor_total_escola }}
+            </div>
+        </div>
+    </div>
+
+    {% for grupo in escola_grupo.fornecedores %}
+    <div class="fornecedor-contrato">
+        <div class="fornecedor-contrato-header">
+            <div>
+                <h3>{{ grupo.fornecedor.razao_social }}</h3>
+
+                <div class="fornecedor-info">
+                    <strong>CNPJ:</strong> {{ grupo.fornecedor.cnpj }}<br>
+                    <strong>Representante:</strong> {{ grupo.fornecedor.representante_legal }}<br>
+                    <strong>CPF do Representante:</strong> {{ grupo.fornecedor.cpf_representante }}<br>
+                    <strong>E-mail:</strong> {{ grupo.fornecedor.email }}
+                    {% if grupo.tem_substituicao %}
+                    <br><span class="badge badge-warning">Contratação por distrato do 1º colocado</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="valor-contrato">
+                <div class="valor-contrato-label">Valor deste contrato</div>
+                <div class="valor-contrato-total">
+                    R$ {{ grupo.valor_total_contrato }}
+                </div>
+            </div>
+        </div>
+
+        <div class="fornecedor-contrato-body">
+            <form method="post"
+                action="{% url 'documentos:previa_contrato' pregao.id escola_grupo.escola.id grupo.fornecedor.id %}">
+                {% csrf_token %}
+
+                <div class="resumo-fornecedor-contrato">
+                    <div class="mini-metrica">
+                        <div class="mini-metrica-label">Itens disponíveis</div>
+                        <div class="mini-metrica-valor">{{ grupo.itens|length }}</div>
+                    </div>
+                    <div class="mini-metrica">
+                        <div class="mini-metrica-label">Valor estimado</div>
+                        <div class="mini-metrica-valor">R$ {{ grupo.valor_total_contrato }}</div>
+                    </div>
+                    <div class="mini-metrica">
+                        <div class="mini-metrica-label">Tipo</div>
+                        <div class="mini-metrica-valor">
+                            {% if grupo.tem_substituicao %}Substituição por distrato{% else %}Contrato regular{% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <details class="detalhes-itens">
+                    <summary>Ver/ocultar itens e quantidades</summary>
+                    <div class="detalhes-itens-conteudo">
+                        <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Gerar?</th>
+                                <th>Nº</th>
+                                <th>Item</th>
+                                <th>Unidade</th>
+                                <th>Marca</th>
+                                <th>Posição</th>
+                                <th>Qtd. Escola</th>
+                                <th>Já Contratada</th>
+                                <th>Saldo Disponível</th>
+                                <th>Qtd. a Contratar Agora</th>
+                                <th>Valor Unitário</th>
+                                <th>Valor Disponível</th>
+                            </tr>
+                        </thead>
+        
+                        <tbody>
+                            {% for item in grupo.itens %}
+                            <tr>
+                                <td style="text-align: center;">
+                                    <input type="checkbox"
+                                        class="lote-selecionar-item"
+                                        name="selecionar_item"
+                                        value="{{ item.quantitativo_escola_id }}"
+                                        data-escola-id="{{ escola_grupo.escola.id }}"
+                                        data-fornecedor-id="{{ grupo.fornecedor.id }}"
+                                        data-quantitativo-id="{{ item.quantitativo_escola_id }}"
+                                        checked>
+                                </td>
+                            
+                                <td>{{ item.ordem }}</td>
+                                <td>{{ item.item.nome_item }}</td>
+                                <td>{{ item.unidade }}</td>
+                                <td>{{ item.marca }}</td>
+                                <td>
+                                    {% if item.contratacao_substituta %}
+                                    <span class="badge badge-warning">{{ item.posicao_fornecedor }}</span>
+                                    {% else %}
+                                    <span class="badge badge-success">{{ item.posicao_fornecedor }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ item.quantidade_escola }}</td>
+                                <td>{{ item.quantidade_ja_contratada }}</td>
+                                <td>
+                                    <strong>{{ item.saldo_disponivel }}</strong>
+                                </td>
+                            
+                                <td>
+                                    <input class="lote-quantidade-item" type="text" name="quantidade_contratar_{{ item.quantitativo_escola_id }}"
+                                        value="{{ item.saldo_disponivel }}" placeholder="0,000">
+                                    <small>
+                                        Pode informar quantidade menor para deixar saldo para contrato futuro.
+                                    </small>
+                                </td>
+                            
+                                <td>R$ {{ item.valor_unitario }}</td>
+                                <td>R$ {{ item.valor_total_disponivel_item }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                        </div>
+                    </div>
+                </details>
+        
+                <div class="contrato-actions">
+                    <button class="btn btn-primary" type="submit">
+                        Gerar Prévia do Contrato
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+{% else %}
+<div class="alert alert-error">
+    Nenhuma combinação de escola, fornecedor e item vencedor foi encontrada para este pregão.
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Contratos já registrados neste pregão</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nº Contrato</th>
+                    <th>Escola</th>
+                    <th>Fornecedor</th>
+                    <th>Valor Total</th>
+                    <th>Status</th>
+                    <th>Data</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for contrato in contratos_gerados %}
+                <tr>
+                    <td>{{ contrato.numero_contrato }}</td>
+                    <td>{{ contrato.escola.nome_escola }}</td>
+                    <td>{{ contrato.fornecedor.razao_social }}</td>
+                    <td>R$ {{ contrato.valor_total }}</td>
+                    <td>
+                        {% if contrato.status == "gerado" %}
+                        <span class="badge badge-success">{{ contrato.get_status_display }}</span>
+                        {% elif contrato.status == "cancelado" %}
+                        <span class="badge badge-danger">{{ contrato.get_status_display }}</span>
+                        {% elif contrato.status == "distratado" or contrato.status == "parcialmente_distratado" %}
+                        <span class="badge badge-warning">{{ contrato.get_status_display }}</span>
+                        {% else %}
+                        <span class="badge badge-warning">{{ contrato.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ contrato.criado_em|date:"d/m/Y, H:i" }}</td>
+                    <td class="acoes-coluna">
+                        <div class="acoes-contrato">
+                            <a class="btn btn-primary btn-acao-principal" href="{% url 'documentos:visualizar_contrato' contrato.id %}" target="_blank">
+                                Visualizar
+                            </a>
+
+                            <details class="menu-acao">
+                                <summary>Documentos ▾</summary>
+                                <div class="menu-acao-opcoes">
+                                    {% if contrato.status == "gerado" or contrato.status == "parcialmente_distratado" %}
+                                    <a href="{% url 'documentos:gerar_contrato_word' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando contrato Word...')">
+                                        Baixar contrato Word
+                                    </a>
+
+                                    <a href="{% url 'documentos:gerar_contrato_pdf' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando contrato PDF...')">
+                                        Baixar contrato PDF
+                                    </a>
+                                    {% endif %}
+
+                                    {% if contrato.status == "distratado" or contrato.status == "parcialmente_distratado" %}
+                                    {% if contrato.status == "gerado" or contrato.status == "parcialmente_distratado" %}
+                                    <div class="menu-separador"></div>
+                                    {% endif %}
+
+                                    <a class="acao-destaque" href="{% url 'documentos:gerar_termo_rescisao_word' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando termo de rescisão Word...')">
+                                        Baixar termo de rescisão Word
+                                    </a>
+
+                                    <a class="acao-perigo" href="{% url 'documentos:gerar_termo_rescisao_pdf' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando termo de rescisão PDF...')">
+                                        Baixar termo de rescisão PDF
+                                    </a>
+                                    {% endif %}
+
+                                    {% if contrato.status == "cancelado" %}
+                                    <span style="display:block; padding:10px 12px; color:#64748b; font-size:13px;">
+                                        Nenhum documento disponível.
+                                    </span>
+                                    {% endif %}
+                                </div>
+                            </details>
+
+                            {% if contrato.status == "gerado" or contrato.status == "parcialmente_distratado" %}
+                            <details class="menu-acao">
+                                <summary>Ações ▾</summary>
+                                <div class="menu-acao-opcoes">
+                                    <a class="acao-alerta" href="{% url 'documentos:registrar_distrato_contrato' contrato.id %}">
+                                        Registrar distrato
+                                    </a>
+
+                                    {% if contrato.status == "gerado" %}
+                                    <div class="menu-separador"></div>
+                                    <form method="post" action="{% url 'documentos:cancelar_contrato' contrato.id %}"
+                                        onsubmit="return confirm('Tem certeza que deseja cancelar este contrato? O saldo dos itens será devolvido para nova contratação.');">
+                                        {% csrf_token %}
+                                        <button class="acao-perigo" type="submit">
+                                            Cancelar contrato
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </details>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7">Nenhum contrato registrado ainda.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<a class="btn btn-secondary" href="{% url 'documentos:pregoes_finalizados' %}">
+    Voltar para Pregões Finalizados
+</a>
+<script>
+    function enviarContratosLoteSelecionados() {
+        const form = document.getElementById("formContratosLoteSelecionados");
+
+        if (!form) {
+            return false;
+        }
+
+        form.querySelectorAll("input[data-lote-campo='true']").forEach(function (campo) {
+            campo.remove();
+        });
+
+        const selecionados = document.querySelectorAll(".lote-selecionar-item:checked");
+
+        if (!selecionados.length) {
+            alert("Selecione pelo menos um item para gerar contratos em lote.");
+            return false;
+        }
+
+        let possuiQuantidadeInvalida = false;
+
+        selecionados.forEach(function (checkbox) {
+            const escolaId = checkbox.dataset.escolaId;
+            const fornecedorId = checkbox.dataset.fornecedorId;
+            const quantitativoId = checkbox.dataset.quantitativoId;
+            const linha = checkbox.closest("tr");
+            const campoQuantidade = linha ? linha.querySelector(".lote-quantidade-item") : null;
+            const quantidade = campoQuantidade ? campoQuantidade.value.trim() : "";
+
+            if (!quantidade) {
+                possuiQuantidadeInvalida = true;
+            }
+
+            const campoItem = document.createElement("input");
+            campoItem.type = "hidden";
+            campoItem.name = "lote_item";
+            campoItem.value = escolaId + "|" + fornecedorId + "|" + quantitativoId;
+            campoItem.dataset.loteCampo = "true";
+            form.appendChild(campoItem);
+
+            const campoQtd = document.createElement("input");
+            campoQtd.type = "hidden";
+            campoQtd.name = "lote_quantidade_" + escolaId + "_" + fornecedorId + "_" + quantitativoId;
+            campoQtd.value = quantidade;
+            campoQtd.dataset.loteCampo = "true";
+            form.appendChild(campoQtd);
+        });
+
+        if (possuiQuantidadeInvalida) {
+            alert("Informe a quantidade de todos os itens selecionados.");
+            return false;
+        }
+
+        if (!confirm("Deseja gerar contratos em lote usando os itens marcados e as quantidades informadas nesta tela?")) {
+            return false;
+        }
+
+        mostrarCarregamento("Gerando contratos em lote...");
+        form.submit();
+        return true;
+    }
+
+    function mostrarCarregamento(mensagem) {
+        const overlay = document.getElementById("loadingOverlay");
+
+        if (!overlay) {
+            return true;
+        }
+
+        const titulo = overlay.querySelector(".loading-title");
+
+        if (titulo && mensagem) {
+            titulo.textContent = mensagem;
+        }
+
+        overlay.style.display = "flex";
+
+        // Segurança: depois de alguns segundos, libera a tela novamente.
+        // Isso evita que o overlay fique preso se o navegador bloquear o download.
+        setTimeout(function () {
+            overlay.style.display = "none";
+        }, 10000);
+
+        return true;
+    }
+</script>
+
+{% endblock %}

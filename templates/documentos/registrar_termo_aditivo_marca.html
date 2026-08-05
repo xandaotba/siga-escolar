@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Termo Aditivo de Marca | Sistema de Pregões{% endblock %}
+{% block page_title %}Registrar Termo Aditivo de Marca{% endblock %}
+{% block page_subtitle %}Registre os dados formais do termo aditivo referente à troca de marca{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Dados da Troca de Marca</h2>
+
+    <p>
+        <strong>Contrato:</strong> {{ contrato.numero_contrato }}<br>
+        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Escola:</strong> {{ contrato.escola.nome_escola }}<br>
+        <strong>Fornecedor:</strong> {{ contrato.fornecedor.razao_social }}<br>
+        <strong>Data de vigência:</strong> {{ troca.data_troca_marca|date:"d/m/Y" }}<br>
+        <strong>Justificativa:</strong> {{ troca.justificativa }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Itens com Troca de Marca</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Qtd. Ativa</th>
+                    <th>Marca Anterior</th>
+                    <th>Nova Marca</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens %}
+                <tr>
+                    <td>{{ item.contrato_item.item.nome_item }}</td>
+                    <td>{{ item.quantidade_ativa|quantidade_br }}</td>
+                    <td>{{ item.marca_anterior }}</td>
+                    <td>{{ item.marca_nova }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="4">Nenhum item encontrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Dados do Termo Aditivo</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Número do Termo Aditivo</label>
+                <input type="text" name="numero_termo_aditivo" value="{{ numero_padrao }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Data do Termo Aditivo</label>
+                <input type="date" name="data_termo_aditivo" value="{{ data_padrao|date:'Y-m-d' }}" required>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Observações Complementares</label>
+            <textarea name="observacoes_termo_aditivo" rows="4" placeholder="Opcional">{{ troca.observacoes_termo_aditivo }}</textarea>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Salvar Dados do Termo Aditivo
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:troca_marca' %}?contrato={{ contrato.id }}">
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

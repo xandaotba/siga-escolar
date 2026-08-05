@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}Escolas | Sistema de Pregões{% endblock %}
+{% block page_title %}Cadastro de Escolas{% endblock %}
+{% block page_subtitle %}Gerencie as escolas participantes dos pregões{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            {% if modo_edicao %}
+            <h2>Editar Escola</h2>
+            {% else %}
+            <h2>Nova Escola</h2>
+            {% endif %}
+
+            <a class="btn btn-primary" href="{% url 'importacoes:escolas' %}">
+                Importar de Planilha
+            </a>
+        </div>
+
+        {% if modo_edicao %}
+        <p>
+            Editando:
+            <strong>{{ escola_edicao.nome_escola }}</strong>
+        </p>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label>Nome da Escola</label>
+                {{ form.nome_escola }}
+                {{ form.nome_escola.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>CNPJ</label>
+                {{ form.cnpj }}
+                {{ form.cnpj.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>Endereço</label>
+                {{ form.endereco }}
+                {{ form.endereco.errors }}
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Número</label>
+                    {{ form.numero }}
+                    {{ form.numero.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>Bairro</label>
+                    {{ form.bairro }}
+                    {{ form.bairro.errors }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Município</label>
+                {{ form.municipio }}
+                {{ form.municipio.errors }}
+            </div>
+
+            <h3>Dados do Presidente do CDCE</h3>
+
+            <div class="form-group">
+                <label>Presidente do CDCE</label>
+                {{ form.presidente_cdce }}
+                {{ form.presidente_cdce.errors }}
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>RG do Presidente</label>
+                    {{ form.rg_presidente }}
+                    {{ form.rg_presidente.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>CPF do Presidente</label>
+                    {{ form.cpf_presidente }}
+                    {{ form.cpf_presidente.errors }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    {{ form.ativo }}
+                    Ativo
+                </label>
+            </div>
+
+            <div class="actions">
+                {% if modo_edicao %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Alterações
+                </button>
+
+                <a class="btn btn-secondary" href="{% url 'cadastros:escolas' %}">
+                    Cancelar Edição
+                </a>
+                {% else %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Escola
+                </button>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Escolas Cadastradas</h2>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Escola</th>
+                        <th>CNPJ</th>
+                        <th>Município</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for escola in escolas %}
+                    <tr>
+                        <td>{{ escola.nome_escola }}</td>
+                        <td>{{ escola.cnpj }}</td>
+                        <td>{{ escola.municipio.nome }}</td>
+                        <td>
+                            {% if escola.ativo %}
+                            <span class="badge badge-success">Ativa</span>
+                            {% else %}
+                            <span class="badge badge-danger">Inativa</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <a class="btn btn-primary" href="{% url 'cadastros:editar_escola' escola.id %}">
+                                    Editar
+                                </a>
+
+                                {% if escola.ativo %}
+                                <a class="btn btn-danger" href="{% url 'cadastros:alternar_status_escola' escola.id %}"
+                                    onclick="return confirm('Tem certeza que deseja inativar esta escola?');">
+                                    Inativar
+                                </a>
+                                {% else %}
+                                <a class="btn btn-success" href="{% url 'cadastros:alternar_status_escola' escola.id %}"
+                                    onclick="return confirm('Tem certeza que deseja ativar esta escola?');">
+                                    Ativar
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5">Nenhuma escola cadastrada.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if escolas.has_other_pages %}
+        <div class="pagination" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:16px; flex-wrap:wrap;">
+            {% if escolas.has_previous %}
+            <a class="btn btn-secondary" href="?page={{ escolas.previous_page_number }}">Anterior</a>
+            {% endif %}
+
+            <span style="font-weight:700; color:#475569;">
+                Página {{ escolas.number }} de {{ escolas.paginator.num_pages }}
+            </span>
+
+            {% if escolas.has_next %}
+            <a class="btn btn-secondary" href="?page={{ escolas.next_page_number }}">Próxima</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

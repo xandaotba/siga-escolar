@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Histórico de Alterações | Sistema de Pregões{% endblock %}
+{% block page_title %}Histórico de Alterações{% endblock %}
+{% block page_subtitle %}Auditoria de acessos e alterações realizadas no sistema{% endblock %}
+
+{% block content %}
+
+<style>
+    .audit-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .audit-table small {
+        color: #64748b;
+        display: block;
+        margin-top: 4px;
+        line-height: 1.35;
+    }
+
+    .audit-badge {
+        display: inline-block;
+        padding: 5px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 900;
+        background: #e0f2fe;
+        color: #075985;
+    }
+
+    .audit-badge.login,
+    .audit-badge.logout {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .audit-badge.exclusao,
+    .audit-badge.cancelamento,
+    .audit-badge.distrato {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+
+    .audit-badge.importacao,
+    .audit-badge.exportacao {
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .audit-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 18px;
+        flex-wrap: wrap;
+    }
+
+    @media (max-width: 900px) {
+        .audit-filter-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+<div class="card">
+    <h2>Filtros</h2>
+
+    <form method="get">
+        <div class="audit-filter-grid">
+            <div class="form-group">
+                <label>Usuário</label>
+                <input type="text" name="usuario" value="{{ filtros.usuario }}" placeholder="Login do usuário">
+            </div>
+
+            <div class="form-group">
+                <label>Ação</label>
+                <select name="acao">
+                    <option value="">Todas</option>
+                    {% for valor, rotulo in acoes %}
+                    <option value="{{ valor }}" {% if filtros.acao == valor %}selected{% endif %}>{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Módulo</label>
+                <select name="modulo">
+                    <option value="">Todos</option>
+                    {% for modulo in modulos %}
+                    <option value="{{ modulo }}" {% if filtros.modulo == modulo %}selected{% endif %}>{{ modulo }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Data inicial</label>
+                <input type="date" name="data_inicial" value="{{ filtros.data_inicial }}">
+            </div>
+
+            <div class="form-group">
+                <label>Data final</label>
+                <input type="date" name="data_final" value="{{ filtros.data_final }}">
+            </div>
+
+            <div class="form-group">
+                <label>Busca na descrição</label>
+                <input type="text" name="busca" value="{{ filtros.busca }}" placeholder="Ex.: contrato, importação, pregão">
+            </div>
+        </div>
+
+        <div class="actions" style="margin-top:12px;">
+            <button class="btn btn-primary" type="submit">Filtrar</button>
+            <a class="btn btn-secondary" href="{% url 'auditoria:historico' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top:20px;">
+    <h2>Registros</h2>
+
+    <div class="table-wrapper">
+        <table class="audit-table">
+            <thead>
+                <tr>
+                    <th>Data/Hora</th>
+                    <th>Usuário</th>
+                    <th>Ação</th>
+                    <th>Módulo</th>
+                    <th>Descrição</th>
+                    <th>IP</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for registro in page_obj %}
+                <tr>
+                    <td>{{ registro.criado_em|date:"d/m/Y H:i" }}</td>
+                    <td>
+                        <strong>{{ registro.usuario_nome|default:"Sistema" }}</strong>
+                        <small>{{ registro.usuario_username }}</small>
+                    </td>
+                    <td>
+                        <span class="audit-badge {{ registro.acao }}">
+                            {{ registro.get_acao_display }}
+                        </span>
+                    </td>
+                    <td>{{ registro.modulo }}</td>
+                    <td>
+                        {{ registro.descricao }}
+                        {% if registro.objeto_repr %}
+                        <small>Objeto: {{ registro.objeto_repr }}</small>
+                        {% endif %}
+                        {% if registro.caminho %}
+                        <small>{{ registro.metodo }} {{ registro.caminho }}</small>
+                        {% endif %}
+                    </td>
+                    <td>{{ registro.ip|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6">Nenhum registro encontrado.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="audit-pagination">
+        <div>
+            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }} —
+            {{ page_obj.paginator.count }} registro(s)
+        </div>
+
+        <div class="actions">
+            {% if page_obj.has_previous %}
+            <a class="btn btn-secondary" href="?page={{ page_obj.previous_page_number }}&usuario={{ filtros.usuario }}&acao={{ filtros.acao }}&modulo={{ filtros.modulo }}&busca={{ filtros.busca }}&data_inicial={{ filtros.data_inicial }}&data_final={{ filtros.data_final }}">Anterior</a>
+            {% endif %}
+
+            {% if page_obj.has_next %}
+            <a class="btn btn-secondary" href="?page={{ page_obj.next_page_number }}&usuario={{ filtros.usuario }}&acao={{ filtros.acao }}&modulo={{ filtros.modulo }}&busca={{ filtros.busca }}&data_inicial={{ filtros.data_inicial }}&data_final={{ filtros.data_final }}">Próxima</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% endblock %}

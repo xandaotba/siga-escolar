@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Pregão Finalizado | Sistema de Pregões{% endblock %}
+
+{% block content %}
+
+<style>
+    .card {
+        border: 1px solid #ccc;
+        padding: 25px;
+        margin-bottom: 15px;
+        border-radius: 8px;
+        text-align: center;
+    }
+
+    .sucesso {
+        color: green;
+        font-weight: bold;
+    }
+
+    .botao {
+        display: inline-block;
+        padding: 10px 15px;
+        margin: 5px;
+        background: #0d6efd;
+        color: white;
+        text-decoration: none;
+        border-radius: 5px;
+    }
+
+    .botao-secundario {
+        background: #6c757d;
+    }
+</style>
+
+<div class="card">
+    <h1 class="sucesso">Pregão Finalizado com Sucesso</h1>
+
+    <p>
+        O pregão <strong>{{ pregao.numero }}/{{ pregao.ano }}</strong>
+        foi finalizado oficialmente.
+    </p>
+
+    <p>
+        Status atual:
+        <strong>{{ pregao.get_status_display }}</strong>
+    </p>
+
+    {% if pregao.finalizado_em %}
+    <p>
+        Finalizado em:
+        <strong>{{ pregao.finalizado_em }}</strong>
+    </p>
+    {% endif %}
+
+    <a class="botao" href="{% url 'dashboard' %}">
+        Voltar para o Início
+    </a>
+
+    <a class="botao botao-secundario" href="{% url 'documentos:pregoes_finalizados' %}">
+        Ver Pregões Finalizados
+    </a>
+</div>
+
+{% endblock %}

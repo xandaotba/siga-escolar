@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Contrato {{ contrato.numero_contrato }}</title>
+
+    <style>
+        @page {
+            size: A4 portrait;
+            margin: 22mm 18mm 20mm 18mm;
+        }
+
+        body {
+            font-family: "Times New Roman", serif;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #000;
+            background: #fff;
+            margin: 20px;
+        }
+
+        .no-print {
+            margin-bottom: 14px;
+        }
+
+        .btn-print {
+            background: #0d6efd;
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .cabecalho {
+            text-align: center;
+            margin-bottom: 18px;
+        }
+
+        .cabecalho h1 {
+            font-size: 15px;
+            margin: 0 0 6px;
+            text-transform: uppercase;
+        }
+
+        .cabecalho h2 {
+            font-size: 13px;
+            margin: 0;
+            text-transform: uppercase;
+        }
+
+        .titulo {
+            text-align: center;
+            font-size: 14px;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin: 24px 0 18px;
+        }
+
+        .secao {
+            margin-bottom: 14px;
+            text-align: justify;
+        }
+
+        .secao h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            margin: 16px 0 6px;
+        }
+
+        .quadro-dados {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+        }
+
+        .quadro-dados td {
+            border: 1px solid #000;
+            padding: 5px;
+            vertical-align: top;
+        }
+
+        .tabela-itens {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            margin-top: 10px;
+        }
+
+        .tabela-itens th,
+        .tabela-itens td {
+            border: 1px solid #000;
+            padding: 4px;
+            vertical-align: middle;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .tabela-itens th {
+            background: #d9d9d9;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .col-item {
+            width: 26%;
+        }
+
+        .col-marca {
+            width: 12%;
+            text-align: center;
+        }
+
+        .col-quantidade {
+            width: 12%;
+            text-align: center;
+        }
+
+        .col-unidade {
+            width: 12%;
+            text-align: center;
+        }
+
+        .col-valor {
+            width: 13%;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .linha-total td {
+            font-weight: bold;
+            background: #eeeeee;
+        }
+
+        .assinaturas {
+            display: flex;
+            justify-content: space-between;
+            gap: 40px;
+            margin-top: 80px;
+            page-break-inside: avoid;
+        }
+
+        .assinatura {
+            width: 45%;
+            text-align: center;
+            border-top: 1px solid #000;
+            padding-top: 6px;
+            font-size: 12px;
+        }
+
+        @media print {
+            .no-print {
+                display: none;
+            }
+
+            body {
+                margin: 0;
+            }
+
+            table {
+                page-break-inside: auto;
+            }
+
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+
+            thead {
+                display: table-header-group;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    {% if contrato.status == "cancelado" %}
+    <div style="
+            border: 2px solid #b91c1c;
+            color: #b91c1c;
+            padding: 12px;
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+        ">
+        Contrato Cancelado
+    </div>
+    {% endif %}
+
+    <div class="no-print">
+        <button class="btn-print" onclick="window.print()">
+            Imprimir / Salvar em PDF
+        </button>
+    </div>
+
+    <div class="cabecalho">
+        <h1>Contrato Administrativo</h1>
+        <h2>Pregão Presencial Nº {{ pregao.numero }}/{{ pregao.ano }}</h2>
+    </div>
+
+    <div class="titulo">
+        Contrato nº {{ contrato.numero_contrato }}
+    </div>
+
+    <div class="secao">
+        <p>
+            Pelo presente instrumento, de um lado a unidade escolar abaixo identificada,
+            e de outro lado a empresa fornecedora abaixo qualificada, firmam o presente
+            contrato referente aos itens adjudicados no Pregão Presencial nº
+            {{ pregao.numero }}/{{ pregao.ano }}.
+        </p>
+    </div>
+
+    <table class="quadro-dados">
+        <tr>
+            <td>
+                <strong>CONTRATANTE / ESCOLA</strong><br>
+                <strong>Nome:</strong> {{ escola.nome_escola }}<br>
+                <strong>CNPJ:</strong> {{ escola.cnpj }}<br>
+                <strong>Endereço:</strong> {{ escola.endereco }}, {{ escola.numero }} - {{ escola.bairro }}<br>
+                <strong>Município:</strong> {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}<br>
+                <strong>Presidente do CDCE:</strong> {{ escola.presidente_cdce }}<br>
+                <strong>RG:</strong> {{ escola.rg_presidente }}<br>
+                <strong>CPF:</strong> {{ escola.cpf_presidente }}
+            </td>
+        </tr>
+
+        <tr>
+            <td>
+                <strong>CONTRATADA / FORNECEDOR</strong><br>
+                <strong>Razão Social:</strong> {{ fornecedor.razao_social }}<br>
+                <strong>CNPJ:</strong> {{ fornecedor.cnpj }}<br>
+                <strong>Endereço:</strong> {{ fornecedor.endereco }}<br>
+                <strong>Telefone:</strong> {{ fornecedor.telefone }}<br>
+                <strong>Representante Legal:</strong> {{ fornecedor.representante_legal }}<br>
+                <strong>RG:</strong> {{ fornecedor.rg_representante }}
+                {% if fornecedor.orgao_expedidor_representante %}
+                - {{ fornecedor.orgao_expedidor_representante }}
+                {% endif %}<br>
+                <strong>CPF:</strong> {{ fornecedor.cpf_representante }}<br>
+                <strong>E-mail:</strong> {{ fornecedor.email }}
+            </td>
+        </tr>
+    </table>
+
+    <div class="secao">
+        <h3>Cláusula Primeira — Do Objeto</h3>
+
+        <p>
+            O presente contrato tem por objeto a aquisição de gêneros alimentícios,
+            conforme itens, marcas, quantidades e valores adjudicados no Pregão Presencial
+            nº {{ pregao.numero }}/{{ pregao.ano }}, relacionados na tabela abaixo.
+        </p>
+    </div>
+
+    <table class="tabela-itens">
+        <thead>
+            <tr>
+                <th class="col-item">Item</th>
+                <th class="col-marca">Marca</th>
+                <th class="col-quantidade">Quantidade</th>
+                <th class="col-unidade">Unidade</th>
+                <th class="col-valor">Valor Unitário</th>
+                <th class="col-valor">Valor Total</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for item in itens %}
+            <tr>
+                <td class="col-item">{{ item.item.nome_item }}</td>
+                <td class="col-marca">{{ item.marca }}</td>
+                <td class="col-quantidade">{{ item.quantidade_contratada }}</td>
+                <td class="col-unidade">{{ item.unidade }}</td>
+                <td class="col-valor">R$ {{ item.valor_unitario }}</td>
+                <td class="col-valor">R$ {{ item.valor_total }}</td>
+            </tr>
+            {% endfor %}
+
+            <tr class="linha-total">
+                <td colspan="5">VALOR TOTAL DO CONTRATO</td>
+                <td class="col-valor">R$ {{ contrato.valor_total }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="secao">
+        <h3>Cláusula Segunda — Do Valor</h3>
+
+        <p>
+            O valor total do presente contrato é de
+            <strong>R$ {{ contrato.valor_total }}</strong>, correspondente à soma dos itens
+            contratados conforme tabela acima.
+        </p>
+    </div>
+
+    <div class="secao">
+        <h3>Cláusula Terceira — Dos Dados Bancários</h3>
+
+        <p>
+            Para fins de pagamento, a contratada informa os seguintes dados bancários:
+            Banco {{ fornecedor.nome_banco }}, Agência {{ fornecedor.agencia }},
+            Conta Corrente {{ fornecedor.conta_corrente }}, PIX {{ fornecedor.pix }}.
+        </p>
+    </div>
+
+    <div class="secao">
+        <h3>Cláusula Quarta — Da Vinculação ao Pregão</h3>
+
+        <p>
+            Este contrato vincula-se ao Pregão Presencial nº {{ pregao.numero }}/{{ pregao.ano }},
+            ao respectivo resultado final e aos demais documentos integrantes do procedimento.
+        </p>
+    </div>
+
+    <div class="secao">
+        <p>
+            E, por estarem de acordo, as partes assinam o presente instrumento.
+        </p>
+    </div>
+
+    <div class="secao" style="text-align: right;">
+        {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %},
+        {{ contrato.criado_em|date:"d/m/Y" }}.
+    </div>
+
+    
+
+    {% if realinhamentos %}
+    <div class="secao">
+        <h3>Histórico de Realinhamentos de Preços</h3>
+
+        {% for realinhamento in realinhamentos %}
+        <p>
+            <strong>Data de vigência:</strong> {{ realinhamento.data_realinhamento|date:"d/m/Y" }}<br>
+            {% if realinhamento.numero_termo_aditivo %}
+            <strong>Termo aditivo:</strong> {{ realinhamento.numero_termo_aditivo }}{% if realinhamento.data_termo_aditivo %} — {{ realinhamento.data_termo_aditivo|date:"d/m/Y" }}{% endif %}<br>
+            {% endif %}
+            <strong>Justificativa:</strong> {{ realinhamento.justificativa }}<br>
+            <strong>Valor anterior:</strong> R$ {{ realinhamento.valor_total_anterior }}<br>
+            <strong>Novo valor:</strong> R$ {{ realinhamento.valor_total_novo }}<br>
+            <strong>Diferença:</strong> R$ {{ realinhamento.diferenca_total }}
+        </p>
+
+        <table class="tabela-itens">
+            <thead>
+                <tr>
+                    <th class="col-item">Item</th>
+                    <th class="col-quantidade">Qtd. Ativa</th>
+                    <th class="col-valor">Valor Anterior</th>
+                    <th class="col-valor">Novo Valor</th>
+                    <th class="col-valor">Diferença</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item_realinhado in realinhamento.itens.all %}
+                <tr>
+                    <td class="col-item">{{ item_realinhado.contrato_item.item.nome_item }}</td>
+                    <td class="col-quantidade">{{ item_realinhado.quantidade_ativa }}</td>
+                    <td class="col-valor">R$ {{ item_realinhado.valor_unitario_anterior }}</td>
+                    <td class="col-valor">R$ {{ item_realinhado.valor_unitario_novo }}</td>
+                    <td class="col-valor">R$ {{ item_realinhado.diferenca_valor }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+
+    {% if trocas_marca %}
+    <div class="secao">
+        <h3>Histórico de Trocas de Marca</h3>
+
+        {% for troca in trocas_marca %}
+        <p>
+            <strong>Data de vigência:</strong> {{ troca.data_troca_marca|date:"d/m/Y" }}<br>
+            {% if troca.numero_termo_aditivo %}
+            <strong>Termo aditivo:</strong> {{ troca.numero_termo_aditivo }}{% if troca.data_termo_aditivo %} — {{ troca.data_termo_aditivo|date:"d/m/Y" }}{% endif %}<br>
+            {% endif %}
+            <strong>Justificativa:</strong> {{ troca.justificativa }}
+        </p>
+
+        <table class="tabela-itens">
+            <thead>
+                <tr>
+                    <th class="col-item">Item</th>
+                    <th class="col-quantidade">Qtd. Ativa</th>
+                    <th class="col-marca">Marca Anterior</th>
+                    <th class="col-marca">Nova Marca</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item_troca in troca.itens.all %}
+                <tr>
+                    <td class="col-item">{{ item_troca.contrato_item.item.nome_item }}</td>
+                    <td class="col-quantidade">{{ item_troca.quantidade_ativa }}</td>
+                    <td class="col-marca">{{ item_troca.marca_anterior }}</td>
+                    <td class="col-marca">{{ item_troca.marca_nova }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="assinaturas">
+        <div class="assinatura">
+            {{ escola.presidente_cdce }}<br>
+            Presidente do CDCE / Contratante
+        </div>
+
+        <div class="assinatura">
+            {{ fornecedor.representante_legal }}<br>
+            Representante Legal / Contratada
+        </div>
+    </div>
+
+</body>
+
+</html>

@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Adicionar Aquisição Manualmente | Sistema de Certames{% endblock %}
+{% block page_title %}Adicionar Aquisição Manualmente{% endblock %}
+{% block page_subtitle %}Registre a nota fiscal e lance os produtos em uma única tela{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .card-header-flex { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .muted-text { color: #64748b; font-size: 13px; }
+    .texto-direita { text-align: right; }
+    .total-box { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 14px; background: #ecfdf5; color: #047857; font-weight: 900; }
+    .table-wrapper { overflow-x: auto; }
+    .itens-table input, .itens-table select { min-width: 120px; }
+    .itens-table .select-item { min-width: 420px; }
+    .itens-table .unidade { min-width: 110px; background: #f8fafc; }
+    .itens-table .qtd { min-width: 110px; }
+    .itens-table .valor { min-width: 130px; background: #f8fafc; }
+    .mini-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .btn-icon { border: none; border-radius: 9px; padding: 8px 10px; cursor: pointer; font-weight: 900; }
+    .btn-remove { background: #fee2e2; color: #b91c1c; }
+    .btn-remove:hover { background: #fecaca; }
+</style>
+
+
+<div class="page-actions">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">← Notas Fiscais Cadastradas</a>
+</div>
+
+<div class="info-box">
+    Selecione o <strong>certame</strong>, depois a <strong>escola</strong>, o <strong>fornecedor</strong> e o <strong>contrato</strong>.
+    Os itens do contrato serão carregados automaticamente na tabela.
+</div>
+
+<form method="post" id="form-aquisicao-manual">
+    {% csrf_token %}
+
+    <div class="card">
+        <h2>Dados da Nota Fiscal</h2>
+
+        <div class="grid grid-4">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" id="id_pregao" required>
+                    <option value="">Selecione</option>
+                    {% for certame in certames %}
+                    <option value="{{ certame.id }}">{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_escola" {% if restrito_escola %}disabled{% endif %} required>
+                    <option value="">Selecione o certame</option>
+                    {% if escola_vinculada %}
+                    <option value="{{ escola_vinculada.id }}" selected>{{ escola_vinculada.nome_escola }}</option>
+                    {% endif %}
+                </select>
+                {% if restrito_escola and escola_vinculada %}
+                <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+                {% endif %}
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_fornecedor" required>
+                    <option value="">Selecione a escola</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Contrato</label>
+                <select name="contrato" id="id_contrato" required>
+                    <option value="">Selecione o fornecedor</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Número da NF-e</label>
+                <input type="text" name="numero_nota" placeholder="Ex.: 45548" required>
+            </div>
+
+            <div class="form-group">
+                <label>Data de Emissão</label>
+                <input type="date" name="data_emissao">
+            </div>
+
+            <div class="form-group">
+                <label>Data de Recebimento</label>
+                <input type="date" name="data_recebimento">
+            </div>
+
+            <div class="form-group">
+                <label>Observações</label>
+                <input type="text" name="observacoes" placeholder="Opcional">
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header-flex">
+            <h2>Itens da Nota Fiscal</h2>
+            <div class="total-box">
+                Total da Nota: <span id="total-nota">R$ 0,00</span>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table class="itens-table">
+                <thead>
+                    <tr>
+                        <th>Item do Contrato</th>
+                        <th>Unid.</th>
+                        <th>Qtd.</th>
+                        <th>Valor Unit.</th>
+                        <th>Valor Total</th>
+                        <th style="width: 80px;">Ação</th>
+                    </tr>
+                </thead>
+                <tbody id="itens-body">
+                    <tr class="item-row">
+                        <td>
+                            <select name="contrato_item[]" class="select-item" required>
+                                <option value="">Selecione o contrato primeiro</option>
+                            </select>
+                        </td>
+                        <td><input type="text" name="unidade[]" class="unidade" readonly tabindex="-1"></td>
+                        <td><input type="number" name="quantidade[]" class="qtd" min="0" step="0.001" required></td>
+                        <td><input type="number" name="valor_unitario[]" class="valor valor-unitario" min="0" step="0.0001" readonly tabindex="-1" required></td>
+                        <td><input type="number" name="valor_total[]" class="valor valor-total" min="0" step="0.01" readonly tabindex="-1"></td>
+                        <td><button type="button" class="btn-icon btn-remove" onclick="removerLinha(this)">Excluir</button></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="actions" style="margin-top: 14px;">
+            <button class="btn btn-secondary" type="button" onclick="adicionarLinha()">➕ Adicionar item</button>
+            <button class="btn btn-primary" type="submit">Finalizar e Registrar Nota</button>
+        </div>
+    </div>
+</form>
+
+<script>
+const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
+const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
+const urlContratosTemplate = "{% url 'aquisicoes:ajax_contratos_por_certame_escola_fornecedor' 0 0 0 %}";
+const urlItensContratoTemplate = "{% url 'aquisicoes:ajax_itens_contrato' 0 %}";
+const escolaRestritaId = "{% if escola_vinculada %}{{ escola_vinculada.id }}{% endif %}";
+
+let itensContrato = [];
+
+function moedaBR(valor) {
+    return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(valor || 0);
+}
+
+function numero(valor) {
+    const n = Number(String(valor || "0").replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+}
+
+function trocarIds(url, ids) {
+    let finalUrl = url;
+    ids.forEach(id => {
+        finalUrl = finalUrl.replace("/0/", `/${id}/`);
+    });
+    return finalUrl;
+}
+
+function resetSelect(select, texto) {
+    select.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = texto;
+    select.appendChild(option);
+}
+
+async function carregarEscolas() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaSelect = document.getElementById("id_escola");
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    resetSelect(fornecedorSelect, "Selecione a escola");
+    resetSelect(contratoSelect, "Selecione o fornecedor");
+    limparItensContrato();
+
+    if (!pregaoId) {
+        resetSelect(escolaSelect, "Selecione o certame");
+        return;
+    }
+
+    const url = trocarIds(urlEscolasTemplate, [pregaoId]);
+    const response = await fetch(url);
+    const data = await response.json();
+
+    resetSelect(escolaSelect, "Selecione");
+
+    data.escolas.forEach(escola => {
+        const option = document.createElement("option");
+        option.value = escola.id;
+        option.textContent = escola.municipio ? `${escola.nome} - ${escola.municipio}` : escola.nome;
+        escolaSelect.appendChild(option);
+    });
+
+    if (escolaRestritaId) {
+        escolaSelect.value = escolaRestritaId;
+        carregarFornecedores();
+    }
+}
+
+async function carregarFornecedores() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaId = document.getElementById("id_escola").value;
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    resetSelect(contratoSelect, "Selecione o fornecedor");
+    limparItensContrato();
+
+    if (!pregaoId || !escolaId) {
+        resetSelect(fornecedorSelect, "Selecione a escola");
+        return;
+    }
+
+    const url = trocarIds(urlFornecedoresTemplate, [pregaoId, escolaId]);
+    const response = await fetch(url);
+    const data = await response.json();
+
+    resetSelect(fornecedorSelect, "Selecione");
+
+    data.fornecedores.forEach(fornecedor => {
+        const option = document.createElement("option");
+        option.value = fornecedor.id;
+        option.textContent = fornecedor.nome;
+        fornecedorSelect.appendChild(option);
+    });
+}
+
+async function carregarContratos() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaId = document.getElementById("id_escola").value;
+    const fornecedorId = document.getElementById("id_fornecedor").value;
+    const contratoSelect = document.getElementById("id_contrato");
+
+    limparItensContrato();
+
+    if (!pregaoId || !escolaId || !fornecedorId) {
+        resetSelect(contratoSelect, "Selecione o fornecedor");
+        return;
+    }
+
+    const url = trocarIds(urlContratosTemplate, [pregaoId, escolaId, fornecedorId]);
+    const response = await fetch(url);
+    const data = await response.json();
+
+    resetSelect(contratoSelect, "Selecione");
+
+    data.contratos.forEach(contrato => {
+        const option = document.createElement("option");
+        option.value = contrato.id;
+        option.textContent = contrato.texto;
+        contratoSelect.appendChild(option);
+    });
+
+    if (data.contratos.length === 1) {
+        contratoSelect.value = data.contratos[0].id;
+        carregarItensContrato();
+    }
+}
+
+function limparItensContrato() {
+    itensContrato = [];
+    document.querySelectorAll(".select-item").forEach(select => {
+        select.innerHTML = '<option value="">Selecione o contrato primeiro</option>';
+    });
+    document.querySelectorAll(".unidade").forEach(input => input.value = "");
+    document.querySelectorAll(".valor-unitario").forEach(input => input.value = "");
+    document.querySelectorAll(".valor-total").forEach(input => input.value = "");
+    calcularTotalNota();
+}
+
+async function carregarItensContrato() {
+    const contratoId = document.getElementById("id_contrato").value;
+
+    if (!contratoId) {
+        limparItensContrato();
+        return;
+    }
+
+    const url = trocarIds(urlItensContratoTemplate, [contratoId]);
+    const response = await fetch(url);
+    const data = await response.json();
+
+    itensContrato = data.itens || [];
+    atualizarSelectsItens();
+}
+
+function atualizarSelectsItens() {
+    document.querySelectorAll(".select-item").forEach(select => {
+        const valorAtual = select.value;
+        select.innerHTML = '<option value="">Selecione</option>';
+
+        itensContrato.forEach(item => {
+            const option = document.createElement("option");
+            option.value = item.id;
+            option.textContent = item.texto;
+            option.dataset.unidade = item.unidade;
+            option.dataset.valorUnitario = item.valor_unitario;
+            option.dataset.nome = item.nome;
+            select.appendChild(option);
+        });
+
+        if (valorAtual) select.value = valorAtual;
+    });
+}
+
+function preencherDadosItem(select) {
+    const row = select.closest("tr");
+    const option = select.options[select.selectedIndex];
+
+    if (!option || !option.value) return;
+
+    row.querySelector(".unidade").value = option.dataset.unidade || "";
+    row.querySelector(".valor-unitario").value = option.dataset.valorUnitario || "";
+    calcularLinha(row);
+}
+
+function calcularLinha(row) {
+    const qtd = numero(row.querySelector(".qtd").value);
+    const unit = numero(row.querySelector(".valor-unitario").value);
+    const total = qtd * unit;
+
+    row.querySelector(".valor-total").value = total ? total.toFixed(2) : "";
+    calcularTotalNota();
+}
+
+function calcularTotalNota() {
+    let total = 0;
+    document.querySelectorAll(".valor-total").forEach(input => {
+        total += numero(input.value);
+    });
+    document.getElementById("total-nota").textContent = moedaBR(total);
+}
+
+function adicionarLinha() {
+    const body = document.getElementById("itens-body");
+    const primeira = body.querySelector(".item-row");
+    const nova = primeira.cloneNode(true);
+
+    nova.querySelectorAll("input").forEach(input => input.value = "");
+    nova.querySelectorAll("select").forEach(select => select.value = "");
+
+    body.appendChild(nova);
+    atualizarSelectsItens();
+}
+
+function removerLinha(botao) {
+    const body = document.getElementById("itens-body");
+    const linhas = body.querySelectorAll(".item-row");
+
+    if (linhas.length <= 1) {
+        linhas[0].querySelectorAll("input").forEach(input => input.value = "");
+        linhas[0].querySelectorAll("select").forEach(select => select.value = "");
+        calcularTotalNota();
+        return;
+    }
+
+    botao.closest("tr").remove();
+    calcularTotalNota();
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    document.getElementById("id_pregao").addEventListener("change", carregarEscolas);
+    document.getElementById("id_escola").addEventListener("change", carregarFornecedores);
+    document.getElementById("id_fornecedor").addEventListener("change", carregarContratos);
+    document.getElementById("id_contrato").addEventListener("change", carregarItensContrato);
+
+    document.addEventListener("change", function (event) {
+        if (event.target.classList.contains("select-item")) {
+            preencherDadosItem(event.target);
+        }
+    });
+
+    document.addEventListener("input", function (event) {
+        if (event.target.classList.contains("qtd")) {
+            calcularLinha(event.target.closest("tr"));
+        }
+    });
+});
+</script>
+
+{% endblock %}

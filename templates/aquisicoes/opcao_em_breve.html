@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}{{ titulo }} | Sistema de Certames{% endblock %}
+{% block page_title %}{{ titulo }}{% endblock %}
+{% block page_subtitle %}{{ subtitulo }}{% endblock %}
+
+{% block content %}
+
+<style>
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 16px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+</style>
+
+<div class="card">
+    <h2>{{ titulo }}</h2>
+    <div class="info-box">{{ mensagem }}</div>
+
+    <div class="actions">
+        <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">Voltar</a>
+        <a class="btn btn-primary" href="{% url 'aquisicoes:aquisicao_manual_nova' %}">Adicionar manualmente</a>
+    </div>
+</div>
+
+{% endblock %}

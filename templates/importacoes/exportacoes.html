@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Backup / Exportações | Sistema de Pregões{% endblock %}
+{% block page_title %}Backup / Exportações{% endblock %}
+{% block page_subtitle %}Baixe os principais dados do sistema em planilha Excel{% endblock %}
+
+{% block content %}
+
+<style>
+    .backup-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+    }
+
+    .backup-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 18px;
+    }
+
+    .backup-card h2 {
+        margin-bottom: 8px;
+    }
+
+    .backup-card p {
+        color: #64748b;
+        line-height: 1.55;
+        margin-bottom: 16px;
+    }
+
+    .backup-lista {
+        margin: 0 0 18px;
+        padding-left: 20px;
+        color: #334155;
+        line-height: 1.65;
+    }
+
+    .backup-alerta {
+        background: #eff6ff;
+        color: #1e3a8a;
+        border: 1px solid #bfdbfe;
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 18px;
+        font-weight: 700;
+    }
+
+    @media (max-width: 900px) {
+        .backup-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% elif message.tags == "warning" %}
+<div class="alert alert-warning">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="backup-alerta">
+    Esta área é restrita ao Administrador. O backup é gerado em Excel com várias abas e pode ser salvo fora do sistema para segurança.
+</div>
+
+<div class="backup-grid">
+    <div class="backup-card">
+        <h2>Backup completo do sistema</h2>
+        <p>
+            Gera uma planilha Excel única contendo os principais cadastros e quantitativos usados nos pregões.
+        </p>
+
+        <ul class="backup-lista">
+            <li>Municípios</li>
+            <li>Unidades de Medida</li>
+            <li>Fornecedores</li>
+            <li>Escolas</li>
+            <li>Itens</li>
+            <li>Pregões</li>
+            <li>Quantitativo por Pregão</li>
+            <li>Quantitativo por Escola</li>
+        </ul>
+
+        <a class="btn btn-primary" href="{% url 'importacoes:backup_completo' %}">
+            Baixar Backup Completo em Excel
+        </a>
+    </div>
+
+    <div class="backup-card">
+        <h2>Observações</h2>
+        <p>
+            Este backup é uma exportação dos dados principais em formato de consulta.
+            Ele não substitui uma cópia técnica do banco de dados, mas facilita conferência,
+            auditoria, arquivamento e recuperação manual de informações.
+        </p>
+
+        <p>
+            Recomenda-se baixar um backup após concluir cadastros, importações,
+            finalização de pregões ou geração de documentos importantes.
+        </p>
+    </div>
+</div>
+
+{% endblock %}

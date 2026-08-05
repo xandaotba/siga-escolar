@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Registrar Termo Aditivo | Sistema de Pregões{% endblock %}
+{% block page_title %}Registrar Termo Aditivo de Valor{% endblock %}
+{% block page_subtitle %}Formalize o realinhamento de preços registrado para o contrato{% endblock %}
+
+{% block content %}
+
+<style>
+    .termo-destaque {
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: #ffffff;
+        border-radius: 16px;
+        padding: 18px;
+        margin-bottom: 18px;
+    }
+
+    .termo-destaque h2 {
+        color: #ffffff;
+        margin-top: 0;
+    }
+
+    .termo-destaque p {
+        margin-bottom: 0;
+        line-height: 1.6;
+    }
+
+    .resumo-termo {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-valor {
+        color: #0f2f57;
+        font-size: 22px;
+        font-weight: 800;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-termo {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="termo-destaque">
+    <h2>Contrato {{ contrato.numero_contrato }}</h2>
+    <p>
+        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Escola:</strong> {{ contrato.escola.nome_escola }}{% if contrato.escola.municipio %} - {{ contrato.escola.municipio.nome }}{% if contrato.escola.municipio.uf %}/{{ contrato.escola.municipio.uf }}{% endif %}{% endif %}<br>
+        <strong>Fornecedor:</strong> {{ contrato.fornecedor.razao_social }}<br>
+        <strong>Data de vigência do realinhamento:</strong> {{ realinhamento.data_realinhamento|date:"d/m/Y" }}
+    </p>
+</div>
+
+<div class="resumo-termo">
+    <div class="resumo-box">
+        <div class="resumo-label">Valor anterior dos itens realinhados</div>
+        <div class="resumo-valor">{{ realinhamento.valor_total_anterior|moeda_br }}</div>
+    </div>
+
+    <div class="resumo-box">
+        <div class="resumo-label">Novo valor dos itens realinhados</div>
+        <div class="resumo-valor">{{ realinhamento.valor_total_novo|moeda_br }}</div>
+    </div>
+
+    <div class="resumo-box">
+        <div class="resumo-label">Diferença total</div>
+        <div class="resumo-valor">{{ realinhamento.diferenca_total|moeda_br }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Itens do Realinhamento</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Marca</th>
+                    <th>Qtd. Ativa</th>
+                    <th>Valor Anterior</th>
+                    <th>Novo Valor</th>
+                    <th>Valor Total Anterior</th>
+                    <th>Novo Valor Total</th>
+                    <th>Diferença</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in itens %}
+                <tr>
+                    <td>{{ item.contrato_item.item.nome_item }}</td>
+                    <td>{{ item.contrato_item.marca }}</td>
+                    <td>{{ item.quantidade_ativa|quantidade_br }}</td>
+                    <td>{{ item.valor_unitario_anterior|moeda_br }}</td>
+                    <td><strong>{{ item.valor_unitario_novo|moeda_br }}</strong></td>
+                    <td>{{ item.valor_total_anterior|moeda_br }}</td>
+                    <td>{{ item.valor_total_novo|moeda_br }}</td>
+                    <td>{{ item.diferenca_valor|moeda_br }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8">Nenhum item encontrado neste realinhamento.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Dados do Termo Aditivo</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Número do Termo Aditivo</label>
+                <input type="text" name="numero_termo_aditivo" value="{{ numero_padrao }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Data do Termo Aditivo</label>
+                <input type="date" name="data_termo_aditivo" value="{{ data_padrao|date:'Y-m-d' }}" required>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Justificativa do Realinhamento</label>
+            <textarea rows="4" readonly>{{ realinhamento.justificativa }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label>Observações do Termo Aditivo</label>
+            <textarea name="observacoes_termo_aditivo" rows="4" placeholder="Informe observações complementares, se necessário">{{ realinhamento.observacoes_termo_aditivo }}</textarea>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Registrar Termo Aditivo
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:realinhamento_precos' %}?contrato={{ contrato.id }}">
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

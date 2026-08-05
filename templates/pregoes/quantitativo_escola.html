@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Quantitativo por Escola | Sistema de Pregões{% endblock %}
+{% block page_title %}Quantitativo por Escola{% endblock %}
+{% block page_subtitle %}Informe a quantidade de cada item por escola dentro do pregão{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <h2>Selecionar Pregão e Escola</h2>
+
+        <a class="btn btn-primary" href="{% url 'importacoes:quantitativo_escola' %}">
+            Importar de Planilha
+        </a>
+    </div>
+
+    <form method="get">
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Pregão</label>
+                <select name="pregao" id="id_pregao" required>
+                    <option value="">Selecione um pregão</option>
+
+                    {% for p in pregoes %}
+                    <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                        Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_escola" required>
+                    <option value="">Selecione primeiro o pregão</option>
+                
+                    {% for escola in escolas %}
+                    <option value="{{ escola.id }}" {% if escola_selecionada and escola.id == escola_selecionada.id %}selected{% endif %}>
+                        {{ escola.nome_escola }}
+                        {% if escola.municipio %}
+                        - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" type="submit">
+            Carregar Itens
+        </button>
+    </form>
+</div>
+
+{% if pregao and escola %}
+<div class="card">
+    <h2>Quantitativos da Escola</h2>
+
+    <p>
+        <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+        <strong>Escola:</strong> {{ escola.nome_escola }}<br>
+        <strong>Município:</strong> {{ escola.municipio.nome }}
+    </p>
+
+    {% if resumo_itens %}
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="pregao" value="{{ pregao.id }}">
+        <input type="hidden" name="escola" value="{{ escola.id }}">
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Unidade</th>
+                        <th>Total do Pregão</th>
+                        <th>Saldo Restante</th>
+                        <th style="width: 220px;">Quantidade desta Escola</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for resumo in resumo_itens %}
+                    <tr>
+                        <td>
+                            <strong>{{ resumo.item.nome_item }}</strong><br>
+                            <small title="{{ resumo.item.descricao }}">{{ resumo.item.descricao|truncatechars:60 }}</small>
+                        </td>
+
+                        <td>{{ resumo.item.get_unidade_medida_display }}</td>
+
+                        <td>
+                            <strong>{{ resumo.quantidade_total_pregao|quantidade_br }}</strong>
+                        </td>
+
+                        <td>
+                            {% if resumo.saldo_restante_real <= 0 %} <span class="badge badge-danger">
+                                {{ resumo.saldo_restante_real|quantidade_br }}
+                                </span>
+                                {% else %}
+                                <span class="badge badge-success">
+                                    {{ resumo.saldo_restante_real|quantidade_br }}
+                                </span>
+                                {% endif %}
+                        </td>
+
+                        <td>
+                            <input type="text" name="quantidade_{{ resumo.item.id }}" placeholder="0"
+                                value="{{ quantitativos_salvos|get_item:resumo.item.id|quantidade_br }}">
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <br>
+
+        <button class="btn btn-success" type="submit">
+            Salvar Quantitativos da Escola
+        </button>
+    </form>
+    {% else %}
+    <div class="alert alert-error">
+        Este pregão ainda não possui quantitativos cadastrados.
+        Primeiro cadastre os itens em “Quantitativo por Pregão”.
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const campoPregao = document.getElementById("id_pregao");
+        const campoEscola = document.getElementById("id_escola");
+
+        if (!campoPregao || !campoEscola) {
+            return;
+        }
+
+        function limparEscolas(mensagem) {
+            campoEscola.innerHTML = "";
+
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = mensagem || "Selecione a escola";
+
+            campoEscola.appendChild(option);
+        }
+
+        function carregarEscolasPorPregao(pregaoId) {
+            if (!pregaoId) {
+                limparEscolas("Selecione primeiro o pregão");
+                return;
+            }
+
+            limparEscolas("Carregando escolas...");
+
+            fetch(`/pregoes/ajax/escolas-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar escolas.");
+                    }
+
+                    return response.json();
+                })
+                .then(function (data) {
+                    campoEscola.innerHTML = "";
+
+                    const optionInicial = document.createElement("option");
+                    optionInicial.value = "";
+
+                    if (data.escolas.length === 0) {
+                        optionInicial.textContent = "Nenhuma escola encontrada para os municípios deste pregão";
+                    } else {
+                        optionInicial.textContent = "Selecione a escola";
+                    }
+
+                    campoEscola.appendChild(optionInicial);
+
+                    data.escolas.forEach(function (escola) {
+                        const option = document.createElement("option");
+                        option.value = escola.id;
+
+                        let texto = escola.nome;
+
+                        if (escola.municipio) {
+                            texto += " - " + escola.municipio;
+
+                            if (escola.uf) {
+                                texto += "/" + escola.uf;
+                            }
+                        }
+
+                        option.textContent = texto;
+                        campoEscola.appendChild(option);
+                    });
+                })
+                .catch(function () {
+                    limparEscolas("Erro ao carregar escolas");
+                });
+        }
+
+        campoPregao.addEventListener("change", function () {
+            carregarEscolasPorPregao(this.value);
+        });
+    });
+</script>
+{% endblock %}

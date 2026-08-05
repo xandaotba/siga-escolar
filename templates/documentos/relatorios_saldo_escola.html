@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Saldo Restante por Escola | Sistema de Certames{% endblock %}
+{% block page_title %}Saldo Restante por Escola{% endblock %}
+{% block page_subtitle %}Visualize o saldo disponível para novos contratos de uma escola em determinado certame{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .relatorio-filtros {
+        margin-bottom: 18px;
+    }
+
+    .relatorio-info {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    .tempo-passado {
+        color: #b45309;
+        font-weight: 800;
+    }
+
+    .tempo-futuro {
+        color: #0d6efd;
+        font-weight: 800;
+    }
+
+    .tempo-hoje {
+        color: #198754;
+        font-weight: 800;
+    }
+
+    .resumo-relatorio {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        color: #0f2f57;
+        font-size: 24px;
+        font-weight: 900;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-relatorio {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .print-header {
+        display: none;
+    }
+
+    @media print {
+        @page {
+            size: A4 landscape;
+            margin: 10mm;
+        }
+
+        body {
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        .sidebar,
+        .topbar,
+        .footer-space,
+        .no-print,
+        .relatorio-filtros {
+            display: none !important;
+        }
+
+        .app {
+            display: block !important;
+        }
+
+        .main {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+        }
+
+        .content {
+            padding: 0 !important;
+        }
+
+        .print-header {
+            display: block !important;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .print-header h1 {
+            margin: 0 0 4px;
+            font-size: 18px;
+            color: #000000 !important;
+        }
+
+        .print-header p {
+            margin: 0;
+            font-size: 11px;
+            color: #000000 !important;
+        }
+
+        .card,
+        .resumo-card {
+            box-shadow: none !important;
+            border: 1px solid #000000 !important;
+            border-radius: 0 !important;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .resumo-relatorio {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+
+        .table-wrapper {
+            overflow: visible !important;
+        }
+
+        table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+            font-size: 10px !important;
+        }
+
+        th,
+        td {
+            border: 1px solid #000000 !important;
+            padding: 4px !important;
+            color: #000000 !important;
+        }
+
+        th {
+            background: #e5e7eb !important;
+            font-weight: bold !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        a {
+            color: #000000 !important;
+            text-decoration: none !important;
+        }
+
+        .badge {
+            border: 1px solid #000000 !important;
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+    }
+
+</style>
+
+
+<div class="print-header">
+    <h1>Saldo Restante por Escola</h1>
+    <p>Itens com saldo disponível para novos contratos por escola.</p>
+</div>
+
+
+<div class="actions no-print" style="margin-bottom: 16px;">
+    <button class="btn btn-primary" type="button" onclick="window.print()">
+        🖨️ Imprimir Relatório
+    </button>
+</div>
+
+
+
+
+<div class="card relatorio-filtros">
+    <h2>Filtros</h2>
+
+    {% if restrito_escola and escola_vinculada %}
+    <p class="relatorio-info">
+        Visualização restrita à escola: <strong>{{ escola_vinculada.nome_escola }}</strong>.
+    </p>
+    {% endif %}
+
+    <form method="get">
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" id="id_pregao_filtro" required>
+                    <option value="">Selecione</option>
+                    {% for certame in certames %}
+                        <option value="{{ certame.id }}" {% if pregao and pregao.id == certame.id %}selected{% endif %}>
+                            {{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_escola_filtro" data-valor-selecionado="{% if escola %}{{ escola.id }}{% endif %}" {% if restrito_escola %}disabled{% endif %} required>
+                    <option value="">Selecione</option>
+                    {% for item_escola in escolas %}
+                        <option value="{{ item_escola.id }}" {% if escola and escola.id == item_escola.id %}selected{% endif %}>
+                            {{ item_escola.nome_escola }}{% if item_escola.municipio %} - {{ item_escola.municipio.nome }}{% if item_escola.municipio.uf %}/{{ item_escola.municipio.uf }}{% endif %}{% endif %}
+                        </option>
+                    {% endfor %}
+                </select>
+                {% if restrito_escola and escola_vinculada %}
+                    <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar Relatório</button>
+            <a class="btn btn-secondary" href="{% url 'documentos:relatorios_saldo_escola' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+
+{% if pregao and escola %}
+<div class="card">
+    <h2>
+        Saldo Restante por Escola —
+        {{ escola.nome_escola }}
+    </h2>
+
+    <p class="relatorio-info">
+        <strong>Certame:</strong> {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}
+    </p>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Unidade</th>
+                    <th>Quantitativo da Escola</th>
+                    <th>Quantitativo Contratado</th>
+                    <th>Saldo Restante</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td><strong>{{ linha.item.nome_item }}</strong></td>
+                    <td>{{ linha.unidade }}</td>
+                    <td>{{ linha.quantitativo|quantidade_br }}</td>
+                    <td>{{ linha.contratado|quantidade_br }}</td>
+                    <td><strong>{{ linha.saldo|quantidade_br }}</strong></td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5">Nenhum registro encontrado para esta escola.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const campoPregao = document.getElementById("id_pregao_filtro");
+        const campoEscola = document.getElementById("id_escola_filtro");
+
+        if (!campoPregao || !campoEscola || campoEscola.disabled) {
+            return;
+        }
+
+        function limparSelect(select, textoInicial) {
+            select.innerHTML = "";
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = textoInicial;
+            select.appendChild(option);
+        }
+
+        function adicionarOption(select, valor, texto, selecionado) {
+            const option = document.createElement("option");
+            option.value = valor;
+            option.textContent = texto;
+            if (selecionado) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        }
+
+        function carregarEscolas() {
+            const pregaoId = campoPregao.value;
+            const escolaSelecionada = campoEscola.dataset.valorSelecionado || campoEscola.value;
+
+            if (!pregaoId) {
+                limparSelect(campoEscola, "Selecione");
+                return;
+            }
+
+            limparSelect(campoEscola, "Carregando escolas...");
+
+            fetch(`/documentos/relatorios/ajax/escolas-por-certame/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar escolas.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    limparSelect(campoEscola, "Selecione");
+
+                    data.escolas.forEach(function (escola) {
+                        let texto = escola.nome;
+
+                        if (escola.municipio) {
+                            texto += " - " + escola.municipio;
+
+                            if (escola.uf) {
+                                texto += "/" + escola.uf;
+                            }
+                        }
+
+                        adicionarOption(
+                            campoEscola,
+                            escola.id,
+                            texto,
+                            String(escola.id) === String(escolaSelecionada)
+                        );
+                    });
+
+                    campoEscola.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoEscola, "Erro ao carregar escolas");
+                });
+        }
+
+        campoPregao.addEventListener("change", carregarEscolas);
+
+        if (campoPregao.value && !campoEscola.options.length > 1) {
+            carregarEscolas();
+        }
+    });
+</script>
+
+{% endblock %}

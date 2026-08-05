@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Média de Preços | Sistema de Pregões{% endblock %}
+{% block page_title %}Média de Preços{% endblock %}
+{% block page_subtitle %}Cadastre a média de referência e o percentual de alerta por item do certame{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Selecionar Certame</h2>
+
+    <form method="get">
+        <div class="form-group">
+            <label>Certame</label>
+            <select name="pregao" required>
+                <option value="">Selecione o certame</option>
+
+                {% for p in pregoes %}
+                    <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                        {% if p.tipo_certame == "chamada_publica" %}Chamada Pública{% else %}Pregão{% endif %} {{ p.numero }}/{{ p.ano }} — {{ p.get_status_display }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Carregar Itens
+            </button>
+        </div>
+    </form>
+</div>
+
+{% if pregao %}
+    <div class="card">
+        <h2>Cadastro de Médias</h2>
+
+        <p>
+            <strong>Certame:</strong> {% if pregao.tipo_certame == "chamada_publica" %}Chamada Pública{% else %}Pregão{% endif %} {{ pregao.numero }}/{{ pregao.ano }}<br>
+            <strong>Situação:</strong> {{ pregao.get_status_display }}
+        </p>
+
+        <div class="alert alert-success">
+            O cadastro da média é opcional. Se um item ficar sem média cadastrada,
+            o sistema continuará permitindo o fluxo do certame, mas na Chamada Pública somente produtos com média cadastrada aparecem para adjudicação.
+        </div>
+
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="pregao" value="{{ pregao.id }}">
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Ordem</th>
+                            <th>Item</th>
+                            <th>Quantidade</th>
+                            <th>Média de Preço</th>
+                            <th>% de Alerta</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for item_pregao in itens_pregao %}
+                            <tr>
+                                <td>{{ item_pregao.ordem }}</td>
+                                <td>
+                                    <strong>{{ item_pregao.item.nome_item }}</strong>
+                                </td>
+                                <td>{{ item_pregao.quantidade_total|quantidade_br }}</td>
+                                <td>
+                                    <input
+                                        type="text"
+                                        name="media_preco_{{ item_pregao.id }}"
+                                        value="{% if item_pregao.media_preco %}{{ item_pregao.media_preco|valor_br }}{% endif %}"
+                                        placeholder="0,00"
+                                    >
+                                </td>
+                                <td>
+                                    <input
+                                        type="text"
+                                        name="percentual_alerta_media_{{ item_pregao.id }}"
+                                        value="{{ item_pregao.percentual_alerta_media|default:'25'|percentual_br }}"
+                                        placeholder="25"
+                                    >
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="5">
+                                    Nenhum item encontrado para este certame. Cadastre primeiro os quantitativos por certame e por escola.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="actions">
+                <button class="btn btn-success" type="submit">
+                    Salvar Médias de Preços
+                </button>
+            </div>
+        </form>
+    </div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Alterar Senha | Sistema de Pregões{% endblock %}
+{% block page_title %}Alterar Senha{% endblock %}
+{% block page_subtitle %}Defina uma nova senha para o usuário selecionado{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <h2>Alterar senha</h2>
+
+    <p style="color:#64748b;">
+        Usuário: <strong>{{ usuario_editado.get_full_name|default:usuario_editado.username }}</strong>
+    </p>
+
+    {% if form.non_field_errors %}
+    <div class="alert alert-error">
+        {% for erro in form.non_field_errors %}
+        {{ erro }}<br>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.password1.label }}</label>
+                {{ form.password1 }}
+                {{ form.password1.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.password2.label }}</label>
+                {{ form.password2 }}
+                {{ form.password2.errors }}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Alterar Senha</button>
+            <a class="btn btn-secondary" href="{% url 'usuarios:usuarios' %}">Voltar</a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

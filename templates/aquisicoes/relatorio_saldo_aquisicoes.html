@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Saldo de Aquisições | Sistema de Certames{% endblock %}
+{% block page_title %}Saldo de Aquisições{% endblock %}
+{% block page_subtitle %}Acompanhe quantidade contratada, quantidade adquirida e saldo restante por item{% endblock %}
+
+{% block content %}
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .resumo-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .resumo-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; }
+    .resumo-label { color: #64748b; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+    .resumo-value { color: #0f2f57; font-size: 20px; font-weight: 900; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .texto-direita { text-align: right; }
+    .muted-text { color: #64748b; font-size: 13px; }
+    .saldo-ok { color: #047857; font-weight: 800; }
+    .saldo-zero { color: #b91c1c; font-weight: 800; }
+    .progress-wrap { width: 110px; background: #e2e8f0; border-radius: 999px; overflow: hidden; height: 9px; }
+    .progress-bar { height: 9px; background: #2563eb; border-radius: 999px; max-width: 100%; }
+    .loading-text { color: #64748b; font-size: 12px; margin-top: 4px; display: none; }
+    @media print {
+        .sidebar, .topbar, .page-actions, .relatorio-filtros, .no-print { display: none !important; }
+        .main { margin-left: 0 !important; }
+        body { background: #fff !important; }
+        .card { box-shadow: none !important; border: none !important; padding: 0 !important; }
+        table { font-size: 10px; }
+        @page { size: A4 landscape; margin: 10mm; }
+    }
+    @media (max-width: 1100px) { .resumo-grid { grid-template-columns: 1fr; } }
+</style>
+
+<div class="page-actions no-print">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">← Notas Fiscais</a>
+    <button class="btn btn-primary" type="button" onclick="window.print()">🖨️ Imprimir Relatório</button>
+</div>
+
+<div class="info-box">
+    O saldo é calculado de forma auditável:
+    <strong>Quantidade contratada - soma das quantidades das notas confirmadas</strong>.
+    Notas com status <strong>Em conferência</strong> ainda não entram no saldo.
+</div>
+
+<div class="resumo-grid">
+    <div class="resumo-card">
+        <div class="resumo-label">Itens listados</div>
+        <div class="resumo-value">{{ totais.itens }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Itens com saldo</div>
+        <div class="resumo-value">{{ totais.itens_com_saldo }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Itens sem saldo</div>
+        <div class="resumo-value">{{ totais.itens_sem_saldo }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Valor contratado</div>
+        <div class="resumo-value">{{ totais.valor_contratado|moeda_br }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Valor adquirido</div>
+        <div class="resumo-value">{{ totais.valor_adquirido|moeda_br }}</div>
+    </div>
+    <div class="resumo-card">
+        <div class="resumo-label">Saldo financeiro</div>
+        <div class="resumo-value">{{ totais.saldo_financeiro|moeda_br }}</div>
+    </div>
+</div>
+
+<div class="card relatorio-filtros">
+    <h2>Filtros</h2>
+
+    {% if restrito_escola and escola_vinculada %}
+    <p class="muted-text">
+        Visualização restrita à escola: <strong>{{ escola_vinculada.nome_escola }}</strong>.
+    </p>
+    {% endif %}
+
+    <form method="get" id="form-filtros-saldo">
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" id="id_filtro_pregao">
+                    <option value="">Todos</option>
+                    {% for certame in certames %}
+                    <option value="{{ certame.id }}" {% if filtros.pregao == certame.id|stringformat:"s" %}selected{% endif %}>
+                        {{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_filtro_escola" {% if restrito_escola %}disabled{% endif %}>
+                    <option value="">Todas</option>
+                    {% if not filtros.pregao %}
+                        {% for escola in escolas %}
+                        <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                            {{ escola.nome_escola }}
+                        </option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                {% if restrito_escola and escola_vinculada %}
+                <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+                {% endif %}
+                <div class="loading-text" id="loading-escolas">Carregando escolas...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_filtro_fornecedor">
+                    <option value="">Todos</option>
+                    {% if not filtros.pregao and not filtros.escola %}
+                        {% for fornecedor in fornecedores %}
+                        <option value="{{ fornecedor.id }}" {% if filtros.fornecedor == fornecedor.id|stringformat:"s" %}selected{% endif %}>
+                            {{ fornecedor.razao_social }}
+                        </option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                <div class="loading-text" id="loading-fornecedores">Carregando fornecedores...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Contrato</label>
+                <select name="contrato" id="id_filtro_contrato">
+                    <option value="">Todos</option>
+                    {% if not filtros.pregao and not filtros.escola and not filtros.fornecedor %}
+                        {% for contrato in contratos %}
+                        <option value="{{ contrato.id }}" {% if filtros.contrato == contrato.id|stringformat:"s" %}selected{% endif %}>
+                            {{ contrato.numero_contrato|default:"Contrato" }} - {{ contrato.escola.nome_escola }} - {{ contrato.fornecedor.razao_social }}
+                        </option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                <div class="loading-text" id="loading-contratos">Carregando contratos...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Exibição</label>
+                <select name="somente_saldo">
+                    <option value="">Todos os itens</option>
+                    <option value="1" {% if filtros.somente_saldo == "1" %}selected{% endif %}>Somente itens com saldo</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Filtrar</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:relatorio_saldo_aquisicoes' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Saldo por Item do Contrato</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Certame</th>
+                    <th>Escola</th>
+                    <th>Fornecedor</th>
+                    <th>Contrato</th>
+                    <th>Item</th>
+                    <th>Unid.</th>
+                    <th class="texto-direita">Qtd. Contratada</th>
+                    <th class="texto-direita">Qtd. Adquirida</th>
+                    <th class="texto-direita">Saldo Qtd.</th>
+                    <th class="texto-direita">Valor Unit.</th>
+                    <th class="texto-direita">Valor Contratado</th>
+                    <th class="texto-direita">Valor Adquirido</th>
+                    <th class="texto-direita">Saldo Valor</th>
+                    <th>Consumo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.contrato.pregao.numero }}/{{ linha.contrato.pregao.ano }}</td>
+                    <td>{{ linha.contrato.escola.nome_escola }}</td>
+                    <td>{{ linha.contrato.fornecedor.razao_social }}</td>
+                    <td>{{ linha.contrato.numero_contrato|default:"-" }}</td>
+                    <td>{{ linha.item.nome_item }}</td>
+                    <td>{{ linha.unidade }}</td>
+                    <td class="texto-direita">{{ linha.quantidade_contratada|quantidade_br }}</td>
+                    <td class="texto-direita">{{ linha.quantidade_adquirida|quantidade_br }}</td>
+                    <td class="texto-direita {% if linha.saldo_quantidade <= 0 %}saldo-zero{% else %}saldo-ok{% endif %}">
+                        {{ linha.saldo_quantidade|quantidade_br }}
+                    </td>
+                    <td class="texto-direita">{{ linha.valor_unitario|moeda_br }}</td>
+                    <td class="texto-direita">{{ linha.valor_contratado_item|moeda_br }}</td>
+                    <td class="texto-direita">{{ linha.valor_adquirido_item|moeda_br }}</td>
+                    <td class="texto-direita {% if linha.saldo_valor_item <= 0 %}saldo-zero{% else %}saldo-ok{% endif %}">
+                        {{ linha.saldo_valor_item|moeda_br }}
+                    </td>
+                    <td>
+                        <div class="progress-wrap" title="{{ linha.percentual_consumido|floatformat:2 }}%">
+                            <div class="progress-bar" style="width: {{ linha.percentual_consumido|floatformat:0 }}%;"></div>
+                        </div>
+                        <span class="muted-text">{{ linha.percentual_consumido|floatformat:2 }}%</span>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="14">Nenhum saldo encontrado para os filtros selecionados.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
+const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
+const urlContratosTemplate = "{% url 'aquisicoes:ajax_contratos_por_certame_escola_fornecedor' 0 0 0 %}";
+
+const filtroPregaoSelecionado = "{{ filtros.pregao }}";
+const filtroEscolaSelecionada = "{% if restrito_escola and escola_vinculada %}{{ escola_vinculada.id }}{% else %}{{ filtros.escola }}{% endif %}";
+const filtroFornecedorSelecionado = "{{ filtros.fornecedor }}";
+const filtroContratoSelecionado = "{{ filtros.contrato }}";
+const restritoEscola = {% if restrito_escola %}true{% else %}false{% endif %};
+
+function trocarIds(url, ids) {
+    let finalUrl = url;
+    ids.forEach(id => {
+        finalUrl = finalUrl.replace("/0/", `/${id}/`);
+    });
+    return finalUrl;
+}
+
+function resetSelect(select, texto) {
+    select.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = texto;
+    select.appendChild(option);
+}
+
+function setLoading(id, visivel) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = visivel ? "block" : "none";
+}
+
+async function carregarEscolas(selecionarId = "") {
+    const pregaoId = document.getElementById("id_filtro_pregao").value;
+    const escolaSelect = document.getElementById("id_filtro_escola");
+    const fornecedorSelect = document.getElementById("id_filtro_fornecedor");
+    const contratoSelect = document.getElementById("id_filtro_contrato");
+
+    resetSelect(fornecedorSelect, "Todos");
+    resetSelect(contratoSelect, "Todos");
+
+    if (!pregaoId) {
+        resetSelect(escolaSelect, "Todas");
+        return;
+    }
+
+    setLoading("loading-escolas", true);
+
+    try {
+        const url = trocarIds(urlEscolasTemplate, [pregaoId]);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        resetSelect(escolaSelect, "Todas");
+
+        data.escolas.forEach(escola => {
+            const option = document.createElement("option");
+            option.value = escola.id;
+            option.textContent = escola.municipio ? `${escola.nome} - ${escola.municipio}` : escola.nome;
+            escolaSelect.appendChild(option);
+        });
+
+        if (selecionarId) {
+            escolaSelect.value = selecionarId;
+            await carregarFornecedores(filtroFornecedorSelecionado);
+        }
+    } finally {
+        setLoading("loading-escolas", false);
+    }
+}
+
+async function carregarFornecedores(selecionarId = "") {
+    const pregaoId = document.getElementById("id_filtro_pregao").value;
+    const escolaId = document.getElementById("id_filtro_escola").value;
+    const fornecedorSelect = document.getElementById("id_filtro_fornecedor");
+    const contratoSelect = document.getElementById("id_filtro_contrato");
+
+    resetSelect(contratoSelect, "Todos");
+
+    if (!pregaoId || !escolaId) {
+        resetSelect(fornecedorSelect, "Todos");
+        return;
+    }
+
+    setLoading("loading-fornecedores", true);
+
+    try {
+        const url = trocarIds(urlFornecedoresTemplate, [pregaoId, escolaId]);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        resetSelect(fornecedorSelect, "Todos");
+
+        data.fornecedores.forEach(fornecedor => {
+            const option = document.createElement("option");
+            option.value = fornecedor.id;
+            option.textContent = fornecedor.nome;
+            fornecedorSelect.appendChild(option);
+        });
+
+        if (selecionarId) {
+            fornecedorSelect.value = selecionarId;
+            await carregarContratos(filtroContratoSelecionado);
+        }
+    } finally {
+        setLoading("loading-fornecedores", false);
+    }
+}
+
+async function carregarContratos(selecionarId = "") {
+    const pregaoId = document.getElementById("id_filtro_pregao").value;
+    const escolaId = document.getElementById("id_filtro_escola").value;
+    const fornecedorId = document.getElementById("id_filtro_fornecedor").value;
+    const contratoSelect = document.getElementById("id_filtro_contrato");
+
+    if (!pregaoId || !escolaId || !fornecedorId) {
+        resetSelect(contratoSelect, "Todos");
+        return;
+    }
+
+    setLoading("loading-contratos", true);
+
+    try {
+        const url = trocarIds(urlContratosTemplate, [pregaoId, escolaId, fornecedorId]);
+        const response = await fetch(url);
+        const data = await response.json();
+
+        resetSelect(contratoSelect, "Todos");
+
+        data.contratos.forEach(contrato => {
+            const option = document.createElement("option");
+            option.value = contrato.id;
+            option.textContent = contrato.texto;
+            contratoSelect.appendChild(option);
+        });
+
+        if (selecionarId) {
+            contratoSelect.value = selecionarId;
+        }
+    } finally {
+        setLoading("loading-contratos", false);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", async function () {
+    const pregaoSelect = document.getElementById("id_filtro_pregao");
+    const escolaSelect = document.getElementById("id_filtro_escola");
+    const fornecedorSelect = document.getElementById("id_filtro_fornecedor");
+
+    pregaoSelect.addEventListener("change", async function () {
+        await carregarEscolas("");
+    });
+
+    escolaSelect.addEventListener("change", async function () {
+        await carregarFornecedores("");
+    });
+
+    fornecedorSelect.addEventListener("change", async function () {
+        await carregarContratos("");
+    });
+
+    if (filtroPregaoSelecionado) {
+        await carregarEscolas(filtroEscolaSelecionada);
+    }
+});
+</script>
+
+{% endblock %}

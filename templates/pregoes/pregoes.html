@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block title %}Certames | Sistema de Pregões{% endblock %}
+{% block page_title %}Cadastro de Certames{% endblock %}
+{% block page_subtitle %}Cadastre Pregões Presenciais e Chamadas Públicas, com municípios e fornecedores participantes{% endblock %}
+
+{% block content %}
+
+<style>
+    .checkbox-list-field {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+    }
+
+    .checkbox-list-field ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 8px;
+    }
+
+    .checkbox-list-field li {
+        margin: 0;
+        padding: 0;
+    }
+
+    .checkbox-list-field label {
+        display: flex !important;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 10px;
+        width: 100%;
+        margin: 0;
+        padding: 8px 10px;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        background: #ffffff;
+        color: #0f172a;
+        font-weight: 800;
+        line-height: 1.35;
+        cursor: pointer;
+    }
+
+    .checkbox-list-field label:hover {
+        background: #f8fafc;
+        border-color: #bfdbfe;
+    }
+
+    .checkbox-list-field input[type="checkbox"] {
+        width: 16px !important;
+        height: 16px !important;
+        min-width: 16px;
+        margin: 0 !important;
+        padding: 0 !important;
+        flex: 0 0 16px;
+        cursor: pointer;
+    }
+</style>
+
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="grid grid-2">
+    <div class="card">
+        {% if modo_edicao %}
+        <h2>Editar Certame</h2>
+        <p>
+            Editando:
+            <strong>{{ pregao_edicao.get_tipo_certame_display }} {{ pregao_edicao.numero }}/{{ pregao_edicao.ano }}</strong>
+        </p>
+        {% else %}
+        <h2>Novo Certame</h2>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label>Tipo de Certame</label>
+                {{ form.tipo_certame }}
+                {{ form.tipo_certame.errors }}
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Número do Certame</label>
+                    {{ form.numero }}
+                    {{ form.numero.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>Ano</label>
+                    {{ form.ano }}
+                    {{ form.ano.errors }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Nome do Pregoeiro</label>
+                {{ form.nome_pregoeiro }}
+                {{ form.nome_pregoeiro.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>CPF do Pregoeiro</label>
+                {{ form.cpf_pregoeiro }}
+                {{ form.cpf_pregoeiro.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>Local do Certame</label>
+                {{ form.local_pregao }}
+                {{ form.local_pregao.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>Data do Certame</label>
+                {{ form.data_pregao }}
+                {{ form.data_pregao.errors }}
+            </div>
+
+            <div class="card">
+                <h3>Municípios</h3>
+                <div class="checkbox-list-field">
+                    {{ form.municipios }}
+                </div>
+                {{ form.municipios.errors }}
+            </div>
+
+            <div class="card">
+                <h3>Fornecedores Participantes</h3>
+                <div class="checkbox-list-field">
+                    {{ form.fornecedores }}
+                </div>
+                {{ form.fornecedores.errors }}
+            </div>
+
+            <div class="actions">
+                {% if modo_edicao %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Alterações
+                </button>
+
+                <a class="btn btn-secondary" href="{% url 'pregoes:pregoes' %}">
+                    Cancelar Edição
+                </a>
+                {% else %}
+                <button class="btn btn-success" type="submit">
+                    Salvar Certame
+                </button>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Certames Cadastrados</h2>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Certame</th>
+                        <th>Tipo</th>
+                        <th>Municípios</th>
+                        <th>Data</th>
+                        <th>Status</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for pregao in pregoes %}
+                    <tr>
+                        <td>{{ pregao.numero }}/{{ pregao.ano }}</td>
+
+                        <td>
+                            {% if pregao.tipo_certame == "chamada_publica" %}
+                            <span class="badge badge-success">{{ pregao.get_tipo_certame_display }}</span>
+                            {% else %}
+                            <span class="badge badge-primary">{{ pregao.get_tipo_certame_display }}</span>
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {% for municipio in pregao.municipios.all %}
+                            {{ municipio.nome }}{% if not forloop.last %}, {% endif %}
+                            {% empty %}
+                            -
+                            {% endfor %}
+                        </td>
+
+                        <td>{{ pregao.data_pregao }}</td>
+
+                        <td>
+                            {% if pregao.status == "nao_iniciado" %}
+                            <span class="badge badge-warning">{{ pregao.get_status_display }}</span>
+                            {% elif pregao.status == "em_andamento" %}
+                            <span class="badge badge-primary">{{ pregao.get_status_display }}</span>
+                            {% else %}
+                            <span class="badge badge-success">{{ pregao.get_status_display }}</span>
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {% if pregao.status == "nao_iniciado" %}
+                            <a class="btn btn-primary" href="{% url 'pregoes:editar_pregao' pregao.id %}">
+                                Editar
+                            </a>
+                            {% else %}
+                            <span class="badge badge-danger">Edição bloqueada</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="6">Nenhum certame cadastrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if pregoes.has_other_pages %}
+        <div class="pagination" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:16px; flex-wrap:wrap;">
+            {% if pregoes.has_previous %}
+            <a class="btn btn-secondary" href="?page={{ pregoes.previous_page_number }}">Anterior</a>
+            {% endif %}
+
+            <span style="font-weight:700; color:#475569;">
+                Página {{ pregoes.number }} de {{ pregoes.paginator.num_pages }}
+            </span>
+
+            {% if pregoes.has_next %}
+            <a class="btn btn-secondary" href="?page={{ pregoes.next_page_number }}">Próxima</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

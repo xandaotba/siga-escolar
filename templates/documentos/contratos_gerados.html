@@ -1,0 +1,586 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Contratos Gerados | Sistema de Pregões{% endblock %}
+{% block page_title %}Contratos Gerados{% endblock %}
+{% block page_subtitle %}Consulte, visualize e baixe os contratos já registrados no sistema{% endblock %}
+
+{% block content %}
+
+<style>
+    .resumo-contratos {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        font-size: 26px;
+        font-weight: 800;
+        color: #0f2f57;
+    }
+
+    .loading-overlay {
+        display: none;
+        position: fixed;
+        z-index: 99999;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.75);
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+    }
+
+    .loading-box {
+        background: #ffffff;
+        border-radius: 18px;
+        padding: 28px;
+        width: min(420px, 95vw);
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .loading-spinner {
+        width: 52px;
+        height: 52px;
+        border: 5px solid #e2e8f0;
+        border-top-color: #0d6efd;
+        border-radius: 50%;
+        margin: 0 auto 18px;
+        animation: loading-spin 0.9s linear infinite;
+    }
+
+    @keyframes loading-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
+    .loading-title {
+        font-size: 20px;
+        font-weight: 800;
+        color: #0f2f57;
+        margin-bottom: 8px;
+    }
+
+    .loading-text {
+        color: #475569;
+        line-height: 1.5;
+    }
+
+
+
+    .acoes-contrato {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        min-width: 260px;
+    }
+
+    .btn-acao-principal {
+        padding: 8px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .menu-acao {
+        position: relative;
+    }
+
+    .menu-acao summary {
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        color: #0f2f57;
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.2;
+        box-shadow: 0 2px 8px rgba(15, 47, 87, 0.06);
+    }
+
+    .menu-acao summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .menu-acao[open] summary {
+        background: #f1f5f9;
+        border-color: #94a3b8;
+    }
+
+    .menu-acao-opcoes {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 8px);
+        z-index: 50;
+        min-width: 220px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 8px;
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+    }
+
+    .menu-acao-opcoes a,
+    .menu-acao-opcoes button {
+        width: 100%;
+        display: block;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        color: #0f172a;
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+        font-family: inherit;
+    }
+
+    .menu-acao-opcoes a:hover,
+    .menu-acao-opcoes button:hover {
+        background: #f1f5f9;
+    }
+
+    .menu-acao-opcoes .acao-perigo {
+        color: #dc3545;
+    }
+
+    .menu-acao-opcoes .acao-destaque {
+        color: #198754;
+    }
+
+    .menu-acao-opcoes .acao-alerta {
+        color: #b7791f;
+    }
+
+    .menu-separador {
+        height: 1px;
+        background: #e2e8f0;
+        margin: 6px 0;
+    }
+
+    td.acoes-coluna {
+        min-width: 290px;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-contratos {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+<div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-box">
+        <div class="loading-spinner"></div>
+
+        <div class="loading-title">
+            Gerando arquivo...
+        </div>
+
+        <div class="loading-text">
+            Aguarde alguns segundos.<br>
+            Não feche nem recarregue a página.
+        </div>
+    </div>
+</div>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="resumo-contratos">
+    <div class="resumo-card">
+        <div class="resumo-label">Total de Contratos Encontrados</div>
+        <div class="resumo-value">{{ total_contratos }}</div>
+    </div>
+
+    <div class="resumo-card">
+        <div class="resumo-label">Valor Total dos Contratos Filtrados</div>
+        <div class="resumo-value">{{ valor_total|moeda_br }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Filtros</h2>
+
+    <form method="get">
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" id="id_pregao_filtro">
+                    <option value="">Todos</option>
+
+                    {% for pregao in pregoes %}
+                    <option value="{{ pregao.id }}" {% if filtros.pregao == pregao.id|stringformat:"s" %}selected{% endif %}>
+                        {% if pregao.tipo_certame == 'chamada_publica' %}Chamada Pública{% else %}Pregão{% endif %} {{ pregao.numero }}/{{ pregao.ano }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_escola_filtro">
+                    <option value="">Todas</option>
+                
+                    {% for escola in escolas %}
+                    <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                        {{ escola.nome_escola }}
+                        {% if escola.municipio %}
+                        - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_fornecedor_filtro">
+                    <option value="">Todos</option>
+                
+                    {% for fornecedor in fornecedores %}
+                    <option value="{{ fornecedor.id }}" {% if filtros.fornecedor == fornecedor.id|stringformat:"s" %}selected{% endif %}>
+                        {{ fornecedor.razao_social }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Status</label>
+                <select name="status">
+                    <option value="">Todos</option>
+
+                    {% for valor, texto in status_choices %}
+                    <option value="{{ valor }}" {% if filtros.status == valor %}selected{% endif %}>
+                        {{ texto }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Data Inicial</label>
+                <input type="date" name="data_inicio" value="{{ filtros.data_inicio }}">
+            </div>
+
+            <div class="form-group">
+                <label>Data Final</label>
+                <input type="date" name="data_fim" value="{{ filtros.data_fim }}">
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Filtrar
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:contratos_gerados' %}">
+                Limpar Filtros
+            </a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Lista de Contratos</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nº Contrato</th>
+                    <th>Pregão</th>
+                    <th>Escola</th>
+                    <th>Município</th>
+                    <th>Fornecedor</th>
+                    <th>Valor Total</th>
+                    <th>Status</th>
+                    <th>Data</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for contrato in contratos %}
+                <tr>
+                    <td>{{ contrato.numero_contrato }}</td>
+                    <td>{{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}</td>
+                    <td>{{ contrato.escola.nome_escola }}</td>
+                    <td>
+                        {{ contrato.escola.municipio.nome }}{% if contrato.escola.municipio.uf %}/{{ contrato.escola.municipio.uf }}{% endif %}
+                    </td>
+                    <td>{{ contrato.fornecedor.razao_social }}</td>
+                    <td>{{ contrato.valor_total|moeda_br }}</td>
+                    <td>
+                        {% if contrato.status == "gerado" %}
+                        <span class="badge badge-success">{{ contrato.get_status_display }}</span>
+                        {% elif contrato.status == "cancelado" %}
+                        <span class="badge badge-danger">{{ contrato.get_status_display }}</span>
+                        {% elif contrato.status == "distratado" or contrato.status == "parcialmente_distratado" %}
+                        <span class="badge badge-warning">{{ contrato.get_status_display }}</span>
+                        {% else %}
+                        <span class="badge badge-warning">{{ contrato.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ contrato.criado_em|date:"d/m/Y, H:i" }}</td>
+                    <td class="acoes-coluna">
+                        <div class="acoes-contrato">
+                            <a class="btn btn-primary btn-acao-principal" href="{% url 'documentos:visualizar_contrato' contrato.id %}"
+                                target="_blank">
+                                Visualizar
+                            </a>
+
+                            <details class="menu-acao">
+                                <summary>Documentos ▾</summary>
+                                <div class="menu-acao-opcoes">
+                                    {% if contrato.status == "gerado" or contrato.status == "parcialmente_distratado" %}
+                                    <a href="{% url 'documentos:gerar_contrato_word' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando contrato Word...')">
+                                        Baixar contrato Word
+                                    </a>
+
+                                    <a href="{% url 'documentos:gerar_contrato_pdf' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando contrato PDF...')">
+                                        Baixar contrato PDF
+                                    </a>
+                                    {% endif %}
+
+                                    {% if contrato.status == "distratado" or contrato.status == "parcialmente_distratado" %}
+                                    {% if contrato.status == "gerado" or contrato.status == "parcialmente_distratado" %}
+                                    <div class="menu-separador"></div>
+                                    {% endif %}
+
+                                    <a class="acao-destaque" href="{% url 'documentos:gerar_termo_rescisao_word' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando termo de rescisão Word...')">
+                                        Baixar termo de rescisão Word
+                                    </a>
+
+                                    <a class="acao-perigo" href="{% url 'documentos:gerar_termo_rescisao_pdf' contrato.id %}"
+                                        onclick="mostrarCarregamento('Gerando termo de rescisão PDF...')">
+                                        Baixar termo de rescisão PDF
+                                    </a>
+                                    {% endif %}
+
+                                    {% if contrato.status == "cancelado" %}
+                                    <span style="display:block; padding:10px 12px; color:#64748b; font-size:13px;">
+                                        Nenhum documento disponível.
+                                    </span>
+                                    {% endif %}
+                                </div>
+                            </details>
+
+                            {% if contrato.status == "gerado" or contrato.status == "parcialmente_distratado" %}
+                            {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" %}
+                            <details class="menu-acao">
+                                <summary>Ações ▾</summary>
+                                <div class="menu-acao-opcoes">
+                                    {% if contrato.pregao.tipo_certame != "chamada_publica" %}
+                                    <a class="acao-destaque" href="{% url 'documentos:realinhamento_precos' %}?contrato={{ contrato.id }}">
+                                        Realinhar preços
+                                    </a>
+
+                                    <a class="acao-destaque" href="{% url 'documentos:troca_marca' %}?contrato={{ contrato.id }}">
+                                        Trocar marca
+                                    </a>
+                                    {% endif %}
+
+                                    <a class="acao-alerta" href="{% url 'documentos:registrar_distrato_contrato' contrato.id %}">
+                                        Registrar distrato
+                                    </a>
+
+                                    {% if contrato.status == "gerado" %}
+                                    <div class="menu-separador"></div>
+                                    <form method="post" action="{% url 'documentos:cancelar_contrato' contrato.id %}"
+                                        onsubmit="return confirm('Tem certeza que deseja cancelar este contrato? O saldo dos itens será devolvido para nova contratação.');">
+                                        {% csrf_token %}
+                                        <button class="acao-perigo" type="submit">
+                                            Cancelar contrato
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </details>
+                            {% endif %}
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9">
+                        Nenhum contrato encontrado para os filtros informados.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    function mostrarCarregamento(mensagem) {
+        const overlay = document.getElementById("loadingOverlay");
+
+        if (!overlay) {
+            return true;
+        }
+
+        const titulo = overlay.querySelector(".loading-title");
+
+        if (titulo && mensagem) {
+            titulo.textContent = mensagem;
+        }
+
+        overlay.style.display = "flex";
+
+        setTimeout(function () {
+            overlay.style.display = "none";
+        }, 15000);
+
+        return true;
+    }
+</script>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const campoPregao = document.getElementById("id_pregao_filtro");
+        const campoEscola = document.getElementById("id_escola_filtro");
+        const campoFornecedor = document.getElementById("id_fornecedor_filtro");
+
+        if (!campoPregao || !campoEscola || !campoFornecedor) {
+            return;
+        }
+
+        function limparSelect(select, textoInicial) {
+            select.innerHTML = "";
+
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = textoInicial;
+
+            select.appendChild(option);
+        }
+
+        function carregarEscolas(pregaoId) {
+            if (!pregaoId) {
+                limparSelect(campoEscola, "Todas");
+                return;
+            }
+
+            limparSelect(campoEscola, "Carregando escolas...");
+
+            fetch(`/documentos/ajax/escolas-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar escolas.");
+                    }
+
+                    return response.json();
+                })
+                .then(function (data) {
+                    limparSelect(campoEscola, "Todas");
+
+                    data.escolas.forEach(function (escola) {
+                        const option = document.createElement("option");
+                        option.value = escola.id;
+
+                        let texto = escola.nome;
+
+                        if (escola.municipio) {
+                            texto += " - " + escola.municipio;
+
+                            if (escola.uf) {
+                                texto += "/" + escola.uf;
+                            }
+                        }
+
+                        option.textContent = texto;
+                        campoEscola.appendChild(option);
+                    });
+                })
+                .catch(function () {
+                    limparSelect(campoEscola, "Erro ao carregar escolas");
+                });
+        }
+
+        function carregarFornecedores(pregaoId) {
+            if (!pregaoId) {
+                limparSelect(campoFornecedor, "Todos");
+                return;
+            }
+
+            limparSelect(campoFornecedor, "Carregando fornecedores...");
+
+            fetch(`/documentos/ajax/fornecedores-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar fornecedores.");
+                    }
+
+                    return response.json();
+                })
+                .then(function (data) {
+                    limparSelect(campoFornecedor, "Todos");
+
+                    data.fornecedores.forEach(function (fornecedor) {
+                        const option = document.createElement("option");
+                        option.value = fornecedor.id;
+
+                        let texto = fornecedor.nome;
+
+                        if (fornecedor.cnpj) {
+                            texto += " - " + fornecedor.cnpj;
+                        }
+
+                        option.textContent = texto;
+                        campoFornecedor.appendChild(option);
+                    });
+                })
+                .catch(function () {
+                    limparSelect(campoFornecedor, "Erro ao carregar fornecedores");
+                });
+        }
+
+        campoPregao.addEventListener("change", function () {
+            const pregaoId = this.value;
+
+            carregarEscolas(pregaoId);
+            carregarFornecedores(pregaoId);
+        });
+    });
+</script>
+
+{% endblock %}

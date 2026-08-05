@@ -1,0 +1,329 @@
+{% load pregoes_extras %}
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Fornecedores Vencedores - Pregão {{ pregao.numero }}/{{ pregao.ano }}</title>
+
+    <style>
+        @page {
+            size: A4 landscape;
+            margin: 8mm;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 8px;
+            color: #000;
+            background: #fff;
+            margin: 10px;
+        }
+
+        .no-print {
+            margin-bottom: 12px;
+        }
+
+        .btn-print {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .cabecalho {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 4px;
+        }
+
+        .cabecalho td {
+            border: 1px solid #000;
+            text-align: center;
+            font-weight: bold;
+            padding: 3px;
+            font-size: 9px;
+        }
+
+        .dados-pregao {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 6px;
+        }
+
+        .dados-pregao td {
+            border: 1px solid #000;
+            padding: 3px;
+            font-size: 8px;
+        }
+
+        .tabela-vencedores {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .tabela-vencedores th,
+        .tabela-vencedores td {
+            border: 1px solid #000;
+            padding: 2px 3px;
+            vertical-align: middle;
+            line-height: 1.15;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .tabela-vencedores th {
+            background: #d9d9d9;
+            text-align: center;
+            font-weight: bold;
+            font-size: 7.5px;
+        }
+
+        .grupo-vencedor {
+            background: #cfe2f3 !important;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .col-numero {
+            width: 3%;
+            text-align: center;
+        }
+
+        .col-item {
+            width: 10%;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .col-unidade {
+            width: 7%;
+            text-align: center;
+        }
+
+        .col-quantidade {
+            width: 6%;
+            text-align: center;
+        }
+
+        .col-fornecedor {
+            width: 13%;
+        }
+
+        .col-marca {
+            width: 6%;
+            text-align: center;
+        }
+
+        .col-preco {
+            width: 6%;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .status-especial {
+            font-weight: bold;
+            text-transform: uppercase;
+            text-align: center;
+        }
+
+        .assinaturas {
+            margin-top: 45px;
+            display: flex;
+            justify-content: space-between;
+            gap: 40px;
+            page-break-inside: avoid;
+        }
+
+        .assinatura {
+            width: 45%;
+            text-align: center;
+            border-top: 1px solid #000;
+            padding-top: 6px;
+            font-size: 9px;
+        }
+
+        @media print {
+            .no-print {
+                display: none;
+            }
+
+            body {
+                margin: 0;
+            }
+
+            table {
+                page-break-inside: auto;
+            }
+
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+
+            thead {
+                display: table-header-group;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="no-print">
+        <button class="btn-print" onclick="window.print()">
+            Imprimir / Salvar em PDF
+        </button>
+    </div>
+
+    <table class="cabecalho">
+        <tr>
+            <td>
+                CÂMARA DE NEGÓCIOS DA ALIMENTAÇÃO ESCOLAR DA DIRETORIA REGIONAL DE EDUCAÇÃO
+            </td>
+        </tr>
+        <tr>
+            <td>
+                FORNECEDORES VENCEDORES -
+                PREGÃO PRESENCIAL Nº {{ pregao.numero }}/{{ pregao.ano }}
+            </td>
+        </tr>
+    </table>
+
+    <table class="dados-pregao">
+        <tr>
+            <td>
+                <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}
+            </td>
+            <td>
+                <strong>Data:</strong> {{ pregao.data_pregao|date:"d/m/Y" }}
+            </td>
+            <td>
+                <strong>Pregoeiro:</strong> {{ pregao.nome_pregoeiro }}
+            </td>
+        </tr>
+
+        <tr>
+            <td colspan="3">
+                <strong>Município(s):</strong>
+                {% for municipio in municipios %}
+                {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+                {% empty %}
+                -
+                {% endfor %}
+            </td>
+        </tr>
+    </table>
+
+    <table class="tabela-vencedores">
+        <thead>
+            <tr>
+                <th class="col-numero" rowspan="2">Nº</th>
+                <th class="col-item" rowspan="2">Gênero Alimentício</th>
+                <th class="col-unidade" rowspan="2">Unid.</th>
+                <th class="col-quantidade" rowspan="2">Quant.</th>
+
+                <th class="grupo-vencedor" colspan="3">1º vencedor</th>
+                <th class="grupo-vencedor" colspan="3">2º vencedor</th>
+                <th class="grupo-vencedor" colspan="3">3º vencedor</th>
+            </tr>
+
+            <tr>
+                <th class="col-fornecedor">Fornecedor</th>
+                <th class="col-marca">Marca</th>
+                <th class="col-preco">Preço</th>
+
+                <th class="col-fornecedor">Fornecedor</th>
+                <th class="col-marca">Marca</th>
+                <th class="col-preco">Preço</th>
+
+                <th class="col-fornecedor">Fornecedor</th>
+                <th class="col-marca">Marca</th>
+                <th class="col-preco">Preço</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for linha in relatorio %}
+            <tr>
+                <td class="col-numero">{{ linha.ordem }}</td>
+
+                <td class="col-item">
+                    {{ linha.item.nome_item }}
+                </td>
+
+                <td class="col-unidade">
+                    {{ linha.unidade }}
+                </td>
+
+                <td class="col-quantidade">
+                    {{ linha.quantidade|quantidade_br }}
+                </td>
+
+                <td
+                    class="col-fornecedor {% if linha.primeiro.fornecedor == 'DESERTO -' or linha.primeiro.fornecedor == 'FRACASSADO -' %}status-especial{% endif %}">
+                    {{ linha.primeiro.fornecedor }}
+                </td>
+                <td class="col-marca">
+                    {{ linha.primeiro.marca }}
+                </td>
+                <td class="col-preco">
+                    {% if linha.primeiro.preco %}
+                    {{ linha.primeiro.preco|moeda_br }}
+                    {% endif %}
+                </td>
+
+                <td
+                    class="col-fornecedor {% if linha.segundo.fornecedor == 'DESERTO -' or linha.segundo.fornecedor == 'FRACASSADO -' %}status-especial{% endif %}">
+                    {{ linha.segundo.fornecedor }}
+                </td>
+                <td class="col-marca">
+                    {{ linha.segundo.marca }}
+                </td>
+                <td class="col-preco">
+                    {% if linha.segundo.preco %}
+                    {{ linha.segundo.preco|moeda_br }}
+                    {% endif %}
+                </td>
+
+                <td
+                    class="col-fornecedor {% if linha.terceiro.fornecedor == 'DESERTO -' or linha.terceiro.fornecedor == 'FRACASSADO -' %}status-especial{% endif %}">
+                    {{ linha.terceiro.fornecedor }}
+                </td>
+                <td class="col-marca">
+                    {{ linha.terceiro.marca }}
+                </td>
+                <td class="col-preco">
+                    {% if linha.terceiro.preco %}
+                    {{ linha.terceiro.preco|moeda_br }}
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="13">
+                    Nenhum resultado encontrado para este pregão.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="assinaturas">
+        <div class="assinatura">
+            {{ pregao.nome_pregoeiro }}<br>
+            Pregoeiro
+        </div>
+
+        <div class="assinatura">
+            Responsável / Comissão
+        </div>
+    </div>
+
+</body>
+
+</html>

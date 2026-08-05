@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}{% if modo_edicao %}Editar Adjudicação{% else %}Nova Adjudicação{% endif %} | Sistema de Certames{% endblock %}
+{% block page_title %}{% if modo_edicao %}Editar Adjudicação{% else %}Nova Adjudicação{% endif %}{% endblock %}
+{% block page_subtitle %}Registre diretamente os itens adjudicados ao fornecedor da Chamada Pública{% endblock %}
+
+{% block content %}
+
+<style>
+    .resumo-projeto {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 14px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 16px;
+    }
+
+    .valor-total-projeto {
+        font-size: 20px;
+        font-weight: 900;
+        color: #166534;
+    }
+
+    .texto-ajuda {
+        color: #64748b;
+        font-size: 12px;
+        margin-top: 4px;
+    }
+
+    .saldo-ok {
+        color: #166534;
+        font-weight: 900;
+    }
+
+    .saldo-zerado {
+        color: #b91c1c;
+        font-weight: 900;
+    }
+</style>
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>{% if modo_edicao %}Editar Adjudicação{% else %}Registrar Adjudicação{% endif %}</h2>
+
+    <div class="resumo-projeto">
+        <div><strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }}</div>
+        <div><strong>Situação:</strong> {{ pregao.get_status_display }}</div>
+        <div class="texto-ajuda">
+            Nesta tela aparecem somente os produtos com Média de Preços cadastrada.
+            O valor unitário é puxado automaticamente dessa média.
+        </div>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label>Fornecedor</label>
+            <select name="fornecedor" id="fornecedor" required>
+                <option value="">Selecione o fornecedor</option>
+                {% for fornecedor in fornecedores %}
+                    <option
+                        value="{{ fornecedor.id }}"
+                        data-limite="{{ fornecedor.limite_anual_chamada_publica }}"
+                        {% if projeto and projeto.fornecedor_id == fornecedor.id %}selected{% endif %}
+                    >
+                        {{ fornecedor.razao_social }} — {{ fornecedor.get_tipo_fornecedor_chamada_display }} — Limite {{ fornecedor.get_limite_anual_chamada_publica_display }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label>Cronograma Geral de Entrega</label>
+            <input
+                type="text"
+                name="cronograma_entrega"
+                placeholder="Ex.: fevereiro a dezembro, semanal, quinzenal ou conforme solicitação"
+                value="{% if dados_post.cronograma_entrega %}{{ dados_post.cronograma_entrega }}{% elif projeto %}{{ projeto.cronograma_entrega }}{% endif %}"
+            >
+        </div>
+
+        <div class="form-group">
+            <label>Observações</label>
+            <textarea name="observacoes" rows="3">{% if dados_post.observacoes %}{{ dados_post.observacoes }}{% elif projeto %}{{ projeto.observacoes }}{% endif %}</textarea>
+        </div>
+
+        <h3>Produtos a Adjudicar</h3>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ordem</th>
+                        <th>Produto</th>
+                        <th>Unidade</th>
+                        <th>Quantidade Total do Certame</th>
+                        <th>Quantidade Já Adjudicada</th>
+                        <th>Saldo Restante</th>
+                        <th>Preço de Aquisição</th>
+                        <th>Marca</th>
+                        <th>Quantidade Adjudicada</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for linha in linhas_itens %}
+                        {% with item_pregao=linha.item_pregao item_salvo=linha.item_salvo %}
+                        <tr>
+                            <td>{{ item_pregao.ordem }}</td>
+                            <td><strong>{{ item_pregao.item.nome_item }}</strong></td>
+                            <td>{{ item_pregao.item.get_unidade_medida_display }}</td>
+                            <td>{{ item_pregao.quantidade_total|quantidade_br }}</td>
+                            <td>{{ linha.ja_adjudicada|quantidade_br }}</td>
+                            <td>
+                                {% if linha.saldo_restante <= 0 %}
+                                    <span class="saldo-zerado">{{ linha.saldo_restante|quantidade_br }}</span>
+                                {% else %}
+                                    <span class="saldo-ok">{{ linha.saldo_restante|quantidade_br }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="preco-unitario" data-preco="{{ item_pregao.media_preco }}">
+                                    {{ item_pregao.media_preco|moeda_br }}
+                                </span>
+                            </td>
+                            <td>
+                                <input
+                                    type="text"
+                                    name="marca_{{ item_pregao.id }}"
+                                    placeholder="Marca ou descrição"
+                                    value="{% if item_salvo %}{{ item_salvo.marca }}{% endif %}"
+                                >
+                            </td>
+                            <td>
+                                <input
+                                    type="text"
+                                    name="quantidade_{{ item_pregao.id }}"
+                                    class="quantidade-projeto"
+                                    data-item-id="{{ item_pregao.id }}"
+                                    data-preco="{{ item_pregao.media_preco|default:'0' }}"
+                                    data-saldo="{{ linha.saldo_restante }}"
+                                    placeholder="0"
+                                    value="{% if item_salvo %}{{ item_salvo.quantidade_ofertada|quantidade_br }}{% endif %}"
+                                >
+                            </td>
+                            <td>
+                                <span id="total_item_{{ item_pregao.id }}">R$ 0,00</span>
+                            </td>
+                        </tr>
+                        {% endwith %}
+                    {% empty %}
+                        <tr>
+                            <td colspan="10">
+                                Nenhum item disponível. Cadastre primeiro o Quantitativo por Certame e a Média de Preços dos produtos que poderão ser adjudicados.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="resumo-projeto" style="margin-top:16px;">
+            <div>Valor total calculado:</div>
+            <div class="valor-total-projeto" id="valor_total_projeto">R$ 0,00</div>
+            <div class="texto-ajuda">
+                O sistema validará se a quantidade digitada ultrapassa o saldo restante do item e se o valor total ultrapassa o limite anual do fornecedor.
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                {% if modo_edicao %}Salvar Alterações{% else %}Salvar Adjudicação{% endif %}
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:projetos_venda' %}?pregao={{ pregao.id }}">
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+<script>
+    function converterDecimalBR(valor) {
+        valor = String(valor || "").trim().replace("R$", "").replaceAll(" ", "");
+
+        if (!valor) {
+            return 0;
+        }
+
+        if (valor.includes(",") && valor.includes(".")) {
+            valor = valor.replaceAll(".", "").replace(",", ".");
+        } else {
+            valor = valor.replace(",", ".");
+        }
+
+        const numero = parseFloat(valor);
+        return isNaN(numero) ? 0 : numero;
+    }
+
+    function formatarMoeda(valor) {
+        return valor.toLocaleString("pt-BR", {
+            style: "currency",
+            currency: "BRL",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+
+    function recalcularProjetoVenda() {
+        let totalProjeto = 0;
+
+        document.querySelectorAll(".quantidade-projeto").forEach(function (input) {
+            const itemId = input.dataset.itemId;
+            const preco = converterDecimalBR(input.dataset.preco);
+            const quantidade = converterDecimalBR(input.value);
+            const total = quantidade * preco;
+            totalProjeto += total;
+
+            const totalItem = document.getElementById("total_item_" + itemId);
+            if (totalItem) {
+                totalItem.textContent = formatarMoeda(total);
+            }
+        });
+
+        const totalProjetoEl = document.getElementById("valor_total_projeto");
+        if (totalProjetoEl) {
+            totalProjetoEl.textContent = formatarMoeda(totalProjeto);
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll(".quantidade-projeto").forEach(function (input) {
+            input.addEventListener("input", recalcularProjetoVenda);
+            input.addEventListener("change", recalcularProjetoVenda);
+        });
+
+        recalcularProjetoVenda();
+    });
+</script>
+
+{% endblock %}

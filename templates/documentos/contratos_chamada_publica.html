@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Contratos da Chamada Pública | Sistema de Certames{% endblock %}
+{% block page_title %}Contratos da Chamada Pública{% endblock %}
+{% block page_subtitle %}Contratos por escola e fornecedor, conforme adjudicação da Chamada Pública{% endblock %}
+
+{% block content %}
+
+<style>
+    .resumo-contratos {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .resumo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .resumo-value {
+        font-size: 24px;
+        font-weight: 800;
+        color: #0f2f57;
+    }
+
+    .escola-bloco {
+        border: 1px solid #dbe3ef;
+        border-radius: 18px;
+        background: #ffffff;
+        margin-bottom: 28px;
+        overflow: hidden;
+        box-shadow: 0 8px 24px rgba(15, 47, 87, 0.06);
+    }
+
+    .escola-header {
+        padding: 18px;
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: white;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+    }
+
+    .escola-header h2 {
+        margin: 0 0 6px;
+        color: white;
+    }
+
+    .escola-info {
+        color: rgba(255, 255, 255, 0.85);
+        line-height: 1.5;
+    }
+
+    .fornecedor-contrato {
+        margin: 18px;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        overflow: hidden;
+        background: #ffffff;
+    }
+
+    .fornecedor-contrato-header {
+        padding: 16px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+    }
+
+    .fornecedor-contrato-header h3 {
+        margin: 0 0 6px;
+        color: #0f2f57;
+    }
+
+    .valor-contrato {
+        text-align: right;
+        min-width: 220px;
+    }
+
+    .valor-contrato-label {
+        color: #64748b;
+        font-size: 13px;
+    }
+
+    .valor-contrato-total {
+        color: #198754;
+        font-size: 22px;
+        font-weight: 800;
+    }
+
+    .fornecedor-contrato-body {
+        padding: 16px;
+    }
+
+    .contrato-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+        align-items: center;
+    }
+
+    .texto-ajuda {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-contratos {
+            grid-template-columns: 1fr;
+        }
+
+        .fornecedor-contrato-header,
+        .escola-header {
+            display: block;
+        }
+
+        .valor-contrato {
+            text-align: left;
+            margin-top: 12px;
+        }
+    }
+</style>
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Selecionar Chamada Pública</h2>
+
+    <form method="get" action="{% url 'documentos:contratos_chamada_publica' %}">
+        <div class="form-group">
+            <label>Chamada Pública</label>
+            <select name="pregao" required>
+                <option value="">Selecione</option>
+                {% for chamada in chamadas %}
+                    <option value="{{ chamada.id }}" {% if pregao and pregao.id == chamada.id %}selected{% endif %}>
+                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar</button>
+        </div>
+    </form>
+</div>
+
+{% if pregao %}
+    <div class="resumo-contratos">
+        <div class="resumo-card">
+            <div class="resumo-label">Contratos Possíveis</div>
+            <div class="resumo-value">{{ total_contratos }}</div>
+        </div>
+
+        <div class="resumo-card">
+            <div class="resumo-label">Itens com Saldo para Contratar</div>
+            <div class="resumo-value">{{ total_itens }}</div>
+        </div>
+
+        <div class="resumo-card">
+            <div class="resumo-label">Valor Total Disponível</div>
+            <div class="resumo-value">{{ valor_total_geral|moeda_br }}</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Base para Geração de Contratos</h2>
+        <p class="texto-ajuda">
+            Os contratos abaixo seguem a mesma lógica do Pregão: por escola e fornecedor.
+            O sistema considera os quantitativos por escola e as quantidades adjudicadas na Chamada Pública.
+        </p>
+    </div>
+
+    {% for escola_grupo in escolas_contratos %}
+        <div class="escola-bloco">
+            <div class="escola-header">
+                <div>
+                    <h2>{{ escola_grupo.escola.nome_escola }}</h2>
+                    <div class="escola-info">
+                        {% if escola_grupo.escola.municipio %}
+                            {{ escola_grupo.escola.municipio.nome }}{% if escola_grupo.escola.municipio.uf %}/{{ escola_grupo.escola.municipio.uf }}{% endif %}
+                        {% endif %}
+                        <br>
+                        CNPJ: {{ escola_grupo.escola.cnpj }}
+                    </div>
+                </div>
+
+                <div>
+                    <strong>Total da escola:</strong><br>
+                    {{ escola_grupo.valor_total_escola|moeda_br }}
+                </div>
+            </div>
+
+            {% for fornecedor_grupo in escola_grupo.fornecedores %}
+                <div class="fornecedor-contrato">
+                    <div class="fornecedor-contrato-header">
+                        <div>
+                            <h3>{{ fornecedor_grupo.fornecedor.razao_social }}</h3>
+                            <div class="texto-ajuda">
+                                {{ fornecedor_grupo.fornecedor.get_tipo_fornecedor_chamada_display }}
+                            </div>
+                        </div>
+
+                        <div class="valor-contrato">
+                            <div class="valor-contrato-label">Valor do contrato</div>
+                            <div class="valor-contrato-total">{{ fornecedor_grupo.valor_total_contrato|moeda_br }}</div>
+                        </div>
+                    </div>
+
+                    <div class="fornecedor-contrato-body">
+                        <form method="post" action="{% url 'documentos:contratos_chamada_publica_pregao' pregao.id %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="escola_id" value="{{ escola_grupo.escola.id }}">
+                            <input type="hidden" name="fornecedor_id" value="{{ fornecedor_grupo.fornecedor.id }}">
+
+                            <div class="table-wrapper">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Selecionar</th>
+                                            <th>Item</th>
+                                            <th>Marca</th>
+                                            <th>Unidade</th>
+                                            <th>Saldo Escola</th>
+                                            <th>Saldo Adjudicado</th>
+                                            <th>Quantidade Contratar</th>
+                                            <th>Valor Unitário</th>
+                                            <th>Valor Total</th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {% for item in fornecedor_grupo.itens %}
+                                            <tr>
+                                                <td>
+                                                    <input
+                                                        type="checkbox"
+                                                        name="selecionar_item"
+                                                        value="{{ item.resultado_id }}|{{ item.quantitativo_escola_id }}"
+                                                        checked
+                                                    >
+                                                </td>
+                                                <td>{{ item.item.nome_item }}</td>
+                                                <td>{{ item.marca|default:"-" }}</td>
+                                                <td>{{ item.unidade }}</td>
+                                                <td>{{ item.saldo_escola|quantidade_br }}</td>
+                                                <td>{{ item.saldo_resultado|quantidade_br }}</td>
+                                                <td>
+                                                    <input
+                                                        type="text"
+                                                        name="quantidade_{{ item.resultado_id }}_{{ item.quantitativo_escola_id }}"
+                                                        value="{{ item.quantidade_contratar|quantidade_br }}"
+                                                        title="Você pode digitar 1220, 1.220, 1220,50 ou 1.220,50"
+                                                        style="max-width:110px;"
+                                                    >
+                                                </td>
+                                                <td>{{ item.valor_unitario|moeda_br }}</td>
+                                                <td>{{ item.valor_total_item|moeda_br }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="contrato-actions">
+                                <button class="btn btn-success" type="submit">
+                                    Gerar Contrato
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% empty %}
+        <div class="card">
+            <h2>Nenhum contrato disponível</h2>
+            <p>
+                Não há saldo disponível para geração de contratos nesta Chamada Pública.
+                Verifique se a adjudicação foi registrada e se o quantitativo por escola foi cadastrado.
+            </p>
+        </div>
+    {% endfor %}
+{% endif %}
+
+{% endblock %}

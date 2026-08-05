@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Resultado da Chamada Pública | Sistema de Certames{% endblock %}
+{% block page_title %}Resultado da Chamada Pública{% endblock %}
+{% block page_subtitle %}Visualize os fornecedores adjudicados por item na Chamada Pública{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Selecionar Chamada Pública</h2>
+
+    <form method="get">
+        <div class="form-group">
+            <label>Chamada Pública</label>
+            <select name="pregao" required>
+                <option value="">Selecione a Chamada Pública</option>
+                {% for chamada in chamadas_publicas %}
+                    <option value="{{ chamada.id }}" {% if pregao and pregao.id == chamada.id %}selected{% endif %}>
+                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} — {{ chamada.get_status_display }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar Resultado</button>
+
+            {% if pregao %}
+                {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" or request.user.perfil_acesso.perfil == "pregoeiro" %}
+                <a class="btn btn-success" href="{% url 'documentos:projetos_venda' %}?pregao={{ pregao.id }}">
+                    Editar Adjudicação
+                </a>
+                {% endif %}
+
+                <a class="btn btn-primary" href="{% url 'documentos:gerar_resultado_chamada_publica_word' pregao.id %}">
+                    Resultado Final Word
+                </a>
+
+                <a class="btn btn-secondary" href="{% url 'documentos:gerar_resultado_chamada_publica_pdf' pregao.id %}">
+                    Resultado Final PDF
+                </a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+{% if pregao %}
+<div class="card">
+    <h2>Resumo por Item</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ordem</th>
+                    <th>Item</th>
+                    <th>Quantidade Total</th>
+                    <th>Quantidade Adjudicada</th>
+                    <th>Saldo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for resumo in resumo_itens %}
+                    <tr>
+                        <td>{{ resumo.item_pregao.ordem }}</td>
+                        <td>{{ resumo.item_pregao.item.nome_item }}</td>
+                        <td>{{ resumo.item_pregao.quantidade_total|quantidade_br }}</td>
+                        <td>{{ resumo.adjudicado|quantidade_br }}</td>
+                        <td>{{ resumo.saldo|quantidade_br }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="5">Nenhum item encontrado.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Fornecedores Adjudicados</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Fornecedor</th>
+                    <th>Tipo</th>
+                    <th>Marca</th>
+                    <th>Quantidade</th>
+                    <th>Valor Unitário</th>
+                    <th>Valor Total</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for resultado in resultados %}
+                    <tr>
+                        <td>
+                            <strong>{{ resultado.item.nome_item }}</strong><br>
+                            <small>Ordem {{ resultado.pregao_item.ordem }}</small>
+                        </td>
+                        <td>{{ resultado.fornecedor.razao_social }}</td>
+                        <td>{{ resultado.fornecedor.get_tipo_fornecedor_chamada_display }}</td>
+                        <td>{{ resultado.projeto_item.marca|default:"-" }}</td>
+                        <td>{{ resultado.quantidade_adjudicada|quantidade_br }}</td>
+                        <td>{{ resultado.valor_unitario|moeda_br }}</td>
+                        <td>{{ resultado.valor_total|moeda_br }}</td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="7">Nenhum resultado adjudicado para esta Chamada Pública.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

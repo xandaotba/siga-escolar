@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+
+{% block title %}Importar Quantitativo por Pregão | Sistema de Pregões{% endblock %}
+{% block page_title %}Importar Quantitativo por Pregão{% endblock %}
+{% block page_subtitle %}Importe itens e quantidades totais do município para um pregão{% endblock %}
+
+{% block content %}
+
+<style>
+    .importacao-passos {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .passo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .passo-numero {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: #0d6efd;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        margin-bottom: 10px;
+    }
+
+    .passo-card h3 {
+        margin: 0 0 6px;
+        color: #0f2f57;
+    }
+
+    .passo-card p {
+        margin: 0;
+        color: #64748b;
+        line-height: 1.5;
+    }
+
+    .resumo-importacao {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-importacao-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .resumo-importacao-label {
+        color: #64748b;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+
+    .resumo-importacao-valor {
+        font-size: 24px;
+        color: #0f2f57;
+        font-weight: 900;
+    }
+
+    .badge-importacao {
+        display: inline-block;
+        padding: 5px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 900;
+    }
+
+    .badge-criar {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .badge-atualizar {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    .badge-erro {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+
+    @media (max-width: 900px) {
+        .importacao-passos,
+        .resumo-importacao {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% elif message.tags == "warning" %}
+<div class="alert alert-warning">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="importacao-passos">
+    <div class="passo-card">
+        <div class="passo-numero">1</div>
+        <h3>Selecione o pregão</h3>
+        <p>A importação só é permitida para pregões ainda não iniciados.</p>
+    </div>
+
+    <div class="passo-card">
+        <div class="passo-numero">2</div>
+        <h3>Envie a planilha</h3>
+        <p>O sistema valida item, unidade de medida e quantidade.</p>
+    </div>
+
+    <div class="passo-card">
+        <div class="passo-numero">3</div>
+        <h3>Confirme</h3>
+        <p>Corrija item/unidade na prévia, quando necessário, e confirme.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display:flex; justify-content:space-between; gap:14px; align-items:center; flex-wrap:wrap;">
+        <div>
+            <h2>Importação do Quantitativo</h2>
+            <p style="margin:0; color:#64748b;">
+                Escolha o pregão e envie a planilha com os itens e a quantidade total do município.
+            </p>
+        </div>
+
+        <a class="btn btn-secondary" href="{% url 'importacoes:modelo_quantitativo_pregao' %}">
+            Baixar Modelo Excel
+        </a>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" style="margin-top:18px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="validar">
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Pregão</label>
+                <select name="pregao" required>
+                    <option value="">Selecione um pregão</option>
+                    {% for p in pregoes %}
+                    <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                        Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.arquivo.label }}</label>
+                {{ form.arquivo }}
+                {% if form.arquivo.help_text %}
+                <small style="color:#64748b;">{{ form.arquivo.help_text }}</small>
+                {% endif %}
+                {{ form.arquivo.errors }}
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label style="display:flex; align-items:center; gap:8px;">
+                {{ form.atualizar_existentes }}
+                Atualizar quantitativos já existentes para este pregão
+            </label>
+            {{ form.atualizar_existentes.errors }}
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Validar Planilha
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'pregoes:quantitativo_pregao' %}">
+                Voltar para Quantitativo por Pregão
+            </a>
+        </div>
+    </form>
+</div>
+
+{% if resumo %}
+<div class="resumo-importacao" style="margin-top:20px;">
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas lidas</div>
+        <div class="resumo-importacao-valor">{{ resumo.total }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas válidas</div>
+        <div class="resumo-importacao-valor">{{ resumo.validos }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas com erro</div>
+        <div class="resumo-importacao-valor">{{ resumo.erros }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Criar</div>
+        <div class="resumo-importacao-valor">{{ resumo.criar }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Atualizar</div>
+        <div class="resumo-importacao-valor">{{ resumo.atualizar }}</div>
+    </div>
+</div>
+{% endif %}
+
+{% if linhas %}
+<div class="card" style="margin-top:20px;">
+    <h2>Prévia da Importação{% if pregao %} — Pregão {{ pregao.numero }}/{{ pregao.ano }}{% endif %}</h2>
+
+    <div class="table-wrapper" style="margin-top:14px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Linha</th>
+                    <th>Ação</th>
+                    <th>Item informado</th>
+                    <th>Correção do Item</th>
+                    <th>Unidade informada</th>
+                    <th>Correção da Unidade</th>
+                    <th>Quantidade</th>
+                    <th>Erros</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.linha }}</td>
+                    <td>
+                        {% if linha.acao == "Criar" %}
+                        <span class="badge-importacao badge-criar">Criar</span>
+                        {% elif linha.acao == "Atualizar" %}
+                        <span class="badge-importacao badge-atualizar">Atualizar</span>
+                        {% else %}
+                        <span class="badge-importacao badge-erro">Erro</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ linha.dados.item_texto }}</td>
+                    <td>
+                        {% if linha.erro_item %}
+                            {% if linha.item_opcoes %}
+                            <select name="item_corrigido_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo">
+                                <option value="">Selecione o item correto</option>
+                                {% for item in linha.item_opcoes %}
+                                <option value="{{ item.id }}">
+                                    {{ item.nome }} — {{ item.unidade }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% else %}
+                            <span style="color:#991b1b; font-weight:800;">Nenhum item ativo cadastrado.</span>
+                            {% endif %}
+                        {% elif linha.dados.item_corrigido_nome %}
+                            <strong>{{ linha.dados.item_corrigido_nome }}</strong>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>{{ linha.dados.unidade_texto }}</td>
+                    <td>
+                        {% if linha.erro_unidade %}
+                            {% if linha.unidade_opcoes %}
+                            <select name="unidade_corrigida_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo">
+                                <option value="">Selecione a unidade correta</option>
+                                {% for unidade in linha.unidade_opcoes %}
+                                <option value="{{ unidade.id }}">
+                                    {{ unidade.rotulo }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% else %}
+                            <span style="color:#991b1b; font-weight:800;">Nenhuma unidade cadastrada.</span>
+                            {% endif %}
+                        {% elif linha.dados.unidade_corrigida_nome %}
+                            <strong>{{ linha.dados.unidade_corrigida_nome }}</strong>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>{{ linha.dados.quantidade }}</td>
+                    <td>
+                        {% if linha.erros %}
+                        <ul style="margin:0; padding-left:18px;">
+                            {% for erro in linha.erros %}
+                            <li>{{ erro }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <form id="form-confirmar-importacao-quantitativo" method="post" style="margin-top:18px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="confirmar">
+        {% if pregao %}
+        <input type="hidden" name="pregao" value="{{ pregao.id }}">
+        {% endif %}
+
+        {% if resumo.erros > 0 %}
+        <p style="color:#92400e; font-weight:800; margin-bottom:12px;">
+            Se os erros forem apenas de item ou unidade, selecione as opções corretas nas colunas de correção e confirme novamente.
+            Se houver outros erros, corrija a planilha e valide novamente.
+        </p>
+        {% endif %}
+
+        <button class="btn btn-success" type="submit"
+            onclick="return confirm('Confirmar a importação dos quantitativos válidos e das correções selecionadas?');">
+            Confirmar Importação
+        </button>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}

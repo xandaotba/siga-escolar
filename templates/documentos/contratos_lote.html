@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}Geração de Contratos em Lote | Sistema de Pregões{% endblock %}
+{% block page_title %}Geração de Contratos em Lote{% endblock %}
+{% block page_subtitle %}Prévia e confirmação dos contratos que podem ser gerados automaticamente{% endblock %}
+
+{% block content %}
+
+<style>
+    .lote-resumo {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .lote-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .lote-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+
+    .lote-valor {
+        font-size: 24px;
+        font-weight: 800;
+        color: #0f2f57;
+    }
+
+    .contrato-preview {
+        border: 1px solid #dbe3ef;
+        border-radius: 16px;
+        background: #ffffff;
+        margin-bottom: 16px;
+        overflow: hidden;
+    }
+
+    .contrato-preview-header {
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        padding: 14px 16px;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+    }
+
+    .contrato-preview-header h3 {
+        margin: 0 0 6px;
+        color: #0f2f57;
+    }
+
+    .contrato-preview-info {
+        color: #475569;
+        line-height: 1.45;
+    }
+
+    .contrato-preview-total {
+        text-align: right;
+        min-width: 200px;
+    }
+
+    .contrato-preview-total strong {
+        display: block;
+        font-size: 22px;
+        color: #198754;
+    }
+
+    .contrato-preview-body {
+        padding: 14px 16px;
+    }
+
+    .badge-substituicao {
+        display: inline-block;
+        margin-top: 6px;
+        background: #fef3c7;
+        color: #92400e;
+        border-radius: 999px;
+        padding: 5px 9px;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    @media (max-width: 900px) {
+        .lote-resumo {
+            grid-template-columns: 1fr;
+        }
+
+        .contrato-preview-header {
+            flex-direction: column;
+        }
+
+        .contrato-preview-total {
+            text-align: left;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Filtros da geração em lote</h2>
+
+    <form method="get">
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Pregão</label>
+                <input type="text" value="{{ pregao.numero }}/{{ pregao.ano }}" disabled>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola">
+                    <option value="">Todas</option>
+                    {% for escola in escolas %}
+                    <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                        {{ escola.nome_escola }}{% if escola.municipio %} - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor">
+                    <option value="">Todos</option>
+                    {% for fornecedor in fornecedores %}
+                    <option value="{{ fornecedor.id }}" {% if filtros.fornecedor == fornecedor.id|stringformat:"s" %}selected{% endif %}>
+                        {{ fornecedor.razao_social }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Atualizar Prévia
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'documentos:contratos_pregao' pregao.id %}">
+                Voltar para Base de Contratos
+            </a>
+        </div>
+    </form>
+</div>
+
+<div class="lote-resumo">
+    <div class="lote-card">
+        <div class="lote-label">Contratos que serão gerados</div>
+        <div class="lote-valor">{{ total_contratos }}</div>
+    </div>
+
+    <div class="lote-card">
+        <div class="lote-label">Itens incluídos</div>
+        <div class="lote-valor">{{ total_itens }}</div>
+    </div>
+
+    <div class="lote-card">
+        <div class="lote-label">Valor total previsto</div>
+        <div class="lote-valor">R$ {{ valor_total }}</div>
+    </div>
+</div>
+
+{% if contratos_possiveis %}
+<div class="card">
+    <h2>Prévia dos contratos</h2>
+
+    <p>
+        Confira abaixo os contratos que serão gerados. O sistema vai registrar os contratos usando
+        o saldo total disponível de cada item.
+    </p>
+
+    <form method="post" onsubmit="return confirm('Confirmar a geração em lote destes contratos?');">
+        {% csrf_token %}
+        <input type="hidden" name="escola" value="{{ filtros.escola }}">
+        <input type="hidden" name="fornecedor" value="{{ filtros.fornecedor }}">
+
+        <div class="actions" style="margin-bottom: 16px;">
+            <button class="btn btn-success" type="submit">
+                Confirmar e Gerar Contratos
+            </button>
+        </div>
+
+        {% for grupo in contratos_possiveis %}
+        <div class="contrato-preview">
+            <div class="contrato-preview-header">
+                <div>
+                    <h3>{{ grupo.escola.nome_escola }}</h3>
+                    <div class="contrato-preview-info">
+                        <strong>Fornecedor:</strong> {{ grupo.fornecedor.razao_social }}<br>
+                        <strong>CNPJ:</strong> {{ grupo.fornecedor.cnpj }}
+                        {% if grupo.tem_substituicao %}
+                        <br><span class="badge-substituicao">Contratação por distrato do 1º colocado</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="contrato-preview-total">
+                    Valor previsto
+                    <strong>R$ {{ grupo.valor_total_contrato }}</strong>
+                    <span>{{ grupo.itens|length }} item(ns)</span>
+                </div>
+            </div>
+
+            <div class="contrato-preview-body">
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Marca</th>
+                                <th>Unidade</th>
+                                <th>Quantidade</th>
+                                <th>Valor Unitário</th>
+                                <th>Valor Total</th>
+                                <th>Posição</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in grupo.itens %}
+                            <tr>
+                                <td>{{ item.item.nome_item }}</td>
+                                <td>{{ item.marca }}</td>
+                                <td>{{ item.unidade }}</td>
+                                <td>{{ item.quantidade_contratar }}</td>
+                                <td>R$ {{ item.valor_unitario }}</td>
+                                <td>R$ {{ item.valor_total_item }}</td>
+                                <td>{{ item.posicao_fornecedor }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </form>
+</div>
+{% else %}
+<div class="alert alert-error">
+    Nenhum contrato com saldo disponível foi encontrado para os filtros selecionados.
+</div>
+{% endif %}
+
+{% endblock %}

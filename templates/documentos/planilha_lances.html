@@ -1,0 +1,271 @@
+{% load pregoes_extras %}
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Planilha de Lances - Pregão {{ pregao.numero }}/{{ pregao.ano }}</title>
+
+    <style>
+        @page {
+            size: A4 landscape;
+            margin: 8mm;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 8px;
+            color: #000;
+            margin: 10px;
+            background: #fff;
+        }
+
+        .no-print {
+            margin-bottom: 12px;
+        }
+
+        .btn-print {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .cabecalho {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 4px;
+        }
+
+        .cabecalho td {
+            border: 1px solid #000;
+            text-align: center;
+            font-weight: bold;
+            padding: 3px;
+            font-size: 9px;
+        }
+
+        .tabela-lances {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .tabela-lances th,
+        .tabela-lances td {
+            border: 1px solid #000;
+            padding: 2px 3px;
+            vertical-align: middle;
+            line-height: 1.15;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .tabela-lances th {
+            background: #d9d9d9;
+            text-align: center;
+            font-weight: bold;
+            font-size: 7.5px;
+        }
+
+        .col-item {
+            width: 23%;
+            font-weight: bold;
+        }
+
+        .col-fornecedor {
+            width: 20%;
+        }
+
+        .col-marca {
+            width: 8%;
+            text-align: center;
+        }
+
+        .col-preco {
+            width: 7%;
+            text-align: center;
+        }
+
+        .col-lance {
+            width: 4.2%;
+            text-align: center;
+        }
+
+        .item-nome {
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .fornecedor-nome {
+            text-transform: uppercase;
+        }
+
+        .valor {
+            text-align: center;
+            white-space: nowrap;
+        }
+        .status-especial {
+            text-align: center;
+            font-weight: bold;
+            text-transform: uppercase;
+            background: #f2f2f2;
+        }
+
+        .linha-sem-lance {
+            color: #333;
+        }
+
+        .rodape {
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-between;
+            gap: 40px;
+            page-break-inside: avoid;
+        }
+
+        .assinatura {
+            width: 45%;
+            text-align: center;
+            border-top: 1px solid #000;
+            padding-top: 5px;
+            font-size: 9px;
+        }
+
+        @media print {
+            .no-print {
+                display: none;
+            }
+
+            body {
+                margin: 0;
+            }
+
+            .tabela-lances {
+                page-break-inside: auto;
+            }
+
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+
+            thead {
+                display: table-header-group;
+            }
+        }
+        
+    </style>
+</head>
+
+<body>
+
+    <div class="no-print">
+        <button class="btn-print" onclick="window.print()">
+            Imprimir / Salvar em PDF
+        </button>
+    </div>
+
+    <table class="cabecalho">
+        <tr>
+            <td>
+                CÂMARA DE NEGÓCIOS DA ALIMENTAÇÃO ESCOLAR DA DIRETORIA REGIONAL DE EDUCAÇÃO
+            </td>
+        </tr>
+        <tr>
+            <td>
+                REGISTRO DE PREÇO DAS NEGOCIAÇÕES -
+                PREGÃO PRESENCIAL Nº {{ pregao.numero }}/{{ pregao.ano }}
+            </td>
+        </tr>
+    </table>
+
+    <table class="tabela-lances">
+        <thead>
+            <tr>
+                <th class="col-item">Nome do Item</th>
+                <th class="col-fornecedor">Fornecedor</th>
+                <th class="col-marca">Marca</th>
+                <th class="col-preco">Preço Inicial</th>
+                <th class="col-lance">1º Lance</th>
+                <th class="col-lance">2º Lance</th>
+                <th class="col-lance">3º Lance</th>
+                <th class="col-lance">4º Lance</th>
+                <th class="col-lance">5º Lance</th>
+                <th class="col-lance">6º Lance</th>
+                <th class="col-lance">7º Lance</th>
+                <th class="col-lance">8º Lance</th>
+                <th class="col-lance">9º Lance</th>
+                <th class="col-lance">10º Lance</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            {% for bloco in relatorio %}
+            {% for linha in bloco.linhas_fornecedores %}
+            <tr class="{% if not linha.tem_lance %}linha-sem-lance{% endif %}">
+                {% if forloop.first %}
+                <td class="col-item item-nome" rowspan="{{ bloco.linhas_fornecedores|length }}">
+                    {{ bloco.item_pregao.item.nome_item }}
+                    {% if bloco.item_pregao.item.get_unidade_medida_display %}
+                    ({{ bloco.item_pregao.item.get_unidade_medida_display }})
+                    {% endif %}
+                </td>
+                {% endif %}
+
+                <td class="col-fornecedor fornecedor-nome {% if linha.status_especial %}status-especial{% endif %}">
+                    {{ linha.fornecedor_nome }}
+                </td>
+
+                {% if linha.status_especial %}
+                <td class="col-marca status-especial" colspan="12">
+                    {{ linha.status_especial }}
+                </td>
+                {% else %}
+                <td class="col-marca">
+                    {{ linha.marca }}
+                </td>
+                
+                <td class="col-preco valor">
+                    {% if linha.preco_inicial %}
+                    {{ linha.preco_inicial|moeda_br }}
+                    {% endif %}
+                </td>
+                
+                {% for lance in linha.lances %}
+                <td class="col-lance valor">
+                    {% if lance %}
+                    {{ lance|moeda_br }}
+                    {% endif %}
+                </td>
+                {% endfor %}
+                {% endif %}
+            </tr>
+            {% endfor %}
+            {% empty %}
+            <tr>
+                <td colspan="14">
+                    Nenhum lance encontrado para este pregão.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="rodape">
+        <div class="assinatura">
+            {{ pregao.nome_pregoeiro }}<br>
+            Pregoeiro
+        </div>
+
+        <div class="assinatura">
+            Responsável / Comissão
+        </div>
+    </div>
+
+</body>
+
+</html>

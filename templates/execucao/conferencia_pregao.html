@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Conferência Final do Pregão | Sistema de Pregões{% endblock %}
+{% block page_title %}Conferência Final do Pregão{% endblock %}
+{% block page_subtitle %}Confira os lances e vencedores antes de finalizar oficialmente o pregão{% endblock %}
+
+{% block content %}
+
+<style>
+    .conferencia-destaque {
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: #ffffff;
+        border-radius: 16px;
+        padding: 18px;
+        margin-bottom: 18px;
+    }
+
+    .conferencia-destaque h2 {
+        color: #ffffff;
+        margin-top: 0;
+    }
+
+    .conferencia-destaque p {
+        margin-bottom: 0;
+        line-height: 1.6;
+    }
+
+    .conferencia-resumo {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .resumo-label {
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 6px;
+        font-weight: 800;
+        text-transform: uppercase;
+    }
+
+    .resumo-valor {
+        color: #0f2f57;
+        font-size: 24px;
+        font-weight: 900;
+    }
+
+    .vencedor-box {
+        min-width: 220px;
+        line-height: 1.45;
+    }
+
+    .vencedor-box strong {
+        color: #0f2f57;
+    }
+
+    .texto-muted {
+        color: #64748b;
+        font-size: 12px;
+    }
+
+    .acoes-conferencia {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+    }
+
+    .status-especial {
+        font-weight: 900;
+        color: #b45309;
+    }
+
+    .alerta-conferencia {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        color: #9a3412;
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 18px;
+        font-weight: 800;
+    }
+
+    @media (max-width: 1000px) {
+        .conferencia-resumo {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="conferencia-destaque">
+    <h2>Pregão {{ pregao.numero }}/{{ pregao.ano }}</h2>
+    <p>
+        Confira todos os itens, marcas, quantidades e vencedores antes de finalizar oficialmente o pregão.
+        Caso identifique alguma inconsistência, clique em <strong>Alterar Lances</strong> no item correspondente.
+    </p>
+</div>
+
+<div class="conferencia-resumo">
+    <div class="resumo-box">
+        <div class="resumo-label">Total de Itens</div>
+        <div class="resumo-valor">{{ total_itens }}</div>
+    </div>
+
+    <div class="resumo-box">
+        <div class="resumo-label">Itens Encerrados</div>
+        <div class="resumo-valor">{{ itens_encerrados }}</div>
+    </div>
+
+    <div class="resumo-box">
+        <div class="resumo-label">Situação</div>
+        <div class="resumo-valor">{{ pregao.get_status_display }}</div>
+    </div>
+</div>
+
+{% if itens_abertos %}
+<div class="alerta-conferencia">
+    Ainda existem itens pendentes ou em disputa. Finalize todos os itens antes de finalizar oficialmente o pregão.
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Resumo dos Lances e Vencedores</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ordem</th>
+                    <th>Produto</th>
+                    <th>Marca</th>
+                    <th>Unidade</th>
+                    <th>Quantidade</th>
+                    <th>Status</th>
+                    <th>1º Vencedor</th>
+                    <th>2º Vencedor</th>
+                    <th>3º Vencedor</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for linha in linhas_conferencia %}
+                <tr>
+                    <td>{{ linha.ordem }}</td>
+                    <td>
+                        <strong>{{ linha.produto }}</strong>
+                    </td>
+                    <td>{{ linha.marca }}</td>
+                    <td>{{ linha.unidade }}</td>
+                    <td>{{ linha.quantidade|quantidade_br }}</td>
+                    <td>{{ linha.status }}</td>
+
+                    <td>
+                        <div class="vencedor-box">
+                            {% if linha.primeiro.valor %}
+                            <strong>{{ linha.primeiro.fornecedor }}</strong><br>
+                            <span class="texto-muted">Marca: {{ linha.primeiro.marca }}</span><br>
+                            {{ linha.primeiro.valor|moeda_br }}
+                            {% else %}
+                            <span class="status-especial">{{ linha.primeiro.fornecedor }}</span>
+                            {% endif %}
+                        </div>
+                    </td>
+
+                    <td>
+                        <div class="vencedor-box">
+                            {% if linha.segundo.valor %}
+                            <strong>{{ linha.segundo.fornecedor }}</strong><br>
+                            <span class="texto-muted">Marca: {{ linha.segundo.marca }}</span><br>
+                            {{ linha.segundo.valor|moeda_br }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </div>
+                    </td>
+
+                    <td>
+                        <div class="vencedor-box">
+                            {% if linha.terceiro.valor %}
+                            <strong>{{ linha.terceiro.fornecedor }}</strong><br>
+                            <span class="texto-muted">Marca: {{ linha.terceiro.marca }}</span><br>
+                            {{ linha.terceiro.valor|moeda_br }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </div>
+                    </td>
+
+                    <td>
+                        {% if pregao.status != "finalizado" %}
+                        <form method="post" action="{% url 'execucao:alterar_item_conferencia' pregao.id linha.item_pregao.id %}">
+                            {% csrf_token %}
+                            <button class="btn btn-warning" type="submit"
+                                onclick="return confirm('Reabrir este item para conferir ou alterar os lances? O resultado do item será recalculado quando ele for finalizado novamente.');">
+                                Alterar Lances
+                            </button>
+                        </form>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="10">Nenhum item encontrado para conferência.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="acoes-conferencia">
+        <a class="btn btn-secondary" href="{% url 'execucao:fim_pregao' pregao.id %}">
+            Voltar
+        </a>
+
+        {% if not itens_abertos and pregao.status != "finalizado" %}
+        <form method="post" action="{% url 'execucao:finalizar_pregao' pregao.id %}" style="margin:0;">
+            {% csrf_token %}
+            <button class="btn btn-success" type="submit"
+                onclick="return confirm('Confirma a finalização oficial do pregão? Após finalizar, os documentos poderão ser gerados.');">
+                Finalizar Pregão Oficialmente
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}

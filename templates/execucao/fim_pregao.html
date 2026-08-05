@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Fim do Pregão | Sistema de Pregões{% endblock %}
+
+{% block content %}
+
+<style>
+    .card {
+        border: 1px solid #ccc;
+        padding: 20px;
+        margin-bottom: 15px;
+        border-radius: 8px;
+    }
+
+    .mensagem-sucesso {
+        color: green;
+        font-weight: bold;
+    }
+
+    .mensagem-erro {
+        color: red;
+        font-weight: bold;
+    }
+
+    .botao-finalizar {
+        background: #198754;
+        color: white;
+        border: none;
+        cursor: pointer;
+        padding: 10px 15px;
+    }
+</style>
+
+<div class="card">
+    <h1>Fim do Pregão</h1>
+
+    {% if messages %}
+    {% for message in messages %}
+    {% if message.tags == "success" %}
+    <p class="mensagem-sucesso">{{ message }}</p>
+    {% else %}
+    <p class="mensagem-erro">{{ message }}</p>
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+
+    <p>
+        O pregão <strong>{{ pregao.numero }}/{{ pregao.ano }}</strong>
+        chegou ao último item.
+    </p>
+
+    <p>
+        Itens encerrados: <strong>{{ itens_encerrados }}</strong>
+        de <strong>{{ total_itens }}</strong>.
+    </p>
+
+    <p>
+        Antes de finalizar oficialmente, confira os lances e os vencedores de todos os itens.
+    </p>
+
+    <a class="botao-finalizar" style="display:inline-block; text-decoration:none;" href="{% url 'execucao:conferencia_pregao' pregao.id %}">
+        Conferir Lances e Vencedores
+    </a>
+</div>
+
+<a href="{% url 'execucao:execucao_pregao' %}">Voltar para seleção de pregão</a>
+
+{% endblock %}

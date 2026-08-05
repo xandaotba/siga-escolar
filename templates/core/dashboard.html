@@ -1,0 +1,925 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Início | SIGA Escolar
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        document.querySelectorAll(".status-bar-item[data-width]").forEach(function (item) {
+            const valor = Number(item.dataset.width || "0");
+            const largura = Number.isFinite(valor) ? Math.max(0, Math.min(100, valor)) : 0;
+            item.style.width = largura + "%";
+        });
+    });
+</script>
+
+{% endblock %}
+{% block page_title %}SIGA Escolar{% endblock %}
+{% block page_subtitle %}{% if usuario_consulta_escola and escola_vinculada %}Sistema Integrado de Gestão da Alimentação Escolar — visão restrita à escola {{ escola_vinculada.nome_escola }}{% else %}Sistema Integrado de Gestão da Alimentação Escolar{% endif %}{% endblock %}
+
+{% block content %}
+
+<style>
+    .dashboard-hero {
+        display: grid;
+        grid-template-columns: 1.4fr 0.9fr;
+        gap: 18px;
+        margin-bottom: 20px;
+    }
+
+    .hero-card {
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: #ffffff;
+        border-radius: 22px;
+        padding: 24px;
+        box-shadow: 0 18px 45px rgba(15, 47, 87, 0.22);
+        min-height: 150px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        align-items: center;
+    }
+
+    .hero-card h2 {
+        margin: 0 0 8px;
+        color: #ffffff;
+        font-size: 25px;
+    }
+
+    .hero-card p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.82);
+        line-height: 1.5;
+        max-width: 680px;
+    }
+
+    .hero-number {
+        min-width: 130px;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 18px;
+        padding: 16px;
+    }
+
+    .hero-number strong {
+        display: block;
+        font-size: 38px;
+        line-height: 1;
+    }
+
+    .hero-number span {
+        font-size: 13px;
+        color: rgba(255, 255, 255, 0.8);
+    }
+
+    .dashboard-grid-4 {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+
+    .dashboard-grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+        margin-bottom: 20px;
+    }
+
+    .dashboard-grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        margin-bottom: 20px;
+    }
+
+    .dash-metric {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 8px 24px rgba(15, 47, 87, 0.06);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .dash-metric::after {
+        content: "";
+        position: absolute;
+        width: 86px;
+        height: 86px;
+        right: -34px;
+        top: -34px;
+        background: #eff6ff;
+        border-radius: 50%;
+    }
+
+    .dash-metric-icon {
+        width: 42px;
+        height: 42px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 14px;
+        font-size: 22px;
+        background: #eff6ff;
+        margin-bottom: 12px;
+    }
+
+    .dash-metric-label {
+        color: #475569;
+        font-size: 13px;
+        font-weight: 800;
+        margin-bottom: 5px;
+    }
+
+    .dash-metric-value {
+        color: #0f2f57;
+        font-size: 32px;
+        line-height: 1;
+        font-weight: 900;
+        margin-bottom: 8px;
+    }
+
+    .dash-metric-footer {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.4;
+    }
+
+    .metric-green .dash-metric-icon,
+    .metric-green::after { background: #dcfce7; }
+
+    .metric-orange .dash-metric-icon,
+    .metric-orange::after { background: #ffedd5; }
+
+    .metric-purple .dash-metric-icon,
+    .metric-purple::after { background: #f3e8ff; }
+
+    .metric-yellow .dash-metric-icon,
+    .metric-yellow::after { background: #fef3c7; }
+
+    .status-panel {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 8px 24px rgba(15, 47, 87, 0.06);
+        margin-bottom: 20px;
+    }
+
+    .status-panel h2,
+    .dashboard-section-title {
+        margin: 0 0 14px;
+        color: #0f2f57;
+    }
+
+    .status-bar {
+        height: 12px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: #e2e8f0;
+        display: flex;
+        margin: 10px 0 16px;
+    }
+
+    .status-bar-item {
+        min-width: 4px;
+    }
+
+    .status-nao-iniciado { background: #f59e0b; }
+    .status-em-andamento { background: #0d6efd; }
+    .status-finalizado { background: #198754; }
+
+    .quick-actions-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .quick-action {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 14px;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        text-decoration: none;
+        color: #0f2f57;
+        background: #ffffff;
+        transition: 0.18s ease;
+    }
+
+    .quick-action:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 24px rgba(15, 47, 87, 0.10);
+        border-color: #bfdbfe;
+    }
+
+    .quick-action-icon {
+        width: 42px;
+        height: 42px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 14px;
+        background: #eff6ff;
+        font-size: 21px;
+        flex: 0 0 auto;
+    }
+
+    .quick-action strong {
+        display: block;
+        font-size: 14px;
+    }
+
+    .quick-action span {
+        display: block;
+        color: #64748b;
+        font-size: 12px;
+        margin-top: 2px;
+        line-height: 1.35;
+    }
+
+    .flow-steps {
+        display: grid;
+        gap: 10px;
+    }
+
+    .flow-step {
+        display: grid;
+        grid-template-columns: 36px 1fr;
+        gap: 10px;
+        align-items: center;
+        padding: 11px 12px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+    }
+
+    .flow-number {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0d6efd;
+        color: white;
+        font-weight: 900;
+    }
+
+    .flow-step strong {
+        display: block;
+        color: #0f2f57;
+        font-size: 13px;
+    }
+
+    .flow-step span {
+        display: block;
+        color: #64748b;
+        font-size: 12px;
+        margin-top: 2px;
+    }
+
+    .alert-list {
+        display: grid;
+        gap: 10px;
+    }
+
+    .alert-card-dashboard {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 12px;
+        background: #ffffff;
+    }
+
+    .alert-card-dashboard strong {
+        display: block;
+        color: #0f2f57;
+        margin-bottom: 4px;
+    }
+
+    .alert-card-dashboard span {
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.4;
+    }
+
+    .alert-card-dashboard.warning { border-left: 5px solid #f59e0b; }
+    .alert-card-dashboard.info { border-left: 5px solid #0d6efd; }
+    .alert-card-dashboard.success { border-left: 5px solid #198754; }
+
+    .table-dashboard th,
+    .table-dashboard td {
+        vertical-align: middle;
+    }
+
+    .fornecedores-limitado {
+        max-width: 520px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .documentos-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .doc-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 16px;
+        background: #ffffff;
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+    }
+
+    .doc-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        background: #f1f5f9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 21px;
+        flex: 0 0 auto;
+    }
+
+    .doc-card strong {
+        display: block;
+        color: #0f2f57;
+        margin-bottom: 4px;
+    }
+
+    .doc-card span {
+        display: block;
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.4;
+    }
+
+    @media (max-width: 1100px) {
+        .dashboard-hero,
+        .dashboard-grid-2 {
+            grid-template-columns: 1fr;
+        }
+
+        .dashboard-grid-4,
+        .dashboard-grid-3,
+        .documentos-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 700px) {
+        .dashboard-grid-4,
+        .dashboard-grid-3,
+        .documentos-grid,
+        .quick-actions-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .hero-card {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+
+    .dashboard-brand-logo {
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 22px;
+        padding: 12px 16px;
+        box-shadow: 0 16px 34px rgba(2, 6, 23, 0.22);
+        max-width: 330px;
+        margin-bottom: 16px;
+    }
+
+    .dashboard-brand-logo img {
+        display: block;
+        width: 100%;
+        height: auto;
+    }
+
+    .hero-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: rgba(34, 197, 94, 0.17);
+        color: #dcfce7;
+        font-size: 12px;
+        font-weight: 900;
+        margin-bottom: 12px;
+        border: 1px solid rgba(187, 247, 208, 0.20);
+    }
+
+    .system-pill-grid {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+    }
+
+    .system-pill-grid span {
+        display: inline-flex;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        color: rgba(255,255,255,0.92);
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.14);
+    }
+
+
+    /* ============================================================
+       AJUSTE — DASHBOARD SIGA ESCOLAR MAIS COMPACTO
+       ============================================================ */
+
+    .dashboard-hero {
+        grid-template-columns: 1fr 0.64fr;
+        gap: 16px;
+        margin-bottom: 18px;
+    }
+
+    .hero-card {
+        min-height: auto;
+        padding: 18px 20px;
+        border-radius: 20px;
+        align-items: center;
+    }
+
+    .dashboard-brand-logo {
+        max-width: 210px;
+        padding: 8px 12px;
+        border-radius: 18px;
+        margin-bottom: 10px;
+    }
+
+    .hero-tag {
+        margin-bottom: 8px;
+        padding: 5px 10px;
+        font-size: 11px;
+    }
+
+    .hero-card h2 {
+        font-size: 21px;
+        margin-bottom: 6px;
+    }
+
+    .hero-card p {
+        font-size: 14px;
+        line-height: 1.45;
+        max-width: 760px;
+    }
+
+    .system-pill-grid {
+        margin-top: 10px;
+        gap: 6px;
+    }
+
+    .system-pill-grid span {
+        padding: 5px 9px;
+        font-size: 11px;
+    }
+
+    .hero-number {
+        min-width: 108px;
+        padding: 12px;
+        border-radius: 16px;
+    }
+
+    .hero-number strong {
+        font-size: 32px;
+    }
+
+    .hero-number span {
+        font-size: 12px;
+    }
+
+    .dashboard-hero .status-panel {
+        min-height: auto !important;
+        padding: 18px !important;
+    }
+
+    .dashboard-hero .status-panel h2 {
+        font-size: 20px;
+        margin-bottom: 10px;
+    }
+
+    .dashboard-hero .status-bar {
+        height: 10px;
+        margin: 8px 0 12px;
+    }
+
+    .dashboard-hero .dashboard-grid-3 {
+        gap: 8px;
+    }
+
+    .dashboard-hero small {
+        font-size: 11px;
+    }
+
+    @media (max-width: 1100px) {
+        .dashboard-hero {
+            grid-template-columns: 1fr;
+        }
+
+        .dashboard-brand-logo {
+            max-width: 230px;
+        }
+    }
+
+    @media (max-width: 700px) {
+        .dashboard-brand-logo {
+            max-width: 210px;
+        }
+
+        .hero-card {
+            padding: 16px;
+        }
+    }
+
+</style>
+
+<div class="dashboard-hero">
+    <div class="hero-card">
+        <div>
+            <div class="dashboard-brand-logo">
+                <img src="{% static 'img/logo_siga_escolar_header.png' %}" alt="SIGA Escolar - Sistema Integrado de Gestão da Alimentação Escolar">
+            </div>
+
+            <h2>{% if usuario_consulta_escola and escola_vinculada %}Painel da Escola{% else %}Gestão da Alimentação Escolar{% endif %}</h2>
+            <p>
+                {% if usuario_consulta_escola and escola_vinculada %}
+                    Acompanhe certames, contratos, notas fiscais, saldos e alertas da escola {{ escola_vinculada.nome_escola }}.
+                {% else %}
+                    Visão integrada de certames, contratos, chamada pública, NF-e, saldos e relatórios.
+                {% endif %}
+            </p>
+
+            <div class="system-pill-grid">
+                <span>Pregões</span>
+                <span>Chamada Pública</span>
+                <span>Contratos</span>
+                <span>NF-e e Saldos</span>
+            </div>
+        </div>
+        <div class="hero-number">
+            <strong>{{ total_pregoes }}</strong>
+            <span>{% if usuario_consulta_escola %}certames da escola{% else %}certames cadastrados{% endif %}</span>
+        </div>
+    </div>
+
+    <div class="status-panel" style="margin-bottom: 0;">
+        <h2>{% if usuario_consulta_escola %}Situação dos Certames da Escola{% else %}Situação dos Certames{% endif %}</h2>
+        <div class="status-bar">
+            <div class="status-bar-item status-nao-iniciado" data-width="{% if total_pregoes %}{% widthratio pregoes_nao_iniciados total_pregoes 100 %}{% else %}0{% endif %}"></div>
+            <div class="status-bar-item status-em-andamento" data-width="{% if total_pregoes %}{% widthratio pregoes_em_andamento total_pregoes 100 %}{% else %}0{% endif %}"></div>
+            <div class="status-bar-item status-finalizado" data-width="{% if total_pregoes %}{% widthratio pregoes_finalizados total_pregoes 100 %}{% else %}0{% endif %}"></div>
+        </div>
+
+        <div class="dashboard-grid-3" style="margin-bottom: 0;">
+            <div>
+                <span class="badge badge-warning">{{ pregoes_nao_iniciados }}</span><br>
+                <small>Não iniciados</small>
+            </div>
+            <div>
+                <span class="badge badge-primary">{{ pregoes_em_andamento }}</span><br>
+                <small>Em andamento</small>
+            </div>
+            <div>
+                <span class="badge badge-success">{{ pregoes_finalizados }}</span><br>
+                <small>Finalizados</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="dashboard-grid-4">
+    <div class="dash-metric">
+        <div class="dash-metric-icon">🏢</div>
+        <div class="dash-metric-label">Fornecedores</div>
+        <div class="dash-metric-value">{{ total_fornecedores }}</div>
+        <div class="dash-metric-footer">{% if usuario_consulta_escola %}Fornecedores com contratos da escola.{% else %}Empresas cadastradas para participação.{% endif %}</div>
+    </div>
+
+    <div class="dash-metric metric-green">
+        <div class="dash-metric-icon">🏫</div>
+        <div class="dash-metric-label">{% if usuario_consulta_escola %}Escola Vinculada{% else %}Escolas{% endif %}</div>
+        <div class="dash-metric-value">{{ total_escolas }}</div>
+        <div class="dash-metric-footer">{% if usuario_consulta_escola %}Unidade escolar vinculada ao usuário.{% else %}Unidades escolares cadastradas.{% endif %}</div>
+    </div>
+
+    <div class="dash-metric metric-purple">
+        <div class="dash-metric-icon">📦</div>
+        <div class="dash-metric-label">Itens</div>
+        <div class="dash-metric-value">{{ total_itens }}</div>
+        <div class="dash-metric-footer">{% if usuario_consulta_escola %}Itens com quantitativo da escola.{% else %}Itens disponíveis para pregões.{% endif %}</div>
+    </div>
+
+    <div class="dash-metric metric-orange">
+        <div class="dash-metric-icon">📄</div>
+        <div class="dash-metric-label">Contratos</div>
+        <div class="dash-metric-value">{{ total_contratos }}</div>
+        <div class="dash-metric-footer">{% if usuario_consulta_escola %}Contratos registrados para a escola.{% else %}Contratos registrados no sistema.{% endif %}</div>
+    </div>
+</div>
+
+<div class="dashboard-grid-3">
+    <div class="dash-metric metric-yellow">
+        <div class="dash-metric-icon">📝</div>
+        <div class="dash-metric-label">Contratos Ativos</div>
+        <div class="dash-metric-value">{{ contratos_ativos }}</div>
+        <div class="dash-metric-footer">Gerados ou parcialmente distratados.</div>
+    </div>
+
+    <div class="dash-metric metric-orange">
+        <div class="dash-metric-icon">⚠️</div>
+        <div class="dash-metric-label">Distratos</div>
+        <div class="dash-metric-value">{{ contratos_distratados }}</div>
+        <div class="dash-metric-footer">Contratos distratados total ou parcialmente.</div>
+    </div>
+
+    <div class="dash-metric metric-green">
+        <div class="dash-metric-icon">🔄</div>
+        <div class="dash-metric-label">Realinhamentos</div>
+        <div class="dash-metric-value">{{ realinhamentos_registrados }}</div>
+        <div class="dash-metric-footer">Registros de realinhamento de preços.</div>
+    </div>
+</div>
+
+<div class="dashboard-grid-2">
+    {% if not usuario_consulta_escola %}
+    <div class="card">
+        <h2 class="dashboard-section-title">Ações rápidas</h2>
+
+        <div class="quick-actions-grid">
+            <a class="quick-action" href="{% url 'cadastros:fornecedores' %}">
+                <div class="quick-action-icon">🏢</div>
+                <div>
+                    <strong>Novo Fornecedor</strong>
+                    <span>Cadastrar ou atualizar empresas participantes.</span>
+                </div>
+            </a>
+
+            <a class="quick-action" href="{% url 'cadastros:escolas' %}">
+                <div class="quick-action-icon">🏫</div>
+                <div>
+                    <strong>Nova Escola</strong>
+                    <span>Cadastrar unidades escolares e CDCE.</span>
+                </div>
+            </a>
+
+            <a class="quick-action" href="{% url 'pregoes:pregoes' %}">
+                <div class="quick-action-icon">📋</div>
+                <div>
+                    <strong>Novo Pregão</strong>
+                    <span>Criar processo e vincular participantes.</span>
+                </div>
+            </a>
+
+            <a class="quick-action" href="{% url 'execucao:execucao_pregao' %}">
+                <div class="quick-action-icon">⚡</div>
+                <div>
+                    <strong>Abrir Execução</strong>
+                    <span>Iniciar ou continuar a fase de lances.</span>
+                </div>
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h2 class="dashboard-section-title">{% if usuario_consulta_escola %}Alertas da Escola{% else %}Alertas do sistema{% endif %}</h2>
+
+        <div class="alert-list">
+            {% for alerta in alertas %}
+            <div class="alert-card-dashboard {{ alerta.tipo }}">
+                <strong>{{ alerta.titulo }}</strong>
+                <span>{{ alerta.descricao }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="dashboard-grid-2">
+    {% if not usuario_consulta_escola %}
+    <div class="card">
+        <h2 class="dashboard-section-title">Fluxo do sistema</h2>
+
+        <div class="flow-steps">
+            <div class="flow-step">
+                <div class="flow-number">1</div>
+                <div>
+                    <strong>Cadastros básicos</strong>
+                    <span>Fornecedores, escolas, itens e unidades de medida.</span>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="flow-number">2</div>
+                <div>
+                    <strong>Planejamento do pregão</strong>
+                    <span>Pregão, municípios, participantes e quantitativos.</span>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="flow-number">3</div>
+                <div>
+                    <strong>Execução e resultados</strong>
+                    <span>Propostas, lances, desertos, fracassados e vencedores.</span>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="flow-number">4</div>
+                <div>
+                    <strong>Documentos e contratos</strong>
+                    <span>Relatórios, contratos, distratos, realinhamentos e marcas.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h2 class="dashboard-section-title">{% if usuario_consulta_escola %}Documentos da Escola{% else %}Operações de documentos{% endif %}</h2>
+
+        <div class="documentos-grid" style="grid-template-columns: 1fr;">
+            <a class="doc-card" href="{% url 'documentos:pregoes_finalizados' %}" style="text-decoration:none;">
+                <div class="doc-icon">📑</div>
+                <div>
+                    <strong>Pregões Finalizados</strong>
+                    <span>Acesse planilhas, resultados finais e base de contratos.</span>
+                </div>
+            </a>
+
+            <a class="doc-card" href="{% url 'documentos:contratos_gerados' %}" style="text-decoration:none;">
+                <div class="doc-icon">📄</div>
+                <div>
+                    <strong>Contratos Gerados</strong>
+                    <span>Visualize, baixe, cancele, distrate e gere termos.</span>
+                </div>
+            </a>
+
+            {% if not usuario_consulta_escola %}
+            <a class="doc-card" href="{% url 'documentos:realinhamento_precos' %}" style="text-decoration:none;">
+                <div class="doc-icon">💰</div>
+                <div>
+                    <strong>Realinhamento de Preços</strong>
+                    <span>Registre novos valores e termos aditivos.</span>
+                </div>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>{% if usuario_consulta_escola %}Certames Recentes da Escola{% else %}Pregões Recentes{% endif %}</h2>
+
+    <div class="table-wrapper">
+        <table class="table-dashboard">
+            <thead>
+                <tr>
+                    <th>{% if usuario_consulta_escola %}Certame{% else %}Pregão{% endif %}</th>
+                    <th>Municípios</th>
+                    <th>Fornecedores</th>
+                    <th>Data</th>
+                    <th>Status</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for pregao in pregoes_recentes %}
+                <tr>
+                    <td>
+                        <strong>
+                            {% if pregao.tipo_certame == "chamada_publica" %}Chamada Pública{% else %}Pregão{% endif %}
+                            {{ pregao.numero }}/{{ pregao.ano }}
+                        </strong>
+                    </td>
+
+                    <td>
+                        {% for municipio in pregao.municipios.all %}
+                        {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+                        {% empty %}
+                        -
+                        {% endfor %}
+                    </td>
+
+                    <td>
+                        <div class="fornecedores-limitado" title="{% for fornecedor in pregao.fornecedores.all %}{{ fornecedor.razao_social }}{% if not forloop.last %}, {% endif %}{% endfor %}">
+                            {% for fornecedor in pregao.fornecedores.all %}
+                            {{ fornecedor.razao_social }}{% if not forloop.last %}, {% endif %}
+                            {% empty %}
+                            -
+                            {% endfor %}
+                        </div>
+                    </td>
+
+                    <td>{{ pregao.data_pregao|date:"d/m/Y" }}</td>
+
+                    <td>
+                        {% if pregao.status == "nao_iniciado" %}
+                        <span class="badge badge-warning">{{ pregao.get_status_display }}</span>
+                        {% elif pregao.status == "em_andamento" %}
+                        <span class="badge badge-primary">{{ pregao.get_status_display }}</span>
+                        {% else %}
+                        <span class="badge badge-success">{{ pregao.get_status_display }}</span>
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if usuario_consulta_escola %}
+                            <a class="btn btn-primary" href="{% url 'documentos:contratos_gerados' %}?pregao={{ pregao.id }}">Contratos</a>
+                        {% else %}
+                            {% if pregao.status == "finalizado" %}
+                                {% if pregao.tipo_certame == "chamada_publica" %}
+                                    <a class="btn btn-primary" href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}">Resultado</a>
+                                {% else %}
+                                    <a class="btn btn-primary" href="{% url 'documentos:contratos_pregao' pregao.id %}">Documentos</a>
+                                {% endif %}
+                            {% else %}
+                                <a class="btn btn-warning" href="{% url 'execucao:execucao_pregao' %}">Execução</a>
+                            {% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6">Nenhum pregão cadastrado até o momento.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if not usuario_consulta_escola %}
+<div class="card">
+    <h2>Documentos e rotinas disponíveis</h2>
+
+    <div class="documentos-grid">
+        <div class="doc-card">
+            <div class="doc-icon">📊</div>
+            <div>
+                <strong>Planilha de Lances</strong>
+                <span>Histórico dos lances registrados, propostas iniciais e marcas.</span>
+            </div>
+        </div>
+
+        <div class="doc-card">
+            <div class="doc-icon">🏆</div>
+            <div>
+                <strong>Fornecedores Vencedores</strong>
+                <span>Relação dos vencedores por item, incluindo 1º, 2º e 3º colocados.</span>
+            </div>
+        </div>
+
+        <div class="doc-card">
+            <div class="doc-icon">✅</div>
+            <div>
+                <strong>Resultado Final</strong>
+                <span>Resumo consolidado do pregão finalizado.</span>
+            </div>
+        </div>
+
+        <div class="doc-card">
+            <div class="doc-icon">📄</div>
+            <div>
+                <strong>Contratos</strong>
+                <span>Contratos por escola e fornecedor, com controle de saldo.</span>
+            </div>
+        </div>
+
+        <div class="doc-card">
+            <div class="doc-icon">⚖️</div>
+            <div>
+                <strong>Distratos</strong>
+                <span>Rescisão total ou parcial com contratação do 2º/3º colocado.</span>
+            </div>
+        </div>
+
+        <div class="doc-card">
+            <div class="doc-icon">🔄</div>
+            <div>
+                <strong>Aditivos</strong>
+                <span>Realinhamento de preços e troca de marca dos produtos.</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

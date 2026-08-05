@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Pregões Finalizados | Sistema de Pregões{% endblock %}
+{% block page_title %}Pregões Finalizados{% endblock %}
+{% block page_subtitle %}Documentos e relatórios dos pregões encerrados{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Pregão</th>
+                    <th>Ano</th>
+                    <th>Pregoeiro</th>
+                    <th>Data</th>
+                    <th>Status</th>
+                    <th>Finalizado em</th>
+                    <th>Documentos</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for pregao in pregoes %}
+                <tr>
+                    <td>{{ pregao.numero }}</td>
+                    <td>{{ pregao.ano }}</td>
+                    <td>{{ pregao.nome_pregoeiro }}</td>
+                    <td>{{ pregao.data_pregao|date:"d/m/Y" }}</td>
+                    <td>
+                        <span class="badge badge-success">
+                            {{ pregao.get_status_display }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if pregao.finalizado_em %}
+                        {{ pregao.finalizado_em }}
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="actions">
+                            <a class="btn btn-primary" href="{% url 'documentos:planilha_lances' pregao.id %}"
+                                target="_blank">
+                                Planilha de Lances
+                            </a>
+
+                            <a class="btn btn-success" href="{% url 'documentos:fornecedores_vencedores' pregao.id %}"
+                                target="_blank">
+                                Fornecedores Vencedores
+                            </a>
+
+                            <a class="btn btn-warning" href="{% url 'documentos:resultado_final' pregao.id %}"
+                                target="_blank">
+                                Resultado Final
+                            </a>
+
+                            <a class="btn btn-primary" href="{% url 'documentos:contratos_pregao' pregao.id %}">
+                                Gerar Contratos
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7">
+                        Nenhum pregão finalizado até o momento.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}Colar Tabela Copiada | Sistema de Certames{% endblock %}
+{% block page_title %}Colar Tabela Copiada{% endblock %}
+{% block page_subtitle %}Cole os produtos copiados da aba Produtos e Serviços da NF-e{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .loading-text { color: #64748b; font-size: 12px; margin-top: 4px; display: none; }
+    .muted-text { color: #64748b; font-size: 13px; }
+</style>
+
+
+<div class="page-actions">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">← Notas Fiscais Cadastradas</a>
+    <a class="btn btn-primary" href="{% url 'aquisicoes:aquisicao_manual_nova' %}">Adicionar manualmente</a>
+</div>
+
+<div class="info-box">
+    Use esta opção quando a escola não tiver o XML.
+    Copie a tabela de produtos da consulta da NF-e e cole no campo abaixo.
+</div>
+
+<div class="warning-box">
+    Esta leitura depende de como a tabela foi copiada do navegador. Depois de importar, confira os itens antes de confirmar.
+</div>
+
+<div class="card">
+    <h2>Dados da Nota Fiscal</h2>
+
+    <form method="post">
+        {% csrf_token %}
+
+        
+<div class="grid grid-4">
+    <div class="form-group">
+        <label>Certame</label>
+        <select name="pregao" id="id_pregao" required>
+            <option value="">Selecione</option>
+            {% for certame in certames %}
+            <option value="{{ certame.id }}">{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>Escola</label>
+        <select name="escola" id="id_escola" {% if restrito_escola %}disabled{% endif %} required>
+            <option value="">Selecione o certame</option>
+            {% if escola_vinculada %}
+            <option value="{{ escola_vinculada.id }}" selected>{{ escola_vinculada.nome_escola }}</option>
+            {% endif %}
+        </select>
+        {% if restrito_escola and escola_vinculada %}
+        <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+        {% endif %}
+        <div class="loading-text" id="loading-escolas">Carregando escolas...</div>
+    </div>
+
+    <div class="form-group">
+        <label>Fornecedor</label>
+        <select name="fornecedor" id="id_fornecedor" required>
+            <option value="">Selecione a escola</option>
+        </select>
+        <div class="loading-text" id="loading-fornecedores">Carregando fornecedores...</div>
+    </div>
+
+    <div class="form-group">
+        <label>Contrato</label>
+        <select name="contrato" id="id_contrato" required>
+            <option value="">Selecione o fornecedor</option>
+        </select>
+        <div class="loading-text" id="loading-contratos">Carregando contratos...</div>
+    </div>
+</div>
+
+
+        <div class="grid grid-3" style="margin-top: 14px;">
+            <div class="form-group">
+                <label>Número da NF-e</label>
+                <input type="text" name="numero_nota" required>
+            </div>
+
+            <div class="form-group">
+                <label>Data de Emissão</label>
+                <input type="date" name="data_emissao">
+            </div>
+
+            <div class="form-group">
+                <label>Data de Recebimento</label>
+                <input type="date" name="data_recebimento">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Tabela copiada da NF-e</label>
+            <textarea name="tabela_colada" rows="12" required placeholder="Cole aqui as linhas da tabela Produtos e Serviços..."></textarea>
+            <p class="muted-text">
+                Dica: copie as linhas inteiras dos produtos. O sistema tenta identificar descrição, quantidade, unidade, valor unitário e valor total.
+            </p>
+        </div>
+
+        <div class="form-group">
+            <label>Observações</label>
+            <textarea name="observacoes" rows="3" placeholder="Opcional"></textarea>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Importar Tabela</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">Cancelar</a>
+        </div>
+    </form>
+</div>
+
+
+<script>
+const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
+const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
+const urlContratosTemplate = "{% url 'aquisicoes:ajax_contratos_por_certame_escola_fornecedor' 0 0 0 %}";
+const escolaRestritaId = "{% if escola_vinculada %}{{ escola_vinculada.id }}{% endif %}";
+
+function trocarIds(url, ids) {
+    let finalUrl = url;
+    ids.forEach(id => {
+        finalUrl = finalUrl.replace("/0/", `/${id}/`);
+    });
+    return finalUrl;
+}
+
+function resetSelect(select, texto) {
+    select.innerHTML = "";
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = texto;
+    select.appendChild(option);
+}
+
+function setLoading(id, visivel) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = visivel ? "block" : "none";
+}
+
+async function carregarEscolas() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaSelect = document.getElementById("id_escola");
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    resetSelect(fornecedorSelect, "Selecione a escola");
+    resetSelect(contratoSelect, "Selecione o fornecedor");
+
+    if (!pregaoId) {
+        resetSelect(escolaSelect, "Selecione o certame");
+        return;
+    }
+
+    setLoading("loading-escolas", true);
+
+    try {
+        const response = await fetch(trocarIds(urlEscolasTemplate, [pregaoId]));
+        const data = await response.json();
+
+        resetSelect(escolaSelect, "Selecione");
+
+        data.escolas.forEach(escola => {
+            const option = document.createElement("option");
+            option.value = escola.id;
+            option.textContent = escola.municipio ? `${escola.nome} - ${escola.municipio}` : escola.nome;
+            escolaSelect.appendChild(option);
+        });
+
+        if (escolaRestritaId) {
+            escolaSelect.value = escolaRestritaId;
+            await carregarFornecedores();
+        }
+    } finally {
+        setLoading("loading-escolas", false);
+    }
+}
+
+async function carregarFornecedores() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaId = document.getElementById("id_escola").value;
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    resetSelect(contratoSelect, "Selecione o fornecedor");
+
+    if (!pregaoId || !escolaId) {
+        resetSelect(fornecedorSelect, "Selecione a escola");
+        return;
+    }
+
+    setLoading("loading-fornecedores", true);
+
+    try {
+        const response = await fetch(trocarIds(urlFornecedoresTemplate, [pregaoId, escolaId]));
+        const data = await response.json();
+
+        resetSelect(fornecedorSelect, "Selecione");
+
+        data.fornecedores.forEach(fornecedor => {
+            const option = document.createElement("option");
+            option.value = fornecedor.id;
+            option.textContent = fornecedor.nome;
+            fornecedorSelect.appendChild(option);
+        });
+    } finally {
+        setLoading("loading-fornecedores", false);
+    }
+}
+
+async function carregarContratos() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaId = document.getElementById("id_escola").value;
+    const fornecedorId = document.getElementById("id_fornecedor").value;
+    const contratoSelect = document.getElementById("id_contrato");
+
+    if (!pregaoId || !escolaId || !fornecedorId) {
+        resetSelect(contratoSelect, "Selecione o fornecedor");
+        return;
+    }
+
+    setLoading("loading-contratos", true);
+
+    try {
+        const response = await fetch(trocarIds(urlContratosTemplate, [pregaoId, escolaId, fornecedorId]));
+        const data = await response.json();
+
+        resetSelect(contratoSelect, "Selecione");
+
+        data.contratos.forEach(contrato => {
+            const option = document.createElement("option");
+            option.value = contrato.id;
+            option.textContent = contrato.texto;
+            contratoSelect.appendChild(option);
+        });
+
+        if (data.contratos.length === 1) {
+            contratoSelect.value = data.contratos[0].id;
+        }
+    } finally {
+        setLoading("loading-contratos", false);
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    document.getElementById("id_pregao").addEventListener("change", carregarEscolas);
+    document.getElementById("id_escola").addEventListener("change", carregarFornecedores);
+    document.getElementById("id_fornecedor").addEventListener("change", carregarContratos);
+});
+</script>
+
+
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}{{ titulo }} | Sistema de Certames{% endblock %}
+{% block page_title %}{{ titulo }}{% endblock %}
+{% block page_subtitle %}{{ subtitulo }}{% endblock %}
+
+{% block content %}
+
+
+<style>
+    .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+    .resumo-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .resumo-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; }
+    .resumo-label { color: #64748b; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+    .resumo-value { color: #0f2f57; font-size: 21px; font-weight: 900; }
+    .badge-status { display: inline-flex; align-items: center; justify-content: center; padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .badge-rascunho { background: #f1f5f9; color: #334155; }
+    .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
+    .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .badge-pendente { background: #fff7ed; color: #c2410c; }
+    .badge-vinculado { background: #ecfdf5; color: #047857; }
+    .badge-divergente { background: #fef2f2; color: #b91c1c; }
+    .modo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 16px 0; }
+    .modo-card { border: 1px solid #e2e8f0; border-radius: 14px; padding: 15px; background: #ffffff; }
+    .modo-card h3 { margin: 0 0 8px; color: #0f2f57; font-size: 16px; }
+    .modo-card p { margin: 0; color: #64748b; font-size: 13px; line-height: 1.45; }
+    .info-box { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e3a8a; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .warning-box { border: 1px solid #fed7aa; background: #fff7ed; color: #9a3412; border-radius: 14px; padding: 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; }
+    .muted-text { color: #64748b; font-size: 13px; }
+    .texto-direita { text-align: right; }
+    .form-help { color: #64748b; font-size: 12px; margin-top: 4px; }
+    .mini-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    @media (max-width: 1100px) { .resumo-grid, .modo-grid { grid-template-columns: 1fr; } }
+</style>
+
+
+<div class="page-actions">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">← Voltar para a Nota</a>
+</div>
+
+<div class="card">
+    <h2>Resumo da Nota Fiscal</h2>
+
+    <div class="grid grid-3">
+        <div><strong>Certame</strong><br>{{ nota.pregao.numero }}/{{ nota.pregao.ano }}</div>
+        <div><strong>Escola</strong><br>{{ nota.escola.nome_escola }}</div>
+        <div><strong>Fornecedor</strong><br>{{ nota.fornecedor.razao_social }}</div>
+        <div><strong>NF-e</strong><br>{% if nota.numero_nota %}{{ nota.numero_nota }}{% else %}-{% endif %}</div>
+        <div><strong>Contrato</strong><br>{% if nota.contrato %}{{ nota.contrato.numero_contrato }}{% else %}Não vinculado{% endif %}</div>
+        <div><strong>Total atual</strong><br>{{ nota.valor_itens|moeda_br }}</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Dados do Item</h2>
+
+    <form method="post" id="form-item-manual">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.contrato_item.label }}</label>
+                {{ form.contrato_item }}
+                <div class="form-help">
+                    Selecione quando o produto corresponder a um item do contrato. Isso já deixa o vínculo preparado para a baixa de saldo.
+                </div>
+                {{ form.contrato_item.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.item.label }}</label>
+                {{ form.item }}
+                <div class="form-help">
+                    Use este campo quando ainda não conseguir vincular diretamente ao item do contrato.
+                </div>
+                {{ form.item.errors }}
+            </div>
+        </div>
+
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>{{ form.codigo_produto.label }}</label>
+                {{ form.codigo_produto }}
+                {{ form.codigo_produto.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.descricao_produto.label }}</label>
+                {{ form.descricao_produto }}
+                {{ form.descricao_produto.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.unidade.label }}</label>
+                {{ form.unidade }}
+                {{ form.unidade.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.quantidade.label }}</label>
+                {{ form.quantidade }}
+                {{ form.quantidade.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.valor_unitario.label }}</label>
+                {{ form.valor_unitario }}
+                {{ form.valor_unitario.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.valor_total.label }}</label>
+                {{ form.valor_total }}
+                <div class="form-help">
+                    O sistema confere se o valor está compatível com quantidade x valor unitário.
+                </div>
+                {{ form.valor_total.errors }}
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>
+                {{ form.conferido }}
+                Item conferido
+            </label>
+            {{ form.conferido.errors }}
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Salvar Item</button>
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Cancelar</a>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const quantidade = document.getElementById("id_quantidade");
+    const valorUnitario = document.getElementById("id_valor_unitario");
+    const valorTotal = document.getElementById("id_valor_total");
+
+    function parseDecimal(value) {
+        if (!value) return 0;
+        return Number(String(value).replace(".", "").replace(",", "."));
+    }
+
+    function formatDecimal(value) {
+        if (!Number.isFinite(value)) return "";
+        return value.toFixed(2);
+    }
+
+    function atualizarTotal() {
+        if (!quantidade || !valorUnitario || !valorTotal) return;
+        const qtd = parseDecimal(quantidade.value);
+        const unit = parseDecimal(valorUnitario.value);
+
+        if (qtd > 0 && unit >= 0) {
+            valorTotal.value = formatDecimal(qtd * unit);
+        }
+    }
+
+    if (quantidade) quantidade.addEventListener("input", atualizarTotal);
+    if (valorUnitario) valorUnitario.addEventListener("input", atualizarTotal);
+});
+</script>
+
+{% endblock %}

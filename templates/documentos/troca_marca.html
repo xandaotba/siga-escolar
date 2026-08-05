@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Troca de Marca | Sistema de Pregões{% endblock %}
+{% block page_title %}Troca de Marca{% endblock %}
+{% block page_subtitle %}Selecione contratos ativos de Pregão Presencial e registre novas marcas para os itens contratados{% endblock %}
+
+{% block content %}
+
+<style>
+    .troca-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .contrato-destaque {
+        background: linear-gradient(135deg, #0f2f57, #174a84);
+        color: #ffffff;
+        border-radius: 16px;
+        padding: 18px;
+        margin-bottom: 18px;
+    }
+
+    .contrato-destaque h2 {
+        color: #ffffff;
+        margin-top: 0;
+    }
+
+    .contrato-destaque p {
+        margin-bottom: 0;
+        line-height: 1.6;
+    }
+
+    .input-marca {
+        min-width: 170px;
+    }
+
+    .texto-muted {
+        color: #64748b;
+        font-size: 13px;
+    }
+
+    .troca-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 12px;
+        background: #ffffff;
+    }
+
+    .troca-card h3 {
+        margin-top: 0;
+        color: #0f2f57;
+    }
+
+    .termo-status {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .termo-status.registrado {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .troca-acoes {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 12px 0;
+    }
+
+    .contratos-encontrados {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 14px;
+    }
+
+    .contrato-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+        background: #ffffff;
+    }
+
+    .contrato-card h3 {
+        margin: 0 0 8px;
+        color: #0f2f57;
+    }
+
+    @media (max-width: 1000px) {
+        .troca-grid,
+        .contratos-encontrados {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+{% for message in messages %}
+{% if message.tags == "success" %}
+<div class="alert alert-success">{{ message }}</div>
+{% else %}
+<div class="alert alert-error">{{ message }}</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>Filtros</h2>
+
+    <form method="get">
+        <div class="troca-grid">
+            <div class="form-group">
+                <label>Pregão</label>
+                <select name="pregao" id="id_pregao_filtro">
+                    <option value="">Todos</option>
+                    {% for pregao in pregoes %}
+                    <option value="{{ pregao.id }}" {% if filtros.pregao == pregao.id|stringformat:"s" %}selected{% endif %}>
+                        Pregão {{ pregao.numero }}/{{ pregao.ano }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select name="escola" id="id_escola_filtro" data-valor-selecionado="{{ filtros.escola }}">
+                    <option value="">Todas</option>
+                    {% for escola in escolas %}
+                    <option value="{{ escola.id }}" {% if filtros.escola == escola.id|stringformat:"s" %}selected{% endif %}>
+                        {{ escola.nome_escola }}{% if escola.municipio %} - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_fornecedor_filtro" data-valor-selecionado="{{ filtros.fornecedor }}">
+                    <option value="">Todos</option>
+                    {% for fornecedor in fornecedores %}
+                    <option value="{{ fornecedor.id }}" {% if filtros.fornecedor == fornecedor.id|stringformat:"s" %}selected{% endif %}>
+                        {{ fornecedor.razao_social }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Contrato</label>
+                <select name="contrato" id="id_contrato_filtro" data-valor-selecionado="{{ filtros.contrato }}">
+                    <option value="">Todos</option>
+                    {% for item_contrato in contratos %}
+                    <option value="{{ item_contrato.id }}" {% if filtros.contrato == item_contrato.id|stringformat:"s" %}selected{% endif %}>
+                        {{ item_contrato.numero_contrato }} - {{ item_contrato.escola.nome_escola }} - {{ item_contrato.fornecedor.razao_social }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Filtrar/Carregar</button>
+            <a class="btn btn-secondary" href="{% url 'documentos:troca_marca' %}">Limpar Filtros</a>
+        </div>
+    </form>
+</div>
+
+{% if not contrato and contratos %}
+<div class="card">
+    <h2>Contratos encontrados</h2>
+    <p class="texto-muted">Selecione um contrato específico para registrar a troca de marca.</p>
+
+    <div class="contratos-encontrados">
+        {% for item_contrato in contratos %}
+        <div class="contrato-card">
+            <h3>Contrato {{ item_contrato.numero_contrato }}</h3>
+            <p>
+                <strong>Pregão:</strong> {{ item_contrato.pregao.numero }}/{{ item_contrato.pregao.ano }}<br>
+                <strong>Escola:</strong> {{ item_contrato.escola.nome_escola }}<br>
+                <strong>Fornecedor:</strong> {{ item_contrato.fornecedor.razao_social }}<br>
+                <strong>Status:</strong> {{ item_contrato.get_status_display }}
+            </p>
+            <a class="btn btn-primary" href="{% url 'documentos:troca_marca' %}?contrato={{ item_contrato.id }}">
+                Trocar Marca
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if contrato %}
+<div class="contrato-destaque">
+    <h2>Contrato {{ contrato.numero_contrato }}</h2>
+    <p>
+        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Escola:</strong> {{ contrato.escola.nome_escola }}{% if contrato.escola.municipio %} - {{ contrato.escola.municipio.nome }}{% if contrato.escola.municipio.uf %}/{{ contrato.escola.municipio.uf }}{% endif %}{% endif %}<br>
+        <strong>Fornecedor:</strong> {{ contrato.fornecedor.razao_social }}<br>
+        <strong>Status:</strong> {{ contrato.get_status_display }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Registrar Troca de Marca</h2>
+
+    {% if itens_contexto %}
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="contrato" value="{{ contrato.id }}">
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Data de Vigência da Troca de Marca</label>
+                <input type="date" name="data_troca_marca" value="{{ data_padrao|date:'Y-m-d' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label>Justificativa/Motivo</label>
+                <textarea name="justificativa" rows="3" required placeholder="Descreva o motivo da troca de marca"></textarea>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Trocar?</th>
+                        <th>Item</th>
+                        <th>Marca Original</th>
+                        <th>Marca Atual</th>
+                        <th>Unidade</th>
+                        <th>Qtd. Contratada</th>
+                        <th>Qtd. Distratada</th>
+                        <th>Qtd. Ativa</th>
+                        <th>Nova Marca</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for item in itens_contexto %}
+                    <tr>
+                        <td style="text-align:center;">
+                            <input type="checkbox" name="selecionar_item" value="{{ item.item_contrato.id }}">
+                        </td>
+                        <td>
+                            <strong>{{ item.item_contrato.item.nome_item }}</strong>
+                        </td>
+                        <td>{{ item.marca_original }}</td>
+                        <td><strong>{{ item.marca_atual }}</strong></td>
+                        <td>{{ item.item_contrato.unidade }}</td>
+                        <td>{{ item.quantidade_contratada|quantidade_br }}</td>
+                        <td>{{ item.quantidade_distratada|quantidade_br }}</td>
+                        <td><strong>{{ item.quantidade_ativa|quantidade_br }}</strong></td>
+                        <td>
+                            <input class="input-marca" type="text" name="marca_nova_{{ item.item_contrato.id }}" placeholder="Nova marca">
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Registrar Troca de Marca
+            </button>
+        </div>
+    </form>
+    {% else %}
+    <div class="alert alert-error">
+        Este contrato não possui itens com quantidade ativa para troca de marca.
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Trocas de Marca Registradas</h2>
+
+    {% for troca in trocas_marca %}
+    <div class="troca-card">
+        <h3>Contrato {{ troca.contrato.numero_contrato }} — {{ troca.data_troca_marca|date:"d/m/Y" }}</h3>
+        <p>
+            <strong>Escola:</strong> {{ troca.contrato.escola.nome_escola }}<br>
+            <strong>Fornecedor:</strong> {{ troca.contrato.fornecedor.razao_social }}<br>
+            <strong>Justificativa:</strong> {{ troca.justificativa }}<br>
+            {% if troca.numero_termo_aditivo and troca.data_termo_aditivo %}
+            <span class="termo-status registrado">
+                Termo aditivo registrado: {{ troca.numero_termo_aditivo }} em {{ troca.data_termo_aditivo|date:"d/m/Y" }}
+            </span>
+            {% else %}
+            <span class="termo-status">
+                Termo aditivo ainda não registrado
+            </span>
+            {% endif %}
+        </p>
+
+        <div class="troca-acoes">
+            <a class="btn btn-primary" href="{% url 'documentos:registrar_termo_aditivo_marca' troca.id %}">
+                {% if troca.numero_termo_aditivo and troca.data_termo_aditivo %}
+                Editar Dados do Termo Aditivo
+                {% else %}
+                Registrar Termo Aditivo
+                {% endif %}
+            </a>
+
+            {% if troca.numero_termo_aditivo and troca.data_termo_aditivo %}
+            <a class="btn btn-success" href="{% url 'documentos:gerar_termo_aditivo_marca_word' troca.id %}">
+                Termo Word
+            </a>
+
+            <a class="btn btn-danger" href="{% url 'documentos:gerar_termo_aditivo_marca_pdf' troca.id %}">
+                Termo PDF
+            </a>
+            {% endif %}
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Qtd. Ativa</th>
+                        <th>Marca Anterior</th>
+                        <th>Nova Marca</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in troca.itens.all %}
+                    <tr>
+                        <td>{{ item.contrato_item.item.nome_item }}</td>
+                        <td>{{ item.quantidade_ativa|quantidade_br }}</td>
+                        <td>{{ item.marca_anterior }}</td>
+                        <td>{{ item.marca_nova }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% empty %}
+    <p>Nenhuma troca de marca registrada ainda.</p>
+    {% endfor %}
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const campoPregao = document.getElementById("id_pregao_filtro");
+        const campoEscola = document.getElementById("id_escola_filtro");
+        const campoFornecedor = document.getElementById("id_fornecedor_filtro");
+        const campoContrato = document.getElementById("id_contrato_filtro");
+
+        if (!campoPregao || !campoEscola || !campoFornecedor || !campoContrato) {
+            return;
+        }
+
+        function limparSelect(select, textoInicial) {
+            select.innerHTML = "";
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = textoInicial;
+            select.appendChild(option);
+        }
+
+        function adicionarOption(select, valor, texto, selecionado) {
+            const option = document.createElement("option");
+            option.value = valor;
+            option.textContent = texto;
+            if (selecionado) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        }
+
+        function carregarEscolas(pregaoId) {
+            if (!pregaoId) {
+                limparSelect(campoEscola, "Todas");
+                return Promise.resolve();
+            }
+
+            limparSelect(campoEscola, "Carregando escolas...");
+
+            return fetch(`/documentos/ajax/escolas-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar escolas.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    const escolaSelecionada = campoEscola.dataset.valorSelecionado || campoEscola.value;
+
+                    limparSelect(campoEscola, "Todas");
+
+                    data.escolas.forEach(function (escola) {
+                        let texto = escola.nome;
+
+                        if (escola.municipio) {
+                            texto += " - " + escola.municipio;
+
+                            if (escola.uf) {
+                                texto += "/" + escola.uf;
+                            }
+                        }
+
+                        adicionarOption(
+                            campoEscola,
+                            escola.id,
+                            texto,
+                            String(escola.id) === String(escolaSelecionada)
+                        );
+                    });
+
+                    campoEscola.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoEscola, "Erro ao carregar escolas");
+                });
+        }
+
+        function carregarFornecedores(pregaoId) {
+            if (!pregaoId) {
+                limparSelect(campoFornecedor, "Todos");
+                return Promise.resolve();
+            }
+
+            limparSelect(campoFornecedor, "Carregando fornecedores...");
+
+            return fetch(`/documentos/ajax/fornecedores-por-pregao/${pregaoId}/`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar fornecedores.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    const fornecedorSelecionado = campoFornecedor.dataset.valorSelecionado || campoFornecedor.value;
+
+                    limparSelect(campoFornecedor, "Todos");
+
+                    data.fornecedores.forEach(function (fornecedor) {
+                        let texto = fornecedor.nome;
+
+                        if (fornecedor.cnpj) {
+                            texto += " - " + fornecedor.cnpj;
+                        }
+
+                        adicionarOption(
+                            campoFornecedor,
+                            fornecedor.id,
+                            texto,
+                            String(fornecedor.id) === String(fornecedorSelecionado)
+                        );
+                    });
+
+                    campoFornecedor.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoFornecedor, "Erro ao carregar fornecedores");
+                });
+        }
+
+        function carregarContratos() {
+            const pregaoId = campoPregao.value || "";
+            const escolaId = campoEscola.value || "";
+            const fornecedorId = campoFornecedor.value || "";
+            const contratoSelecionado = campoContrato.dataset.valorSelecionado || campoContrato.value;
+
+            limparSelect(campoContrato, "Carregando contratos...");
+
+            const params = new URLSearchParams();
+
+            if (pregaoId) {
+                params.append("pregao", pregaoId);
+            }
+
+            if (escolaId) {
+                params.append("escola", escolaId);
+            }
+
+            if (fornecedorId) {
+                params.append("fornecedor", fornecedorId);
+            }
+
+            fetch(`/documentos/ajax/contratos-por-filtros/?${params.toString()}`)
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error("Erro ao buscar contratos.");
+                    }
+                    return response.json();
+                })
+                .then(function (data) {
+                    limparSelect(campoContrato, "Selecione");
+
+                    if (data.contratos.length === 0) {
+                        limparSelect(campoContrato, "Nenhum contrato encontrado");
+                        return;
+                    }
+
+                    data.contratos.forEach(function (contrato) {
+                        adicionarOption(
+                            campoContrato,
+                            contrato.id,
+                            contrato.texto,
+                            String(contrato.id) === String(contratoSelecionado)
+                        );
+                    });
+
+                    campoContrato.dataset.valorSelecionado = "";
+                })
+                .catch(function () {
+                    limparSelect(campoContrato, "Erro ao carregar contratos");
+                });
+        }
+
+        campoPregao.addEventListener("change", function () {
+            campoEscola.dataset.valorSelecionado = "";
+            campoFornecedor.dataset.valorSelecionado = "";
+            campoContrato.dataset.valorSelecionado = "";
+            limparSelect(campoContrato, "Selecione primeiro os filtros");
+
+            const pregaoId = this.value;
+
+            Promise.all([
+                carregarEscolas(pregaoId),
+                carregarFornecedores(pregaoId),
+            ]).then(function () {
+                carregarContratos();
+            });
+        });
+
+        campoEscola.addEventListener("change", function () {
+            campoContrato.dataset.valorSelecionado = "";
+            carregarContratos();
+        });
+
+        campoFornecedor.addEventListener("change", function () {
+            campoContrato.dataset.valorSelecionado = "";
+            carregarContratos();
+        });
+    });
+</script>
+
+{% endblock %}

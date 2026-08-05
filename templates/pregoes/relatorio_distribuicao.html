@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+
+{% block title %}Relatório de Distribuição | Sistema de Pregões{% endblock %}
+{% block page_title %}Relatório de Distribuição por Escola{% endblock %}
+{% block page_subtitle %}Confira se os quantitativos do pregão foram distribuídos corretamente entre as escolas{% endblock %}
+
+{% block content %}
+
+<style>
+    .print-header {
+        display: none;
+    }
+
+    .relatorio-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+    .relatorio-toolbar-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .item-relatorio {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 18px;
+        margin-bottom: 18px;
+        background: #ffffff;
+        page-break-inside: avoid;
+    }
+
+    .item-relatorio h3 {
+        margin-top: 0;
+        color: #0f2f57;
+    }
+
+    .resumo-distribuicao {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 15px 0;
+    }
+
+    .resumo-box {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 14px;
+    }
+
+    .resumo-label {
+        font-size: 13px;
+        color: #475569;
+        margin-bottom: 6px;
+    }
+
+    .resumo-valor {
+        font-size: 22px;
+        font-weight: 800;
+        color: #0f2f57;
+    }
+
+    .status-fechado {
+        border-left: 6px solid #198754;
+    }
+
+    .status-saldo {
+        border-left: 6px solid #ffc107;
+    }
+
+    .status-excedido {
+        border-left: 6px solid #dc3545;
+    }
+
+    .assinaturas-print {
+        display: none;
+    }
+
+    @media (max-width: 900px) {
+        .resumo-distribuicao {
+            grid-template-columns: 1fr;
+        }
+
+        .relatorio-toolbar {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+    }
+
+    @media print {
+        body {
+            background: white !important;
+        }
+
+        .sidebar,
+        .topbar,
+        .relatorio-toolbar,
+        .card.seletor-pregao,
+        .footer-space {
+            display: none !important;
+        }
+
+        .app {
+            display: block !important;
+            min-height: auto !important;
+        }
+
+        .main {
+            margin-left: 0 !important;
+            width: 100% !important;
+            min-height: auto !important;
+        }
+
+        .content {
+            padding: 0 !important;
+        }
+
+        .print-header {
+            display: block;
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #000;
+        }
+
+        .print-header h1 {
+            margin: 0 0 6px;
+            font-size: 20px;
+            color: #000;
+        }
+
+        .print-header h2 {
+            margin: 0;
+            font-size: 16px;
+            color: #000;
+        }
+
+        .card,
+        .item-relatorio,
+        .resumo-box {
+            box-shadow: none !important;
+            border-color: #444 !important;
+        }
+
+        .card {
+            padding: 12px !important;
+            margin-bottom: 12px !important;
+        }
+
+        .item-relatorio {
+            padding: 12px !important;
+            margin-bottom: 12px !important;
+            border-radius: 0 !important;
+        }
+
+        .resumo-distribuicao {
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .resumo-box {
+            padding: 8px;
+            border-radius: 0;
+        }
+
+        .resumo-label {
+            font-size: 11px;
+        }
+
+        .resumo-valor {
+            font-size: 16px;
+            color: #000;
+        }
+
+        table {
+            font-size: 11px;
+        }
+
+        th,
+        td {
+            padding: 5px !important;
+            border: 1px solid #444 !important;
+        }
+
+        th {
+            background: #e9ecef !important;
+            color: #000 !important;
+        }
+
+        .badge {
+            border: 1px solid #444;
+            color: #000 !important;
+            background: #fff !important;
+        }
+
+        .assinaturas-print {
+            display: flex;
+            justify-content: space-between;
+            gap: 40px;
+            margin-top: 60px;
+            page-break-inside: avoid;
+        }
+
+        .assinatura-print {
+            width: 45%;
+            text-align: center;
+            border-top: 1px solid #000;
+            padding-top: 8px;
+            font-size: 12px;
+        }
+    }
+</style>
+
+<div class="card seletor-pregao">
+    <h2>Selecionar Pregão</h2>
+
+    <form method="get">
+        <div class="form-group">
+            <label>Pregão</label>
+            <select name="pregao" required>
+                <option value="">Selecione um pregão</option>
+
+                {% for p in pregoes %}
+                <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                    Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <button class="btn btn-primary" type="submit">
+            Gerar Relatório
+        </button>
+    </form>
+</div>
+
+{% if pregao %}
+<div class="print-header">
+    <h1>Relatório de Distribuição por Escola</h1>
+    <h2>Pregão {{ pregao.numero }}/{{ pregao.ano }}</h2>
+</div>
+
+<div class="relatorio-toolbar">
+    <div>
+        <h2 style="margin: 0;">Relatório do Pregão {{ pregao.numero }}/{{ pregao.ano }}</h2>
+        <p style="margin: 4px 0 0; color: #475569;">
+            Conferência dos quantitativos distribuídos por escola.
+        </p>
+    </div>
+
+    <div class="relatorio-toolbar-actions">
+        <button class="btn btn-primary" type="button" onclick="window.print()">
+            Imprimir / Salvar em PDF
+        </button>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Dados do Pregão</h2>
+
+    <div class="grid grid-2">
+        <div>
+            <p>
+                <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+                <strong>Pregoeiro:</strong> {{ pregao.nome_pregoeiro }}<br>
+                <strong>CPF do Pregoeiro:</strong> {{ pregao.cpf_pregoeiro }}
+            </p>
+        </div>
+
+        <div>
+            <p>
+                <strong>Local:</strong> {{ pregao.local_pregao }}<br>
+                <strong>Data:</strong> {{ pregao.data_pregao }}<br>
+                <strong>Status:</strong> {{ pregao.get_status_display }}
+            </p>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Resumo Geral</h2>
+
+    <div class="resumo-distribuicao">
+        <div class="resumo-box">
+            <div class="resumo-label">Total de Itens</div>
+            <div class="resumo-valor">{{ total_itens }}</div>
+        </div>
+
+        <div class="resumo-box">
+            <div class="resumo-label">Fechados</div>
+            <div class="resumo-valor">{{ itens_fechados }}</div>
+        </div>
+
+        <div class="resumo-box">
+            <div class="resumo-label">Com Saldo</div>
+            <div class="resumo-valor">{{ itens_com_saldo }}</div>
+        </div>
+
+        <div class="resumo-box">
+            <div class="resumo-label">Excedidos</div>
+            <div class="resumo-valor">{{ itens_excedidos }}</div>
+        </div>
+    </div>
+</div>
+
+{% if relatorio %}
+{% for item in relatorio %}
+<div class="item-relatorio {{ item.status_linha }}">
+    <h3>{{ item.item.nome_item }}</h3>
+
+    <p>
+        <!-- <strong>Descrição:</strong> {{ item.item.descricao }}<br> -->
+        <strong>Unidade:</strong> {{ item.item.get_unidade_medida_display }}
+    </p>
+
+    <div class="resumo-distribuicao">
+        <div class="resumo-box">
+            <div class="resumo-label">Total do Pregão</div>
+            <div class="resumo-valor">{{ item.total_pregao }}</div>
+        </div>
+
+        <div class="resumo-box">
+            <div class="resumo-label">Total Distribuído</div>
+            <div class="resumo-valor">{{ item.total_distribuido }}</div>
+        </div>
+
+        <div class="resumo-box">
+            <div class="resumo-label">Saldo Restante</div>
+            <div class="resumo-valor">{{ item.saldo }}</div>
+        </div>
+
+        <div class="resumo-box">
+            <div class="resumo-label">Status</div>
+            <span class="badge {{ item.status_classe }}">
+                {{ item.status }}
+            </span>
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Escola</th>
+                    <th>Município</th>
+                    <th>Quantidade Distribuída</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for dist in item.distribuicoes %}
+                <tr>
+                    <td>{{ dist.escola.nome_escola }}</td>
+                    <td>{{ dist.escola.municipio.nome }}</td>
+                    <td>{{ dist.quantidade }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="3">
+                        Nenhuma escola recebeu quantidade deste item.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endfor %}
+
+<div class="assinaturas-print">
+    <div class="assinatura-print">
+        {{ pregao.nome_pregoeiro }}<br>
+        Pregoeiro
+    </div>
+
+    <div class="assinatura-print">
+        Responsável / Comissão
+    </div>
+</div>
+{% else %}
+<div class="alert alert-error">
+    Este pregão ainda não possui quantitativos cadastrados.
+</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,267 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Entrar | SIGA Escolar</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/favicon_siga_32.png' %}">
+    <link rel="icon" type="image/png" sizes="64x64" href="{% static 'img/favicon_siga_64.png' %}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static 'img/favicon_siga_180.png' %}">
+
+    <style>
+        body {
+            min-height: 100vh;
+            margin: 0;
+            background:
+                radial-gradient(circle at top left, rgba(34, 197, 94, 0.30), transparent 32%),
+                radial-gradient(circle at bottom right, rgba(37, 99, 235, 0.22), transparent 35%),
+                linear-gradient(135deg, #0f2f57 0%, #123a68 45%, #0b172a 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            font-family: Arial, sans-serif;
+        }
+
+        .login-wrapper {
+            width: min(1040px, 100%);
+            display: grid;
+            grid-template-columns: 1.05fr 0.95fr;
+            background: rgba(255, 255, 255, 0.98);
+            border-radius: 28px;
+            overflow: hidden;
+            box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34);
+        }
+
+        .login-info {
+            background:
+                radial-gradient(circle at top left, rgba(34, 197, 94, 0.24), transparent 30%),
+                linear-gradient(135deg, #0f2f57, #174a84);
+            color: #ffffff;
+            padding: 44px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 500px;
+        }
+
+        .login-logo-card {
+            background: rgba(255, 255, 255, 0.97);
+            border-radius: 22px;
+            padding: 18px;
+            margin-bottom: 26px;
+            box-shadow: 0 18px 46px rgba(2, 6, 23, 0.24);
+        }
+
+        .login-logo-card img {
+            width: 100%;
+            max-width: 410px;
+            height: auto;
+            display: block;
+        }
+
+        .login-info h1 {
+            margin: 0 0 12px;
+            font-size: 34px;
+            line-height: 1.1;
+            letter-spacing: -0.04em;
+        }
+
+        .login-info p {
+            margin: 0;
+            color: rgba(255, 255, 255, 0.84);
+            line-height: 1.65;
+            font-size: 15px;
+        }
+
+        .login-badges {
+            display: grid;
+            gap: 10px;
+            margin-top: 28px;
+        }
+
+        .login-badge {
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 14px;
+            padding: 12px 14px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .login-form-area {
+            padding: 50px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .login-form-area h2 {
+            margin: 0 0 6px;
+            color: #0f2f57;
+            font-size: 28px;
+        }
+
+        .login-subtitle {
+            margin: 0 0 28px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+
+        .login-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 18px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .login-form .form-group {
+            margin-bottom: 16px;
+        }
+
+        .login-form label {
+            display: block;
+            margin-bottom: 7px;
+            color: #334155;
+            font-weight: 800;
+            font-size: 13px;
+        }
+
+        .login-form input {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #cbd5e1;
+            border-radius: 13px;
+            padding: 13px 14px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .login-form input:focus {
+            border-color: #198754;
+            box-shadow: 0 0 0 4px rgba(25, 135, 84, 0.14);
+        }
+
+        .login-button {
+            width: 100%;
+            margin-top: 8px;
+            border: none;
+            border-radius: 14px;
+            padding: 14px 18px;
+            background: linear-gradient(135deg, #198754, #0d6efd);
+            color: #ffffff;
+            font-weight: 900;
+            font-size: 15px;
+            cursor: pointer;
+            box-shadow: 0 12px 28px rgba(13, 110, 253, 0.26);
+        }
+
+        .login-footer {
+            margin-top: 22px;
+            color: #64748b;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .system-name-mini {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 18px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: #ecfdf5;
+            color: #047857;
+            font-weight: 900;
+            font-size: 13px;
+        }
+
+        @media (max-width: 850px) {
+            .login-wrapper {
+                grid-template-columns: 1fr;
+            }
+
+            .login-info, .login-form-area {
+                padding: 34px;
+            }
+
+            .login-logo-card img {
+                max-width: 360px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-wrapper">
+        <section class="login-info">
+            <div>
+                <div class="login-logo-card">
+                    <img src="{% static 'img/logo_siga_escolar_login.png' %}" alt="SIGA Escolar - Sistema Integrado de Gestão da Alimentação Escolar">
+                </div>
+
+                <h1>Sistema Integrado de Gestão da Alimentação Escolar</h1>
+                <p>
+                    Plataforma para acompanhamento de certames, chamada pública,
+                    contratos, notas fiscais, saldos e documentos da alimentação escolar.
+                </p>
+
+                <div class="login-badges">
+                    <div class="login-badge">🔐 Acesso restrito a usuários autorizados</div>
+                    <div class="login-badge">🍎 Gestão da alimentação escolar</div>
+                    <div class="login-badge">📊 Controle de contratos, NF-e e saldos</div>
+                </div>
+            </div>
+
+            <p>Ambiente de desenvolvimento • SIGA Escolar</p>
+        </section>
+
+        <section class="login-form-area">
+            <div class="system-name-mini">SIGA Escolar</div>
+            <h2>Entrar</h2>
+            <p class="login-subtitle">Informe seu usuário e senha para acessar o sistema.</p>
+
+            {% if form.errors %}
+            <div class="login-error">
+                Usuário ou senha inválidos. Verifique os dados e tente novamente.
+            </div>
+            {% endif %}
+
+            {% if next %}
+            <form method="post" action="{% url 'login' %}?next={{ next }}" class="login-form">
+            {% else %}
+            <form method="post" action="{% url 'login' %}" class="login-form">
+            {% endif %}
+                {% csrf_token %}
+
+                <div class="form-group">
+                    <label for="{{ form.username.id_for_label }}">Usuário</label>
+                    {{ form.username }}
+                </div>
+
+                <div class="form-group">
+                    <label for="{{ form.password.id_for_label }}">Senha</label>
+                    {{ form.password }}
+                </div>
+
+                <button type="submit" class="login-button">Acessar SIGA Escolar</button>
+            </form>
+
+            <div class="login-footer">
+                Sistema Integrado de Gestão da Alimentação Escolar.
+            </div>
+        </section>
+    </div>
+</body>
+
+</html>
