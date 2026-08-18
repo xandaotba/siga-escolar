@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% load pregoes_extras %}
 
-{% block title %}Quantitativo por Pregão | Sistema de Pregões{% endblock %}
-{% block page_title %}Quantitativo por Pregão{% endblock %}
+{% block title %}Quantitativo por Certame | Sistema de Pregões{% endblock %}
+{% block page_title %}Quantitativo por Certame{% endblock %}
 {% block page_subtitle %}Informe os itens e quantidades totais que farão parte do pregão{% endblock %}
 
 {% block content %}
@@ -19,7 +19,7 @@
 
 <div class="card">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-        <h2>Selecionar Pregão</h2>
+        <h2>Selecionar Certame</h2>
 
         <a class="btn btn-primary" href="{% url 'importacoes:quantitativo_pregao' %}">
             Importar de Planilha
@@ -28,13 +28,13 @@
 
     <form method="get">
         <div class="form-group">
-            <label>Pregão</label>
+            <label>Certame</label>
             <select name="pregao" required>
-                <option value="">Selecione um pregão</option>
+                <option value="">Selecione um certame</option>
 
                 {% for p in pregoes %}
                 <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
-                    Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                    {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
                 </option>
                 {% endfor %}
             </select>
@@ -48,10 +48,10 @@
 
 {% if pregao %}
 <div class="card">
-    <h2>Itens do Pregão {{ pregao.numero }}/{{ pregao.ano }}</h2>
+    <h2>Itens do {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}</h2>
 
     <p>
-        Preencha apenas os itens que farão parte deste pregão.
+        Preencha apenas os itens que farão parte deste certame.
         Os itens em branco não serão gravados.
     </p>
 

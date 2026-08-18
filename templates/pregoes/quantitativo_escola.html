@@ -19,7 +19,7 @@
 
 <div class="card">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-        <h2>Selecionar Pregão e Escola</h2>
+        <h2>Selecionar Certame e Escola</h2>
 
         <a class="btn btn-primary" href="{% url 'importacoes:quantitativo_escola' %}">
             Importar de Planilha
@@ -29,13 +29,13 @@
     <form method="get">
         <div class="grid grid-2">
             <div class="form-group">
-                <label>Pregão</label>
+                <label>Certame</label>
                 <select name="pregao" id="id_pregao" required>
-                    <option value="">Selecione um pregão</option>
+                    <option value="">Selecione um certame</option>
 
                     {% for p in pregoes %}
                     <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
-                        Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                        {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
                     </option>
                     {% endfor %}
                 </select>
@@ -44,7 +44,7 @@
             <div class="form-group">
                 <label>Escola</label>
                 <select name="escola" id="id_escola" required>
-                    <option value="">Selecione primeiro o pregão</option>
+                    <option value="">Selecione primeiro o certame</option>
                 
                     {% for escola in escolas %}
                     <option value="{{ escola.id }}" {% if escola_selecionada and escola.id == escola_selecionada.id %}selected{% endif %}>
@@ -69,7 +69,7 @@
     <h2>Quantitativos da Escola</h2>
 
     <p>
-        <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+        <strong>Certame:</strong> {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}<br>
         <strong>Escola:</strong> {{ escola.nome_escola }}<br>
         <strong>Município:</strong> {{ escola.municipio.nome }}
     </p>
@@ -136,7 +136,7 @@
     {% else %}
     <div class="alert alert-error">
         Este pregão ainda não possui quantitativos cadastrados.
-        Primeiro cadastre os itens em “Quantitativo por Pregão”.
+        Primeiro cadastre os itens em “Quantitativo por Certame”.
     </div>
     {% endif %}
 </div>
@@ -163,7 +163,7 @@
 
         function carregarEscolasPorPregao(pregaoId) {
             if (!pregaoId) {
-                limparEscolas("Selecione primeiro o pregão");
+                limparEscolas("Selecione primeiro o certame");
                 return;
             }
 
@@ -184,7 +184,7 @@
                     optionInicial.value = "";
 
                     if (data.escolas.length === 0) {
-                        optionInicial.textContent = "Nenhuma escola encontrada para os municípios deste pregão";
+                        optionInicial.textContent = "Nenhuma escola encontrada para os municípios deste certame";
                     } else {
                         optionInicial.textContent = "Selecione a escola";
                     }

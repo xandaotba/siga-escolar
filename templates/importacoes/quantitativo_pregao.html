@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Importar Quantitativo por Pregão | Sistema de Pregões{% endblock %}
-{% block page_title %}Importar Quantitativo por Pregão{% endblock %}
+{% block title %}Importar Quantitativo por Certame | Sistema de Pregões{% endblock %}
+{% block page_title %}Importar Quantitativo por Certame{% endblock %}
 {% block page_subtitle %}Importe itens e quantidades totais do município para um pregão{% endblock %}
 
 {% block content %}
@@ -118,7 +118,7 @@
     <div class="passo-card">
         <div class="passo-numero">1</div>
         <h3>Selecione o pregão</h3>
-        <p>A importação só é permitida para pregões ainda não iniciados.</p>
+        <p>A importação só é permitida para certames ainda não iniciados.</p>
     </div>
 
     <div class="passo-card">
@@ -139,7 +139,7 @@
         <div>
             <h2>Importação do Quantitativo</h2>
             <p style="margin:0; color:#64748b;">
-                Escolha o pregão e envie a planilha com os itens e a quantidade total do município.
+                Escolha o certame e envie a planilha com os itens e a quantidade total do município.
             </p>
         </div>
 
@@ -154,12 +154,12 @@
 
         <div class="grid grid-2">
             <div class="form-group">
-                <label>Pregão</label>
+                <label>Certame</label>
                 <select name="pregao" required>
-                    <option value="">Selecione um pregão</option>
+                    <option value="">Selecione um certame</option>
                     {% for p in pregoes %}
                     <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
-                        Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                        {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
                     </option>
                     {% endfor %}
                 </select>
@@ -178,7 +178,7 @@
         <div class="form-group">
             <label style="display:flex; align-items:center; gap:8px;">
                 {{ form.atualizar_existentes }}
-                Atualizar quantitativos já existentes para este pregão
+                Atualizar quantitativos já existentes para este certame
             </label>
             {{ form.atualizar_existentes.errors }}
         </div>
@@ -189,7 +189,7 @@
             </button>
 
             <a class="btn btn-secondary" href="{% url 'pregoes:quantitativo_pregao' %}">
-                Voltar para Quantitativo por Pregão
+                Voltar para Quantitativo por Certame
             </a>
         </div>
     </form>
@@ -226,7 +226,7 @@
 
 {% if linhas %}
 <div class="card" style="margin-top:20px;">
-    <h2>Prévia da Importação{% if pregao %} — Pregão {{ pregao.numero }}/{{ pregao.ano }}{% endif %}</h2>
+    <h2>Prévia da Importação{% if pregao %} — {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}{% endif %}</h2>
 
     <div class="table-wrapper" style="margin-top:14px;">
         <table>

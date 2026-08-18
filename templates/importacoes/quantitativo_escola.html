@@ -118,7 +118,7 @@
     <div class="passo-card">
         <div class="passo-numero">1</div>
         <h3>Selecione o pregão</h3>
-        <p>A escola e os itens serão validados com base no pregão selecionado.</p>
+        <p>A escola e os itens serão validados com base no certame selecionado.</p>
     </div>
 
     <div class="passo-card">
@@ -139,7 +139,7 @@
         <div>
             <h2>Importação do Quantitativo por Escola</h2>
             <p style="margin:0; color:#64748b;">
-                Primeiro cadastre o quantitativo do pregão. Depois importe as quantidades por escola.
+                Primeiro cadastre o quantitativo do certame. Depois importe as quantidades por escola.
             </p>
         </div>
 
@@ -154,12 +154,12 @@
 
         <div class="grid grid-2">
             <div class="form-group">
-                <label>Pregão</label>
+                <label>Certame</label>
                 <select name="pregao" required>
-                    <option value="">Selecione um pregão</option>
+                    <option value="">Selecione um certame</option>
                     {% for p in pregoes %}
                     <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
-                        Pregão {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                        {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
                     </option>
                     {% endfor %}
                 </select>
@@ -226,7 +226,7 @@
 
 {% if linhas %}
 <div class="card" style="margin-top:20px;">
-    <h2>Prévia da Importação{% if pregao %} — Pregão {{ pregao.numero }}/{{ pregao.ano }}{% endif %}</h2>
+    <h2>Prévia da Importação{% if pregao %} — {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}{% endif %}</h2>
 
     <div class="table-wrapper" style="margin-top:14px;">
         <table>
