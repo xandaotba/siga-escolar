@@ -33,6 +33,13 @@
     .campo-oculto-fornecedor {
         display: none !important;
     }
+
+    #campo_fornecedor_me_epp input[type="checkbox"] {
+        width: auto !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+        flex: 0 0 auto;
+    }
 </style>
 
 
@@ -82,6 +89,29 @@
                     </div>
                 </div>
 
+                <div class="form-group campo-tipo-fornecedor" id="campo_fornecedor_me_epp">
+                    <label style="
+                        display:inline-flex;
+                        align-items:center;
+                        justify-content:flex-start;
+                        gap:8px;
+                        cursor:pointer;
+                        width:auto;
+                        margin:0;
+                    ">
+                        <span style="display:inline-flex; width:auto; flex:0 0 auto;">
+                            {{ form.fornecedor_me_epp }}
+                        </span>
+                        <span style="display:inline-block; width:auto;">
+                            Fornecedor ME/EPP
+                        </span>
+                    </label>
+                    {{ form.fornecedor_me_epp.errors }}
+                    <div class="texto-ajuda">
+                        Marque quando o fornecedor for Microempresa (ME) ou Empresa de Pequeno Porte (EPP).
+                    </div>
+                </div>
+
                 <div id="campos_agricultura_familiar">
                     <div class="grid grid-2">
                         <div class="form-group campo-tipo-fornecedor" id="campo_cpf_individual">
@@ -97,12 +127,21 @@
                         </div>
                     </div>
 
-                    <div class="form-group campo-tipo-fornecedor" id="campo_quantidade_caf_dap">
-                        <label>Quantidade de CAF/DAP vinculadas</label>
-                        {{ form.quantidade_caf_dap }}
-                        {{ form.quantidade_caf_dap.errors }}
-                        <div class="texto-ajuda">
-                            Para grupo formal/cooperativa, informe a quantidade de CAF/DAP vinculadas. Para fornecedor individual, o sistema considera automaticamente 1.
+                    <div class="grid grid-2">
+                        <div class="form-group campo-tipo-fornecedor" id="campo_quantidade_caf_dap">
+                            <label>Quantidade de CAF/DAP vinculadas</label>
+                            {{ form.quantidade_caf_dap }}
+                            {{ form.quantidade_caf_dap.errors }}
+                            <div class="texto-ajuda">
+                                Para grupo formal/cooperativa, informe a quantidade de CAF/DAP vinculadas. Para fornecedor individual, o sistema considera automaticamente 1.
+                            </div>
+                        </div>
+
+                        <div class="form-group campo-tipo-fornecedor" id="campo_caf_dap_juridica">
+                            <label>CAF/DAP Jurídica</label>
+                            {{ form.caf_dap_juridica }}
+                            {{ form.caf_dap_juridica.errors }}
+                            <div class="texto-ajuda">Obrigatório para Grupo Formal / Cooperativa.</div>
                         </div>
                     </div>
 
@@ -163,6 +202,35 @@
                 <label>CPF do Representante</label>
                 {{ form.cpf_representante }}
                 {{ form.cpf_representante.errors }}
+            </div>
+
+            <h3>Procurador</h3>
+
+            <div class="form-group">
+                <label>Nome do Procurador</label>
+                {{ form.procurador }}
+                {{ form.procurador.errors }}
+                <div class="texto-ajuda">Preenchimento opcional.</div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>RG do Procurador</label>
+                    {{ form.rg_procurador }}
+                    {{ form.rg_procurador.errors }}
+                </div>
+
+                <div class="form-group">
+                    <label>Órgão Expedidor do Procurador</label>
+                    {{ form.orgao_expedidor_procurador }}
+                    {{ form.orgao_expedidor_procurador.errors }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>CPF do Procurador</label>
+                {{ form.cpf_procurador }}
+                {{ form.cpf_procurador.errors }}
             </div>
 
             <h3>Contato e Dados Bancários</h3>
@@ -345,16 +413,20 @@
     function atualizarCamposAgriculturaFamiliar() {
         const tipo = document.getElementById("id_tipo_fornecedor_chamada") || document.querySelector('[name="tipo_fornecedor_chamada"]');
 
+        const campoMeEpp = document.getElementById("campo_fornecedor_me_epp");
         const campoCnpj = document.getElementById("campo_cnpj");
         const campoCpf = document.getElementById("campo_cpf_individual");
         const campoCafDap = document.getElementById("campo_caf_dap");
         const campoQtd = document.getElementById("campo_quantidade_caf_dap");
+        const campoCafDapJuridica = document.getElementById("campo_caf_dap_juridica");
         const blocoAgricultura = document.getElementById("campos_agricultura_familiar");
 
+        const inputMeEpp = document.getElementById("id_fornecedor_me_epp") || document.querySelector('[name="fornecedor_me_epp"]');
         const inputCnpj = document.getElementById("id_cnpj") || document.querySelector('[name="cnpj"]');
         const inputCpf = document.getElementById("id_cpf_fornecedor_individual") || document.querySelector('[name="cpf_fornecedor_individual"]');
         const inputCafDap = document.getElementById("id_caf_dap") || document.querySelector('[name="caf_dap"]');
         const inputQtd = document.getElementById("id_quantidade_caf_dap") || document.querySelector('[name="quantidade_caf_dap"]');
+        const inputCafDapJuridica = document.getElementById("id_caf_dap_juridica") || document.querySelector('[name="caf_dap_juridica"]');
         const limite = document.getElementById("limite_chamada_publica");
 
         if (!tipo) {
@@ -365,18 +437,22 @@
 
         if (valorTipo === "empresa_comum") {
             mostrarCampo(blocoAgricultura, false);
+            mostrarCampo(campoMeEpp, true);
             mostrarCampo(campoCnpj, true);
             mostrarCampo(campoCpf, false);
             mostrarCampo(campoCafDap, false);
             mostrarCampo(campoQtd, false);
+            mostrarCampo(campoCafDapJuridica, false);
 
             configurarObrigatorio(inputCnpj, true);
             configurarObrigatorio(inputCpf, false);
             configurarObrigatorio(inputCafDap, false);
             configurarObrigatorio(inputQtd, false);
+            configurarObrigatorio(inputCafDapJuridica, false);
 
             if (inputCpf) { inputCpf.value = ""; }
             if (inputCafDap) { inputCafDap.value = ""; }
+            if (inputCafDapJuridica) { inputCafDapJuridica.value = ""; }
             if (inputQtd && !inputQtd.value) { inputQtd.value = "1"; }
             if (limite) { limite.textContent = "-"; }
 
@@ -385,18 +461,23 @@
 
         if (valorTipo === "individual") {
             mostrarCampo(blocoAgricultura, true);
+            mostrarCampo(campoMeEpp, false);
             mostrarCampo(campoCnpj, false);
             mostrarCampo(campoCpf, true);
             mostrarCampo(campoCafDap, true);
             mostrarCampo(campoQtd, false);
+            mostrarCampo(campoCafDapJuridica, false);
 
             configurarObrigatorio(inputCnpj, false);
             configurarObrigatorio(inputCpf, true);
             configurarObrigatorio(inputCafDap, true);
             configurarObrigatorio(inputQtd, false);
+            configurarObrigatorio(inputCafDapJuridica, false);
 
+            if (inputMeEpp) { inputMeEpp.checked = false; }
             if (inputCnpj) { inputCnpj.value = ""; }
             if (inputQtd) { inputQtd.value = "1"; }
+            if (inputCafDapJuridica) { inputCafDapJuridica.value = ""; }
             if (limite) { limite.textContent = "R$ 40.000,00"; }
 
             return;
@@ -404,15 +485,18 @@
 
         if (valorTipo === "grupo_formal") {
             mostrarCampo(blocoAgricultura, true);
+            mostrarCampo(campoMeEpp, true);
             mostrarCampo(campoCnpj, true);
             mostrarCampo(campoCpf, false);
             mostrarCampo(campoCafDap, false);
             mostrarCampo(campoQtd, true);
+            mostrarCampo(campoCafDapJuridica, true);
 
             configurarObrigatorio(inputCnpj, true);
             configurarObrigatorio(inputCpf, false);
             configurarObrigatorio(inputCafDap, false);
             configurarObrigatorio(inputQtd, true);
+            configurarObrigatorio(inputCafDapJuridica, true);
 
             if (inputCpf) { inputCpf.value = ""; }
             if (inputCafDap) { inputCafDap.value = ""; }
@@ -439,6 +523,7 @@
     document.addEventListener("DOMContentLoaded", function () {
         const tipo = document.getElementById("id_tipo_fornecedor_chamada") || document.querySelector('[name="tipo_fornecedor_chamada"]');
         const inputQtd = document.getElementById("id_quantidade_caf_dap") || document.querySelector('[name="quantidade_caf_dap"]');
+        const inputCafDapJuridica = document.getElementById("id_caf_dap_juridica") || document.querySelector('[name="caf_dap_juridica"]');
 
         if (tipo) {
             tipo.addEventListener("change", atualizarCamposAgriculturaFamiliar);

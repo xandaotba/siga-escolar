@@ -740,18 +740,33 @@ def media_precos(request):
             )
             return redirect("pregoes:media_precos")
 
-        atualizados = 0
         erros = []
+        atualizados = 0
 
+        # Percentual único do certame
+        percentual_texto = request.POST.get("percentual_alerta_media", "").strip()
+
+        if percentual_texto:
+            percentual_texto = percentual_texto.replace(",", ".")
+
+            try:
+                percentual_alerta = Decimal(percentual_texto)
+            except InvalidOperation:
+                erros.append("O percentual de alerta do certame é inválido.")
+                percentual_alerta = None
+
+            if percentual_alerta is not None:
+                if percentual_alerta < 0:
+                    erros.append("O percentual de alerta do certame não pode ser negativo.")
+                elif percentual_alerta > 100:
+                    erros.append("O percentual de alerta do certame não pode ser maior que 100%.")
+        else:
+            percentual_alerta = Decimal("50")
+
+        # Médias continuam sendo individuais por item
         for item_pregao in itens_pregao:
             media_texto = request.POST.get(f"media_preco_{item_pregao.id}", "").strip()
-            percentual_texto = request.POST.get(
-                f"percentual_alerta_media_{item_pregao.id}",
-                "",
-            ).strip()
-
             media_preco = None
-            percentual_alerta = item_pregao.percentual_alerta_media or Decimal("25")
 
             if media_texto:
                 media_texto = media_texto.replace(".", "").replace(",", ".")
@@ -770,33 +785,8 @@ def media_precos(request):
                     )
                     continue
 
-            if percentual_texto:
-                percentual_texto = percentual_texto.replace(",", ".")
-
-                try:
-                    percentual_alerta = Decimal(percentual_texto)
-                except InvalidOperation:
-                    erros.append(
-                        f"O percentual de alerta do item '{item_pregao.item.nome_item}' é inválido."
-                    )
-                    continue
-
-                if percentual_alerta < 0:
-                    erros.append(
-                        f"O percentual de alerta do item '{item_pregao.item.nome_item}' não pode ser negativo."
-                    )
-                    continue
-            else:
-                percentual_alerta = Decimal("25")
-
             item_pregao.media_preco = media_preco
-            item_pregao.percentual_alerta_media = percentual_alerta
-            item_pregao.save(
-                update_fields=[
-                    "media_preco",
-                    "percentual_alerta_media",
-                ]
-            )
+            item_pregao.save(update_fields=["media_preco"])
             atualizados += 1
 
         if erros:
@@ -805,9 +795,13 @@ def media_precos(request):
 
             return redirect(f"{request.path}?pregao={pregao.id}")
 
+        pregao.percentual_alerta_media = percentual_alerta
+        pregao.save(update_fields=["percentual_alerta_media", "atualizado_em"])
+
         messages.success(
             request,
-            f"Médias de preços salvas com sucesso. Itens atualizados: {atualizados}.",
+            f"Médias de preços salvas com sucesso. Itens atualizados: {atualizados}. "
+            f"Percentual de alerta do certame: {percentual_alerta:.2f}%.",
         )
 
         return redirect(f"{request.path}?pregao={pregao.id}")

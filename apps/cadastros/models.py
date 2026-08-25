@@ -100,6 +100,12 @@ class Fornecedor(AtivoModel):
         help_text="Classificação usada especialmente na Chamada Pública da Agricultura Familiar.",
     )
 
+    fornecedor_me_epp = models.BooleanField(
+        "Fornecedor ME/EPP",
+        default=False,
+        help_text="Marque quando o fornecedor for Microempresa (ME) ou Empresa de Pequeno Porte (EPP).",
+    )
+
     razao_social = models.CharField("Razão Social / Nome do Fornecedor", max_length=255)
     cnpj = models.CharField(
         "CNPJ",
@@ -127,6 +133,12 @@ class Fornecedor(AtivoModel):
         default=1,
         help_text="Para grupo formal/cooperativa, informe a quantidade de CAF/DAP vinculadas.",
     )
+    caf_dap_juridica = models.CharField(
+        "CAF/DAP Jurídica",
+        max_length=50,
+        blank=True,
+        help_text="Obrigatória para grupo formal/cooperativa.",
+    )
 
     endereco = models.CharField("Endereço", max_length=255)
     telefone = models.CharField("Telefone", max_length=30, blank=True)
@@ -137,6 +149,19 @@ class Fornecedor(AtivoModel):
     cpf_representante = models.CharField(
         "CPF do Representante",
         max_length=14,
+        validators=[validar_cpf],
+    )
+    procurador = models.CharField("Procurador", max_length=255, blank=True)
+    rg_procurador = models.CharField("RG do Procurador", max_length=50, blank=True)
+    orgao_expedidor_procurador = models.CharField(
+        "Órgão Expedidor do Procurador",
+        max_length=50,
+        blank=True,
+    )
+    cpf_procurador = models.CharField(
+        "CPF do Procurador",
+        max_length=14,
+        blank=True,
         validators=[validar_cpf],
     )
 
@@ -157,6 +182,8 @@ class Fornecedor(AtivoModel):
         if self.tipo_fornecedor_chamada == self.TIPO_INDIVIDUAL:
             self.cnpj = None
             self.quantidade_caf_dap = 1
+            self.caf_dap_juridica = ""
+            self.fornecedor_me_epp = False
 
             if not self.cpf_fornecedor_individual:
                 raise ValidationError("Informe o CPF do fornecedor individual.")
@@ -178,9 +205,13 @@ class Fornecedor(AtivoModel):
             if not self.quantidade_caf_dap or self.quantidade_caf_dap < 1:
                 raise ValidationError("Informe uma quantidade válida de CAF/DAP vinculadas ao grupo formal/cooperativa.")
 
+            if not self.caf_dap_juridica:
+                raise ValidationError("Informe o número da CAF/DAP Jurídica do grupo formal/cooperativa.")
+
         else:
             self.cpf_fornecedor_individual = ""
             self.caf_dap = ""
+            self.caf_dap_juridica = ""
 
             if not self.cnpj:
                 raise ValidationError("Informe o CNPJ da empresa comum.")

@@ -6,17 +6,23 @@ class FornecedorForm(forms.ModelForm):
         model = Fornecedor
         fields = [
             "tipo_fornecedor_chamada",
+            "fornecedor_me_epp",
             "razao_social",
             "cnpj",
             "cpf_fornecedor_individual",
             "caf_dap",
             "quantidade_caf_dap",
+            "caf_dap_juridica",
             "endereco",
             "telefone",
             "representante_legal",
             "rg_representante",
             "orgao_expedidor_representante",
             "cpf_representante",
+            "procurador",
+            "rg_procurador",
+            "orgao_expedidor_procurador",
+            "cpf_procurador",
             "email",
             "nome_banco",
             "agencia",
@@ -27,17 +33,23 @@ class FornecedorForm(forms.ModelForm):
 
         widgets = {
             "tipo_fornecedor_chamada": forms.Select(attrs={"id": "id_tipo_fornecedor_chamada"}),
+            "fornecedor_me_epp": forms.CheckboxInput(attrs={"id": "id_fornecedor_me_epp"}),
             "razao_social": forms.TextInput(attrs={"placeholder": "Razão social ou nome do fornecedor"}),
             "cnpj": forms.TextInput(attrs={"placeholder": "00.000.000/0000-00", "id": "id_cnpj"}),
             "cpf_fornecedor_individual": forms.TextInput(attrs={"placeholder": "000.000.000-00"}),
             "caf_dap": forms.TextInput(attrs={"placeholder": "Número do CAF/DAP"}),
             "quantidade_caf_dap": forms.NumberInput(attrs={"min": "1", "placeholder": "1"}),
+            "caf_dap_juridica": forms.TextInput(attrs={"placeholder": "Número da CAF/DAP Jurídica"}),
             "endereco": forms.TextInput(attrs={"placeholder": "Endereço completo"}),
             "telefone": forms.TextInput(attrs={"placeholder": "(00) 00000-0000"}),
             "representante_legal": forms.TextInput(attrs={"placeholder": "Nome do representante legal"}),
             "rg_representante": forms.TextInput(attrs={"placeholder": "RG do representante"}),
             "orgao_expedidor_representante": forms.TextInput(attrs={"placeholder": "Órgão expedidor"}),
             "cpf_representante": forms.TextInput(attrs={"placeholder": "000.000.000-00"}),
+            "procurador": forms.TextInput(attrs={"placeholder": "Nome do procurador (opcional)"}),
+            "rg_procurador": forms.TextInput(attrs={"placeholder": "RG do procurador (opcional)"}),
+            "orgao_expedidor_procurador": forms.TextInput(attrs={"placeholder": "Órgão expedidor (opcional)"}),
+            "cpf_procurador": forms.TextInput(attrs={"placeholder": "000.000.000-00 (opcional)"}),
             "email": forms.EmailInput(attrs={"placeholder": "email@exemplo.com"}),
             "nome_banco": forms.TextInput(attrs={"placeholder": "Nome do banco"}),
             "agencia": forms.TextInput(attrs={"placeholder": "Agência"}),
@@ -55,6 +67,7 @@ class FornecedorForm(forms.ModelForm):
             "cpf_fornecedor_individual",
             "caf_dap",
             "quantidade_caf_dap",
+            "caf_dap_juridica",
         ]
 
         for campo in campos_condicionais:
@@ -64,6 +77,16 @@ class FornecedorForm(forms.ModelForm):
         if "quantidade_caf_dap" in self.fields:
             self.fields["quantidade_caf_dap"].initial = self.fields["quantidade_caf_dap"].initial or 1
 
+        # Dados do procurador são sempre opcionais.
+        for campo in [
+            "procurador",
+            "rg_procurador",
+            "orgao_expedidor_procurador",
+            "cpf_procurador",
+        ]:
+            if campo in self.fields:
+                self.fields[campo].required = False
+
     def clean(self):
         cleaned_data = super().clean()
         tipo = cleaned_data.get("tipo_fornecedor_chamada")
@@ -71,10 +94,13 @@ class FornecedorForm(forms.ModelForm):
         cpf_individual = cleaned_data.get("cpf_fornecedor_individual")
         caf_dap = cleaned_data.get("caf_dap")
         quantidade_caf_dap = cleaned_data.get("quantidade_caf_dap") or 1
+        caf_dap_juridica = cleaned_data.get("caf_dap_juridica")
 
         if tipo == Fornecedor.TIPO_INDIVIDUAL:
             cleaned_data["cnpj"] = None
             cleaned_data["quantidade_caf_dap"] = 1
+            cleaned_data["caf_dap_juridica"] = ""
+            cleaned_data["fornecedor_me_epp"] = False
 
             if not cpf_individual:
                 self.add_error("cpf_fornecedor_individual", "Informe o CPF do fornecedor individual.")
@@ -92,9 +118,13 @@ class FornecedorForm(forms.ModelForm):
             if quantidade_caf_dap < 1:
                 self.add_error("quantidade_caf_dap", "Informe uma quantidade válida de CAF/DAP vinculadas.")
 
+            if not caf_dap_juridica:
+                self.add_error("caf_dap_juridica", "Informe o número da CAF/DAP Jurídica do grupo formal/cooperativa.")
+
         else:
             cleaned_data["cpf_fornecedor_individual"] = ""
             cleaned_data["caf_dap"] = ""
+            cleaned_data["caf_dap_juridica"] = ""
 
             if not cnpj:
                 self.add_error("cnpj", "Informe o CNPJ da empresa comum.")

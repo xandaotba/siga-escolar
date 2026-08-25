@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+
+{% block title %}Importar Média de Preços | Sistema de Pregões{% endblock %}
+{% block page_title %}Importar Média de Preços{% endblock %}
+{% block page_subtitle %}Importe as médias de referência dos itens por planilha Excel{% endblock %}
+
+{% block content %}
+
+<style>
+    .importacao-passos {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .passo-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .passo-numero {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: #0d6efd;
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        margin-bottom: 10px;
+    }
+
+    .passo-card h3 {
+        margin: 0 0 6px;
+        color: #0f2f57;
+    }
+
+    .passo-card p {
+        margin: 0;
+        color: #64748b;
+        line-height: 1.5;
+    }
+
+    .resumo-importacao {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+    .resumo-importacao-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .resumo-importacao-label {
+        color: #64748b;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+
+    .resumo-importacao-valor {
+        font-size: 24px;
+        color: #0f2f57;
+        font-weight: 900;
+    }
+
+    .badge-importacao {
+        display: inline-block;
+        padding: 5px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 900;
+    }
+
+    .badge-atualizar {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    .badge-erro {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+
+    .badge-ignorar {
+        background: #f1f5f9;
+        color: #475569;
+    }
+
+    @media (max-width: 900px) {
+        .importacao-passos,
+        .resumo-importacao {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% elif message.tags == "warning" %}
+            <div class="alert alert-warning">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="importacao-passos">
+    <div class="passo-card">
+        <div class="passo-numero">1</div>
+        <h3>Selecione o certame</h3>
+        <p>O modelo pode ser baixado já com os itens do certame preenchidos.</p>
+    </div>
+
+    <div class="passo-card">
+        <div class="passo-numero">2</div>
+        <h3>Preencha as médias</h3>
+        <p>Informe somente a média de preço de cada item na planilha Excel.</p>
+    </div>
+
+    <div class="passo-card">
+        <div class="passo-numero">3</div>
+        <h3>Valide e confirme</h3>
+        <p>O sistema confere os itens antes de gravar as médias no certame.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display:flex; justify-content:space-between; gap:14px; align-items:center; flex-wrap:wrap;">
+        <div>
+            <h2>Importação de Média de Preços</h2>
+            <p style="margin:0; color:#64748b;">
+                O percentual de alerta não é importado. Ele continua sendo definido uma única vez na tela de Média de Preços do certame.
+            </p>
+        </div>
+
+        <a class="btn btn-secondary"
+           href="{% url 'importacoes:modelo_media_precos' %}{% if pregao %}?pregao={{ pregao.id }}{% endif %}">
+            Baixar Modelo Excel
+        </a>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" style="margin-top:18px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="validar">
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" required>
+                    <option value="">Selecione um certame</option>
+                    {% for p in pregoes %}
+                        <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                            {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} — {{ p.get_status_display }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.arquivo.label }}</label>
+                {{ form.arquivo }}
+                {% if form.arquivo.help_text %}
+                    <small style="color:#64748b;">{{ form.arquivo.help_text }}</small>
+                {% endif %}
+                {{ form.arquivo.errors }}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Validar Planilha
+            </button>
+
+            <a class="btn btn-secondary"
+               href="{% url 'pregoes:media_precos' %}{% if pregao %}?pregao={{ pregao.id }}{% endif %}">
+                Voltar para Média de Preços
+            </a>
+        </div>
+    </form>
+</div>
+
+{% if resumo %}
+<div class="resumo-importacao" style="margin-top:20px;">
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas lidas</div>
+        <div class="resumo-importacao-valor">{{ resumo.total }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas válidas</div>
+        <div class="resumo-importacao-valor">{{ resumo.validos }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Linhas com erro</div>
+        <div class="resumo-importacao-valor">{{ resumo.erros }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Atualizar</div>
+        <div class="resumo-importacao-valor">{{ resumo.atualizar }}</div>
+    </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Ignorados</div>
+        <div class="resumo-importacao-valor">{{ resumo.ignorados|default:0 }}</div>
+    </div>
+</div>
+{% endif %}
+
+{% if linhas %}
+<div class="card" style="margin-top:20px;">
+    <h2>
+        Prévia da Importação
+        {% if pregao %}— {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}{% endif %}
+    </h2>
+
+    <div class="alert alert-warning" style="margin-top:12px;">
+        Para uma linha com erro que você não deseja importar, marque <strong>Não importar</strong>.
+        O sistema ignorará essa linha e continuará a importação das demais.
+    </div>
+
+    <div class="table-wrapper" style="margin-top:14px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Linha</th>
+                    <th>Ação</th>
+                    <th>Item informado</th>
+                    <th>Correção do Item</th>
+                    <th>Média de Preço</th>
+                    <th>Erros</th>
+                    <th>Não importar</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.linha }}</td>
+                    <td>
+                        {% if linha.acao == "Atualizar" %}
+                            <span class="badge-importacao badge-atualizar">Atualizar</span>
+                        {% elif linha.acao == "Ignorar" %}
+                            <span class="badge-importacao badge-ignorar">Ignorar</span>
+                        {% else %}
+                            <span class="badge-importacao badge-erro">Erro</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ linha.dados.item_texto }}</td>
+                    <td>
+                        {% if linha.erro_item %}
+                            {% if linha.item_opcoes %}
+                                <select name="item_corrigido_{{ linha.linha }}" form="form-confirmar-importacao-media">
+                                    <option value="">Selecione um item deste certame</option>
+                                    {% for item in linha.item_opcoes %}
+                                        <option value="{{ item.id }}">
+                                            {{ item.nome }} — {{ item.unidade }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                                <div style="font-size:12px; color:#64748b; margin-top:4px;">
+                                    São exibidos somente os itens vinculados ao certame selecionado.
+                                </div>
+                            {% else %}
+                                <span style="color:#991b1b; font-weight:800;">
+                                    Nenhum item cadastrado.
+                                </span>
+                            {% endif %}
+                        {% elif linha.dados.item_corrigido_nome %}
+                            <strong>{{ linha.dados.item_corrigido_nome }}</strong>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        R$ {{ linha.dados.media_preco }}
+                    </td>
+                    <td>
+                        {% if linha.erros %}
+                            <ul style="margin:0; padding-left:18px;">
+                                {% for erro in linha.erros %}
+                                    <li>{{ erro }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td style="text-align:center;">
+                        {% if linha.erros %}
+                            <label style="display:inline-flex; align-items:center; gap:7px; cursor:pointer; white-space:nowrap;">
+                                <input
+                                    type="checkbox"
+                                    name="ignorar_linha_{{ linha.linha }}"
+                                    form="form-confirmar-importacao-media"
+                                    {% if linha.ignorar %}checked{% endif %}
+                                >
+                                <span>Não importar</span>
+                            </label>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <form method="post" id="form-confirmar-importacao-media" style="margin-top:18px;">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="confirmar">
+        <input type="hidden" name="pregao" value="{{ pregao.id }}">
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Confirmar Importação
+            </button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}

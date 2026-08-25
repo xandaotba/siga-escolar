@@ -15,6 +15,8 @@ urlpatterns = [
     path("quantitativo-pregao/modelo/", views.baixar_modelo_quantitativo_pregao, name="modelo_quantitativo_pregao"),
     path("quantitativo-escola/", views.importar_quantitativo_escola, name="quantitativo_escola"),
     path("quantitativo-escola/modelo/", views.baixar_modelo_quantitativo_escola, name="modelo_quantitativo_escola"),
+    path("media-precos/", views.importar_media_precos, name="media_precos"),
+    path("media-precos/modelo/", views.baixar_modelo_media_precos, name="modelo_media_precos"),
     path("exportacoes/", views.exportacoes, name="exportacoes"),
     path("exportacoes/backup-completo/", views.baixar_backup_completo, name="backup_completo"),
 ]

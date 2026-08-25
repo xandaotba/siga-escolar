@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 from apps.cadastros.models import Escola, Fornecedor, Item, Municipio, UnidadeMedida, validar_cnpj, validar_cpf
 
 from .forms import ImportacaoPlanilhaForm
-from apps.pregoes.models import Pregao, QuantitativoEscola, QuantitativoPregao
+from apps.pregoes.models import Pregao, PregaoItem, QuantitativoEscola, QuantitativoPregao
 
 
 CABECALHOS_FORNECEDORES = [
@@ -3201,6 +3201,667 @@ def criar_backup_completo_workbook(usuario=None):
     workbook.active = 0
 
     return workbook
+
+
+# ============================================================
+# IMPORTAÇÃO DE MÉDIA DE PREÇOS
+# ============================================================
+
+CABECALHOS_MEDIA_PRECOS = [
+    "ITEM",
+    "MÉDIA DE PREÇO",
+]
+
+
+def validar_cabecalho_planilha_media_precos(linha):
+    encontrados = cabecalhos_normalizados(linha)
+    return encontrados[:len(CABECALHOS_MEDIA_PRECOS)] == CABECALHOS_MEDIA_PRECOS
+
+
+def garantir_itens_pregao_para_importacao_media(pregao):
+    """
+    Garante que os PregaoItem existam antes da importação das médias,
+    usando a mesma regra da tela manual de Média de Preços:
+    só cria os itens se houver quantitativo por escola para o certame.
+    """
+    if PregaoItem.objects.filter(pregao=pregao).exists():
+        return True
+
+    existe_quantitativo_escola = QuantitativoEscola.objects.filter(
+        pregao=pregao
+    ).exists()
+
+    if not existe_quantitativo_escola:
+        return False
+
+    quantitativos_pregao = (
+        QuantitativoPregao.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("item__nome_item")
+    )
+
+    ordem = 1
+
+    for qp in quantitativos_pregao:
+        PregaoItem.objects.get_or_create(
+            pregao=pregao,
+            item=qp.item,
+            defaults={
+                "ordem": ordem,
+                "quantidade_total": qp.quantidade,
+            },
+        )
+        ordem += 1
+
+    return PregaoItem.objects.filter(pregao=pregao).exists()
+
+
+def opcoes_item_certame_para_correcao(texto_item, pregao):
+    """
+    Retorna somente itens que pertencem ao certame selecionado.
+    Mantém os itens mais parecidos com o texto informado no topo da lista.
+    """
+    itens_pregao = (
+        PregaoItem.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("ordem", "item__nome_item")
+    )
+
+    itens = [registro.item for registro in itens_pregao]
+
+    texto_normalizado = normalizar_texto_comparacao(texto_item)
+
+    mapa_normalizado = {
+        normalizar_texto_comparacao(item.nome_item): item
+        for item in itens
+    }
+
+    sugestoes = set(
+        get_close_matches(
+            texto_normalizado,
+            list(mapa_normalizado.keys()),
+            n=8,
+            cutoff=0.45,
+        )
+    )
+
+    itens_ordenados = sorted(
+        itens,
+        key=lambda item: (
+            0 if normalizar_texto_comparacao(item.nome_item) in sugestoes else 1,
+            item.nome_item,
+        ),
+    )
+
+    return [
+        {
+            "id": item.id,
+            "nome": item.nome_item,
+            "unidade": item.get_unidade_medida_display(),
+        }
+        for item in itens_ordenados
+    ]
+
+
+def montar_linha_media_precos(numero_linha, valores, pregao):
+    dados = dict(zip(CABECALHOS_MEDIA_PRECOS, valores))
+
+    item_texto = texto_celula(dados.get("ITEM"))
+    media_preco = decimal_planilha(dados.get("MÉDIA DE PREÇO"))
+
+    erros = []
+    erro_item = False
+    item_opcoes = []
+    item = None
+    item_pregao = None
+
+    if not item_texto:
+        erros.append("Item é obrigatório.")
+
+    if media_preco is None:
+        erros.append("Média de preço é obrigatória e deve ser numérica.")
+    elif media_preco <= 0:
+        erros.append("Média de preço deve ser maior que zero.")
+
+    if item_texto:
+        item = buscar_item_existente(item_texto)
+
+        if not item:
+            erro_item = True
+            item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
+            erros.append(
+                "Item não encontrado no sistema. Selecione o item correto na coluna Correção."
+            )
+        else:
+            item_pregao = PregaoItem.objects.filter(
+                pregao=pregao,
+                item=item,
+            ).first()
+
+            if not item_pregao:
+                erro_item = True
+                item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
+                erros.append(
+                    "O item existe no cadastro, mas não pertence ao certame selecionado. "
+                    "Selecione um item correto do certame na coluna Correção ou marque Não importar."
+                )
+
+    acao = "Atualizar" if item_pregao else "Erro"
+    valido = not erros
+
+    return {
+        "linha": numero_linha,
+        "valido": valido,
+        "acao": acao if valido else "Erro",
+        "erros": erros,
+        "erro_item": erro_item,
+        "item_opcoes": item_opcoes,
+        "dados": {
+            "item_texto": item_texto,
+            "item_id": item.id if item else "",
+            "item_pregao_id": item_pregao.id if item_pregao else "",
+            "item_corrigido_id": "",
+            "item_corrigido_nome": "",
+            "media_preco": str(media_preco) if media_preco is not None else "",
+        },
+    }
+
+
+def ler_planilha_media_precos(arquivo, pregao):
+    workbook = load_workbook(arquivo, data_only=True)
+    sheet = workbook.active
+
+    primeira_linha = [cell.value for cell in sheet[1]]
+
+    if not validar_cabecalho_planilha_media_precos(primeira_linha):
+        raise ValueError(
+            "O cabeçalho da planilha não corresponde ao modelo esperado. "
+            "Baixe o modelo novamente e mantenha as colunas ITEM e MÉDIA DE PREÇO."
+        )
+
+    linhas = []
+    itens_lidos = set()
+
+    for numero_linha in range(2, sheet.max_row + 1):
+        valores = [
+            sheet.cell(row=numero_linha, column=coluna).value
+            for coluna in range(1, len(CABECALHOS_MEDIA_PRECOS) + 1)
+        ]
+
+        if all(texto_celula(valor) == "" for valor in valores):
+            continue
+
+        linha = montar_linha_media_precos(
+            numero_linha,
+            valores,
+            pregao,
+        )
+
+        item_chave = (
+            linha["dados"].get("item_id")
+            or normalizar_texto_comparacao(linha["dados"].get("item_texto"))
+        )
+
+        if item_chave:
+            if item_chave in itens_lidos:
+                linha["valido"] = False
+                linha["acao"] = "Erro"
+                linha["erros"].append(
+                    "Item duplicado dentro da própria planilha."
+                )
+            else:
+                itens_lidos.add(item_chave)
+
+        linhas.append(linha)
+
+    return linhas
+
+
+def criar_modelo_media_precos_workbook(pregao=None):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Média de Preços"
+
+    sheet.append(CABECALHOS_MEDIA_PRECOS)
+
+    if pregao:
+        garantir_itens_pregao_para_importacao_media(pregao)
+
+        itens_pregao = (
+            PregaoItem.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("ordem", "item__nome_item")
+        )
+
+        for item_pregao in itens_pregao:
+            sheet.append([
+                item_pregao.item.nome_item,
+                (
+                    float(item_pregao.media_preco)
+                    if item_pregao.media_preco is not None
+                    else None
+                ),
+            ])
+    else:
+        sheet.append([
+            "ARROZ BRANCO",
+            7.50,
+        ])
+
+    sheet.freeze_panes = "A2"
+
+    fill_header = PatternFill("solid", fgColor="0F2F57")
+    font_header = Font(color="FFFFFF", bold=True)
+    border = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+
+    for cell in sheet[1]:
+        cell.fill = fill_header
+        cell.font = font_header
+        cell.border = border
+        cell.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+            wrap_text=True,
+        )
+
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.border = border
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    sheet.column_dimensions["A"].width = 48
+    sheet.column_dimensions["B"].width = 22
+    sheet.row_dimensions[1].height = 32
+
+    for cell in sheet["B"][1:]:
+        cell.number_format = 'R$ #,##0.00'
+
+    return workbook
+
+
+@login_required
+@user_passes_test(usuario_pode_importar, login_url="dashboard")
+def baixar_modelo_media_precos(request):
+    pregao = None
+    pregao_id = request.GET.get("pregao")
+
+    if pregao_id:
+        pregao = Pregao.objects.filter(id=pregao_id).first()
+
+    workbook = criar_modelo_media_precos_workbook(pregao)
+    arquivo = BytesIO()
+    workbook.save(arquivo)
+    arquivo.seek(0)
+
+    nome_arquivo = "modelo_importacao_media_precos.xlsx"
+
+    if pregao:
+        nome_arquivo = (
+            f"media_precos_{pregao.numero}_{pregao.ano}.xlsx"
+            .replace("/", "-")
+            .replace("\\", "-")
+        )
+
+    response = HttpResponse(
+        arquivo.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="{nome_arquivo}"'
+    )
+
+    return response
+
+
+@login_required
+@user_passes_test(usuario_pode_importar, login_url="dashboard")
+def importar_media_precos(request):
+    linhas = []
+    resumo = None
+
+    pregoes = Pregao.objects.filter(
+        status__in=[
+            Pregao.STATUS_NAO_INICIADO,
+            Pregao.STATUS_EM_ANDAMENTO,
+        ]
+    ).order_by("-ano", "-numero")
+
+    pregao = None
+    pregao_id = request.POST.get("pregao") or request.GET.get("pregao")
+
+    if pregao_id:
+        pregao = Pregao.objects.filter(id=pregao_id).first()
+
+    if request.method == "POST":
+        acao = request.POST.get("acao")
+
+        if not pregao:
+            messages.error(request, "Selecione um certame válido.")
+            return redirect("importacoes:media_precos")
+
+        if pregao.status not in [
+            Pregao.STATUS_NAO_INICIADO,
+            Pregao.STATUS_EM_ANDAMENTO,
+        ]:
+            messages.error(
+                request,
+                "Só é possível importar médias em certames não iniciados ou em andamento.",
+            )
+            return redirect("importacoes:media_precos")
+
+        if not garantir_itens_pregao_para_importacao_media(pregao):
+            messages.error(
+                request,
+                "Não foi possível localizar itens para este certame. "
+                "Cadastre primeiro o quantitativo do certame e o quantitativo por escola.",
+            )
+            return redirect(
+                f"{request.path}?pregao={pregao.id}"
+            )
+
+        if acao == "validar":
+            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
+
+            if form.is_valid():
+                arquivo = form.cleaned_data["arquivo"]
+
+                try:
+                    linhas = ler_planilha_media_precos(
+                        arquivo,
+                        pregao,
+                    )
+                except Exception as erro:
+                    messages.error(request, str(erro))
+                    linhas = []
+
+                if linhas:
+                    validos = [
+                        linha for linha in linhas if linha["valido"]
+                    ]
+                    erros = [
+                        linha for linha in linhas if not linha["valido"]
+                    ]
+
+                    request.session["importacao_media_precos_linhas"] = linhas
+                    request.session["importacao_media_precos_pregao_id"] = pregao.id
+
+                    resumo = {
+                        "total": len(linhas),
+                        "validos": len(validos),
+                        "erros": len(erros),
+                        "atualizar": len(validos),
+                        "ignorados": 0,
+                    }
+
+                    if erros:
+                        messages.warning(
+                            request,
+                            "A planilha possui erros. Corrija os itens indicados antes de confirmar a importação.",
+                        )
+                    else:
+                        messages.success(
+                            request,
+                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
+                        )
+
+        elif acao == "confirmar":
+            linhas = request.session.get(
+                "importacao_media_precos_linhas",
+                [],
+            )
+            pregao_sessao_id = request.session.get(
+                "importacao_media_precos_pregao_id"
+            )
+
+            if not linhas or not pregao_sessao_id:
+                messages.error(
+                    request,
+                    "Nenhuma importação validada foi encontrada. Envie a planilha novamente.",
+                )
+                return redirect("importacoes:media_precos")
+
+            pregao = Pregao.objects.filter(
+                id=pregao_sessao_id
+            ).first()
+
+            if not pregao:
+                messages.error(
+                    request,
+                    "Certame da importação não encontrado.",
+                )
+                return redirect("importacoes:media_precos")
+
+            # Marca as linhas que o usuário escolheu não importar.
+            for linha in linhas:
+                linha["ignorar"] = (
+                    request.POST.get(f"ignorar_linha_{linha['linha']}") == "on"
+                )
+
+            # Revalida cada linha a partir do estado atual da prévia.
+            # Isso evita manter erros antigos depois que o usuário corrige um item.
+            for linha in linhas:
+                if linha.get("ignorar"):
+                    linha["valido"] = True
+                    linha["acao"] = "Ignorar"
+                    continue
+
+                dados = linha.get("dados", {})
+                erros_novos = []
+
+                # Mantém somente erros de média, pois os erros de item serão
+                # recalculados abaixo com base na correção escolhida.
+                for erro in linha.get("erros", []):
+                    if (
+                        "Média de preço" in erro
+                        or "média de preço" in erro
+                        or "MÉDIA DE PREÇO" in erro
+                    ):
+                        erros_novos.append(erro)
+
+                item_corrigido = obter_item_por_correcao(
+                    request,
+                    linha["linha"],
+                )
+
+                item = None
+                item_pregao = None
+
+                if item_corrigido:
+                    item = item_corrigido
+                else:
+                    item_id = dados.get("item_id")
+                    if item_id:
+                        item = Item.objects.filter(id=item_id, ativo=True).first()
+
+                if not item:
+                    erros_novos.append(
+                        "Item não encontrado no sistema. "
+                        "Selecione o item correto na coluna Correção ou marque Não importar."
+                    )
+                    linha["erro_item"] = True
+                    linha["item_opcoes"] = opcoes_item_certame_para_correcao(
+                        dados.get("item_texto", ""),
+                        pregao,
+                    )
+                    dados["item_pregao_id"] = ""
+                    dados["item_corrigido_id"] = ""
+                    dados["item_corrigido_nome"] = ""
+                else:
+                    item_pregao = PregaoItem.objects.filter(
+                        pregao=pregao,
+                        item=item,
+                    ).first()
+
+                    if not item_pregao:
+                        erros_novos.append(
+                            "O item selecionado não pertence ao certame. "
+                            "Selecione outro item na coluna Correção ou marque Não importar."
+                        )
+                        linha["erro_item"] = True
+                        linha["item_opcoes"] = opcoes_item_para_correcao(
+                            dados.get("item_texto", "")
+                        )
+                        dados["item_pregao_id"] = ""
+                    else:
+                        linha["erro_item"] = False
+                        dados["item_id"] = item.id
+                        dados["item_pregao_id"] = item_pregao.id
+
+                        if item_corrigido:
+                            dados["item_corrigido_id"] = item.id
+                            dados["item_corrigido_nome"] = item.nome_item
+                            dados["item_texto"] = item.nome_item
+
+                linha["dados"] = dados
+                linha["erros"] = erros_novos
+                linha["valido"] = not erros_novos
+                linha["acao"] = "Atualizar" if linha["valido"] else "Erro"
+
+            # Verifica duplicidade somente após aplicar todas as correções e ignorados.
+            # Assim, duplicidades antigas não ficam "presas" depois de uma correção.
+            itens_confirmacao = {}
+
+            for linha in linhas:
+                if linha.get("ignorar") or not linha.get("valido"):
+                    continue
+
+                item_pregao_id = linha["dados"].get("item_pregao_id")
+
+                if not item_pregao_id:
+                    linha["valido"] = False
+                    linha["acao"] = "Erro"
+                    linha["erros"].append(
+                        "Não foi possível identificar o item do certame."
+                    )
+                    continue
+
+                if item_pregao_id in itens_confirmacao:
+                    primeira_linha = itens_confirmacao[item_pregao_id]
+                    linha["valido"] = False
+                    linha["acao"] = "Erro"
+                    linha["erros"].append(
+                        f"O mesmo item também foi informado na linha {primeira_linha}. "
+                        "Marque uma das linhas como Não importar."
+                    )
+                else:
+                    itens_confirmacao[item_pregao_id] = linha["linha"]
+
+            linhas_invalidas = [
+                linha
+                for linha in linhas
+                if not linha.get("ignorar") and not linha.get("valido")
+            ]
+
+            if linhas_invalidas:
+                request.session["importacao_media_precos_linhas"] = linhas
+
+                validos = [
+                    linha
+                    for linha in linhas
+                    if not linha.get("ignorar") and linha.get("valido")
+                ]
+                ignorados = [
+                    linha for linha in linhas if linha.get("ignorar")
+                ]
+
+                resumo = {
+                    "total": len(linhas),
+                    "validos": len(validos),
+                    "erros": len(linhas_invalidas),
+                    "atualizar": len(validos),
+                    "ignorados": len(ignorados),
+                }
+
+                linhas_com_erro = ", ".join(
+                    str(linha["linha"]) for linha in linhas_invalidas
+                )
+
+                messages.error(
+                    request,
+                    f"Ainda existem linhas inválidas: {linhas_com_erro}. "
+                    "Corrija o item indicado ou marque Não importar e confirme novamente.",
+                )
+
+                form = ImportacaoPlanilhaForm()
+                return render(
+                    request,
+                    "importacoes/media_precos.html",
+                    {
+                        "form": form,
+                        "pregoes": pregoes,
+                        "pregao": pregao,
+                        "linhas": linhas,
+                        "resumo": resumo,
+                    },
+                )
+
+            atualizados = 0
+
+            ignorados = 0
+
+            for linha in linhas:
+                if linha.get("ignorar"):
+                    ignorados += 1
+                    continue
+
+                dados = linha["dados"]
+
+                item_pregao = PregaoItem.objects.filter(
+                    id=dados["item_pregao_id"],
+                    pregao=pregao,
+                ).first()
+
+                if not item_pregao:
+                    continue
+
+                item_pregao.media_preco = Decimal(
+                    dados["media_preco"]
+                )
+                item_pregao.save(
+                    update_fields=["media_preco"]
+                )
+                atualizados += 1
+
+            request.session.pop(
+                "importacao_media_precos_linhas",
+                None,
+            )
+            request.session.pop(
+                "importacao_media_precos_pregao_id",
+                None,
+            )
+
+            messages.success(
+                request,
+                f"Importação concluída. Médias atualizadas: {atualizados}. "
+                f"Itens ignorados: {ignorados}.",
+            )
+
+            return redirect(
+                f"/pregoes/media-precos/?pregao={pregao.id}"
+            )
+    else:
+        form = ImportacaoPlanilhaForm()
+
+    if request.method == "POST" and "form" not in locals():
+        form = ImportacaoPlanilhaForm()
+
+    return render(
+        request,
+        "importacoes/media_precos.html",
+        {
+            "form": form,
+            "pregoes": pregoes,
+            "pregao": pregao,
+            "linhas": linhas,
+            "resumo": resumo,
+        },
+    )
 
 
 @login_required

@@ -3,7 +3,7 @@
 
 {% block title %}Média de Preços | Sistema de Pregões{% endblock %}
 {% block page_title %}Média de Preços{% endblock %}
-{% block page_subtitle %}Cadastre a média de referência e o percentual de alerta por item do certame{% endblock %}
+{% block page_subtitle %}Cadastre a média de referência dos itens e o percentual de alerta do certame{% endblock %}
 
 {% block content %}
 
@@ -44,7 +44,14 @@
 
 {% if pregao %}
     <div class="card">
-        <h2>Cadastro de Médias</h2>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+            <h2>Cadastro de Médias</h2>
+
+            <a class="btn btn-primary"
+               href="{% url 'importacoes:media_precos' %}?pregao={{ pregao.id }}">
+                Importar de Planilha
+            </a>
+        </div>
 
         <p>
             <strong>Certame:</strong> {% if pregao.tipo_certame == "chamada_publica" %}Chamada Pública{% else %}Pregão{% endif %} {{ pregao.numero }}/{{ pregao.ano }}<br>
@@ -60,6 +67,20 @@
             {% csrf_token %}
             <input type="hidden" name="pregao" value="{{ pregao.id }}">
 
+            <div class="form-group" style="max-width:360px; margin-bottom:18px;">
+                <label><strong>Percentual de Alerta do Certame (%)</strong></label>
+                <input
+                    type="text"
+                    name="percentual_alerta_media"
+                    value="{{ pregao.percentual_alerta_media|default:'50'|percentual_br }}"
+                    placeholder="50,00"
+                    required
+                >
+                <div style="font-size:12px; color:#64748b; margin-top:4px;">
+                    Este percentual será aplicado a todos os itens do certame.
+                </div>
+            </div>
+
             <div class="table-wrapper">
                 <table>
                     <thead>
@@ -68,7 +89,6 @@
                             <th>Item</th>
                             <th>Quantidade</th>
                             <th>Média de Preço</th>
-                            <th>% de Alerta</th>
                         </tr>
                     </thead>
 
@@ -88,18 +108,10 @@
                                         placeholder="0,00"
                                     >
                                 </td>
-                                <td>
-                                    <input
-                                        type="text"
-                                        name="percentual_alerta_media_{{ item_pregao.id }}"
-                                        value="{{ item_pregao.percentual_alerta_media|default:'25'|percentual_br }}"
-                                        placeholder="25"
-                                    >
-                                </td>
                             </tr>
                         {% empty %}
                             <tr>
-                                <td colspan="5">
+                                <td colspan="4">
                                     Nenhum item encontrado para este certame. Cadastre primeiro os quantitativos por certame e por escola.
                                 </td>
                             </tr>

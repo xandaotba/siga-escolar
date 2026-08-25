@@ -106,6 +106,15 @@
             </div>
 
             <div class="form-group">
+                <label>Número do Processo</label>
+                {{ form.numero_processo }}
+                {{ form.numero_processo.errors }}
+                <div style="font-size:12px; color:#64748b; margin-top:4px;">
+                    Informe o número do processo administrativo vinculado ao certame.
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label>Nome do Pregoeiro</label>
                 {{ form.nome_pregoeiro }}
                 {{ form.nome_pregoeiro.errors }}

@@ -34,6 +34,12 @@ class Pregao(models.Model):
     )
 
     numero = models.CharField("Número do Certame", max_length=30)
+    numero_processo = models.CharField(
+        "Número do Processo",
+        max_length=100,
+        blank=True,
+        help_text="Número do processo administrativo vinculado ao certame.",
+    )
     ano = models.PositiveIntegerField("Ano")
 
     municipios = models.ManyToManyField(
@@ -76,6 +82,14 @@ class Pregao(models.Model):
     )
 
     finalizado_em = models.DateTimeField("Finalizado em", null=True, blank=True)
+
+    percentual_alerta_media = models.DecimalField(
+        "Percentual de Alerta da Média",
+        max_digits=5,
+        decimal_places=2,
+        default=50,
+        help_text="Percentual de alerta aplicado a todos os itens deste certame.",
+    )
 
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
     atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
@@ -340,11 +354,11 @@ class PregaoItem(models.Model):
     )
 
     percentual_alerta_media = models.DecimalField(
-        "Percentual de Alerta da Média",
+        "Percentual de Alerta da Média (legado)",
         max_digits=5,
         decimal_places=2,
-        default=25,
-        help_text="Percentual permitido para diferença em relação à média cadastrada.",
+        default=50,
+        help_text="Campo legado. O percentual vigente é definido no certame.",
     )
 
     iniciado_em = models.DateTimeField("Iniciado em", null=True, blank=True)

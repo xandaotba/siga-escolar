@@ -39,7 +39,7 @@ def calcular_alerta_media(item_atual, valor_adjudicado):
     if media is None or media <= 0:
         return None
 
-    percentual = item_atual.percentual_alerta_media or Decimal("25")
+    percentual = item_atual.pregao.percentual_alerta_media or Decimal("50")
 
     limite_minimo = media * (Decimal("100") - percentual) / Decimal("100")
     limite_maximo = media * (Decimal("100") + percentual) / Decimal("100")

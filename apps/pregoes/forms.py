@@ -24,6 +24,7 @@ class PregaoForm(forms.ModelForm):
         fields = [
             "tipo_certame",
             "numero",
+            "numero_processo",
             "ano",
             "nome_pregoeiro",
             "cpf_pregoeiro",
@@ -36,6 +37,9 @@ class PregaoForm(forms.ModelForm):
         widgets = {
             "tipo_certame": forms.Select(),
             "numero": forms.TextInput(attrs={"placeholder": "Exemplo: 001"}),
+            "numero_processo": forms.TextInput(
+                attrs={"placeholder": "Exemplo: SEDUC-PRO-2026/000000"}
+            ),
             "ano": forms.NumberInput(attrs={"placeholder": "Exemplo: 2026"}),
             "nome_pregoeiro": forms.TextInput(attrs={"placeholder": "Nome do pregoeiro"}),
             "cpf_pregoeiro": forms.TextInput(attrs={"placeholder": "000.000.000-00"}),
