@@ -371,6 +371,19 @@ def salvar_propostas_iniciais(request, pregao, item_atual):
     if erros:
         messages.error(request, "Algumas propostas não foram salvas por erro de preenchimento.")
     else:
+        # Se a disputa ainda não começou, remove qualquer fornecedor atual
+        # gravado pela ordenação antiga. A função abaixo recalculará o primeiro
+        # fornecedor usando a maior proposta inicial.
+        if not Lance.objects.filter(
+            pregao=pregao,
+            pregao_item=item_atual,
+        ).exists():
+            item_atual.fornecedor_atual = None
+            item_atual.rodada_atual = 1
+            item_atual.save(
+                update_fields=["fornecedor_atual", "rodada_atual"]
+            )
+
         definir_fornecedor_atual_se_necessario(pregao, item_atual)
         messages.success(request, f"Propostas iniciais salvas com sucesso. Registros salvos: {salvos}.")
 

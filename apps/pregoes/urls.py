@@ -7,6 +7,12 @@ urlpatterns = [
     path("", views.pregoes, name="pregoes"),
     path("<int:pregao_id>/editar/", views.editar_pregao, name="editar_pregao"),
 
+    path(
+        "<int:pregao_id>/relacao-fornecedores/",
+        views.relacao_fornecedores_word,
+        name="relacao_fornecedores_word",
+    ),
+
     path("quantitativo-pregao/", views.quantitativo_pregao, name="quantitativo_pregao"),
     path("quantitativo-escola/", views.quantitativo_escola, name="quantitativo_escola"),
 

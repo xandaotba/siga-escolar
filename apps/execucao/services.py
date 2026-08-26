@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from apps.pregoes.models import (
     DesistenciaItem,
+    Lance,
     Pregao,
     PregaoFornecedor,
     PregaoItem,
@@ -16,13 +17,15 @@ def fornecedores_participantes_do_item(pregao, item_atual):
     """
     Retorna os fornecedores vinculados ao pregão que participam do item.
 
-    Regra:
+    Ordem dos lances:
+    - Quando existem propostas iniciais cadastradas, os fornecedores participantes
+      são ordenados do MAIOR para o MENOR preço inicial.
+    - Em caso de empate no preço inicial, usa a ordem_inicial do fornecedor no
+      pregão e, depois, a razão social como critérios de desempate.
     - Se ainda não existe nenhuma proposta inicial cadastrada para o item,
-      retorna todos os fornecedores ativos do pregão, para manter o fluxo inicial.
-    - Se já existem propostas iniciais cadastradas, retorna somente fornecedores
-      com PropostaInicialItem.participa=True.
+      mantém a ordem original do vínculo do pregão.
     """
-    vinculos = (
+    vinculos = list(
         PregaoFornecedor.objects.filter(
             pregao=pregao,
             ativo_no_pregao=True,
@@ -31,19 +34,54 @@ def fornecedores_participantes_do_item(pregao, item_atual):
         .order_by("ordem_inicial", "fornecedor__razao_social")
     )
 
-    propostas_item = PropostaInicialItem.objects.filter(
-        pregao=pregao,
-        pregao_item=item_atual,
+    propostas_item = list(
+        PropostaInicialItem.objects.filter(
+            pregao=pregao,
+            pregao_item=item_atual,
+        )
+        .select_related("fornecedor")
     )
 
-    if propostas_item.exists():
-        participantes_ids = propostas_item.filter(
-            participa=True,
-        ).values_list("fornecedor_id", flat=True)
+    # Sem propostas cadastradas, preserva o comportamento anterior.
+    if not propostas_item:
+        return [v.fornecedor for v in vinculos]
 
-        vinculos = vinculos.filter(fornecedor_id__in=participantes_ids)
+    propostas_participantes = {
+        proposta.fornecedor_id: proposta
+        for proposta in propostas_item
+        if proposta.participa
+    }
 
-    return [v.fornecedor for v in vinculos]
+    vinculos_participantes = [
+        vinculo
+        for vinculo in vinculos
+        if vinculo.fornecedor_id in propostas_participantes
+    ]
+
+    def chave_ordenacao(vinculo):
+        proposta = propostas_participantes[vinculo.fornecedor_id]
+
+        # Preço ausente vai para o final. Normalmente isso não ocorre porque
+        # a proposta participante exige preço inicial no cadastro.
+        sem_preco = proposta.preco_inicial is None
+        preco = proposta.preco_inicial or 0
+
+        ordem_inicial = (
+            vinculo.ordem_inicial
+            if vinculo.ordem_inicial is not None
+            else 999999
+        )
+
+        return (
+            sem_preco,
+            -preco,
+            ordem_inicial,
+            vinculo.fornecedor.razao_social.lower(),
+        )
+
+    vinculos_participantes.sort(key=chave_ordenacao)
+
+    return [v.fornecedor for v in vinculos_participantes]
 
 
 def fornecedores_ativos_do_item(pregao, item_atual):
@@ -67,8 +105,15 @@ def fornecedores_ativos_do_item(pregao, item_atual):
 
 def definir_fornecedor_atual_se_necessario(pregao, item_atual):
     """
-    Define o fornecedor atual quando o item ainda não possui fornecedor atual
-    ou quando o fornecedor atual já desistiu/não participa do item.
+    Define o fornecedor atual conforme a ordem da disputa.
+
+    Antes do primeiro lance:
+    - força o primeiro fornecedor da lista ordenada pelas propostas iniciais;
+    - isso corrige itens que já tinham fornecedor_atual gravado pela regra antiga.
+
+    Depois que já existe pelo menos um lance:
+    - preserva o fornecedor atual da rodada;
+    - somente corrige se ele deixou de participar ou desistiu.
     """
     fornecedores_ativos = fornecedores_ativos_do_item(pregao, item_atual)
 
@@ -77,11 +122,32 @@ def definir_fornecedor_atual_se_necessario(pregao, item_atual):
         item_atual.save(update_fields=["fornecedor_atual"])
         return None
 
+    existe_lance = Lance.objects.filter(
+        pregao=pregao,
+        pregao_item=item_atual,
+    ).exists()
+
+    # Antes do primeiro lance, o primeiro fornecedor deve SEMPRE ser
+    # o de maior proposta inicial, mesmo que fornecedor_atual tenha
+    # ficado gravado anteriormente pela ordenação antiga.
+    if not existe_lance:
+        primeiro_fornecedor = fornecedores_ativos[0]
+
+        if item_atual.fornecedor_atual_id != primeiro_fornecedor.id:
+            item_atual.fornecedor_atual = primeiro_fornecedor
+            item_atual.rodada_atual = 1
+            item_atual.save(
+                update_fields=["fornecedor_atual", "rodada_atual"]
+            )
+
+        return primeiro_fornecedor
+
     fornecedor_atual_valido = False
 
     if item_atual.fornecedor_atual:
         fornecedor_atual_valido = any(
-            f.id == item_atual.fornecedor_atual_id for f in fornecedores_ativos
+            f.id == item_atual.fornecedor_atual_id
+            for f in fornecedores_ativos
         )
 
     if not item_atual.fornecedor_atual or not fornecedor_atual_valido:

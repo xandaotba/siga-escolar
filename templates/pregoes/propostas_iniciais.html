@@ -3,65 +3,183 @@
 
 {% block title %}Propostas Iniciais | Sistema de Pregões{% endblock %}
 {% block page_title %}Propostas Iniciais{% endblock %}
-{% block page_subtitle %}Cadastre previamente marca e preço inicial dos fornecedores por item{% endblock %}
+{% block page_subtitle %}Cadastre marca e preço inicial por item ou por fornecedor{% endblock %}
 
 {% block content %}
 
+<style>
+    .modo-proposta {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+
+    .modo-proposta a {
+        text-decoration: none;
+        padding: 9px 14px;
+        border: 1px solid #cbd5e1;
+        border-radius: 9px;
+        background: #f8fafc;
+        color: #334155;
+        font-weight: 800;
+    }
+
+    .modo-proposta a.ativo {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: #ffffff;
+    }
+
+    .linha-nao-participa {
+        opacity: 0.58;
+    }
+
+    .item-identificacao {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .item-numero {
+        font-weight: 800;
+        color: #334155;
+    }
+
+    .texto-nao-participa {
+        color: #dc3545;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    .check-centralizado {
+        text-align: center;
+    }
+
+    .campo-marca {
+        min-width: 180px;
+    }
+
+    .campo-preco {
+        min-width: 120px;
+        max-width: 150px;
+    }
+</style>
+
 {% if messages %}
-{% for message in messages %}
-{% if message.tags == "success" %}
-<div class="alert alert-success">{{ message }}</div>
-{% else %}
-<div class="alert alert-error">{{ message }}</div>
-{% endif %}
-{% endfor %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
 {% endif %}
 
 <div class="card">
-    <h2>Selecionar Pregão e Item</h2>
+    <h2>Modo de Cadastro</h2>
 
-    <form method="get">
-        <div class="grid grid-2">
-            <div class="form-group">
-                <label>Pregão</label>
-                <select name="pregao" id="id_pregao" required>
-                    <option value="">Selecione o pregão</option>
+    <div class="modo-proposta">
+        <a href="{% url 'pregoes:propostas_iniciais' %}?modo=item"
+           class="{% if modo == 'item' %}ativo{% endif %}">
+            Por Item
+        </a>
 
-                    {% for p in pregoes %}
-                    <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
-                        Pregão {{ p.numero }}/{{ p.ano }} — {{ p.get_status_display }}
-                    </option>
-                    {% endfor %}
-                </select>
+        <a href="{% url 'pregoes:propostas_iniciais' %}?modo=fornecedor"
+           class="{% if modo == 'fornecedor' %}ativo{% endif %}">
+            Por Fornecedor
+        </a>
+    </div>
+
+    {% if modo == "item" %}
+        <h3>Selecionar Pregão e Item</h3>
+
+        <form method="get">
+            <input type="hidden" name="modo" value="item">
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Pregão</label>
+                    <select name="pregao" id="id_pregao_item" required>
+                        <option value="">Selecione o pregão</option>
+                        {% for p in pregoes %}
+                            <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                                Pregão {{ p.numero }}/{{ p.ano }} — {{ p.get_status_display }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Item</label>
+                    <select name="item" id="id_item" required>
+                        <option value="">Selecione o item</option>
+                        {% for pi in itens_pregao %}
+                            <option value="{{ pi.id }}" {% if item_pregao and item_pregao.id == pi.id %}selected{% endif %}>
+                                {{ pi.ordem }} - {{ pi.item.nome_item }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
 
-            <div class="form-group">
-                <label>Item</label>
-                <select name="item" id="id_item" required>
-                    <option value="">Selecione o item</option>
-
-                    {% for pi in itens_pregao %}
-                    <option value="{{ pi.id }}" {% if item_pregao and item_pregao.id == pi.id %}selected{% endif %}>
-                        {{ pi.ordem }} - {{ pi.item.nome_item }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-        </div>
-
-        <div class="actions">
             <noscript>
-                <button class="btn btn-primary" type="submit">
-                    Carregar Fornecedores
-                </button>
+                <div class="actions">
+                    <button class="btn btn-primary" type="submit">
+                        Carregar Fornecedores
+                    </button>
+                </div>
             </noscript>
-        </div>
-    </form>
+        </form>
+    {% else %}
+        <h3>Selecionar Pregão e Fornecedor</h3>
+
+        <form method="get">
+            <input type="hidden" name="modo" value="fornecedor">
+
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label>Pregão</label>
+                    <select name="pregao" id="id_pregao_fornecedor" required>
+                        <option value="">Selecione o pregão</option>
+                        {% for p in pregoes %}
+                            <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                                Pregão {{ p.numero }}/{{ p.ano }} — {{ p.get_status_display }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Fornecedor</label>
+                    <select name="fornecedor" id="id_fornecedor" required {% if not pregao %}disabled{% endif %}>
+                        <option value="">
+                            {% if pregao %}Selecione o fornecedor{% else %}Selecione primeiro o pregão{% endif %}
+                        </option>
+                        {% for fornecedor in fornecedores %}
+                            <option value="{{ fornecedor.id }}"
+                                {% if fornecedor_selecionado and fornecedor_selecionado.id == fornecedor.id %}selected{% endif %}>
+                                {{ fornecedor.razao_social }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <noscript>
+                <div class="actions">
+                    <button class="btn btn-primary" type="submit">
+                        Carregar Itens
+                    </button>
+                </div>
+            </noscript>
+        </form>
+    {% endif %}
 </div>
 
-{% if pregao and item_pregao %}
+{% if modo == "item" and pregao and item_pregao %}
 <div class="card">
-    <h2>Cadastro de Propostas Iniciais</h2>
+    <h2>Cadastro de Propostas Iniciais por Item</h2>
 
     <p>
         <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
@@ -76,7 +194,7 @@
 
     <form method="post">
         {% csrf_token %}
-
+        <input type="hidden" name="modo" value="item">
         <input type="hidden" name="pregao" value="{{ pregao.id }}">
         <input type="hidden" name="item" value="{{ item_pregao.id }}">
 
@@ -84,7 +202,7 @@
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 110px; text-align: center;">Participa?</th>
+                        <th style="width:110px; text-align:center;">Participa?</th>
                         <th>Fornecedor</th>
                         <th>CNPJ</th>
                         <th>Marca</th>
@@ -94,57 +212,57 @@
 
                 <tbody>
                     {% for fornecedor in fornecedores %}
-                    {% with proposta=propostas_salvas|get_item:fornecedor.id %}
-                    <tr>
-                        <td style="text-align: center;">
-                            <input
-                                type="checkbox"
-                                name="participa_{{ fornecedor.id }}"
-                                class="check-participa"
-                                data-fornecedor="{{ fornecedor.id }}"
-                                {% if not proposta or proposta.participa %}checked{% endif %}
-                            >
-                        </td>
+                        {% with proposta=propostas_salvas|get_item:fornecedor.id %}
+                        <tr>
+                            <td class="check-centralizado">
+                                <input
+                                    type="checkbox"
+                                    name="participa_{{ fornecedor.id }}"
+                                    class="check-participa-fornecedor"
+                                    data-fornecedor="{{ fornecedor.id }}"
+                                    {% if not proposta or proposta.participa %}checked{% endif %}
+                                >
+                            </td>
 
-                        <td>
-                            <strong>{{ fornecedor.razao_social }}</strong>
-                            <br>
-                            <small class="texto-nao-participa" id="texto_nao_participa_{{ fornecedor.id }}" style="display: none; color: #dc3545; font-weight: 700;">
-                                Não participa deste item
-                            </small>
-                        </td>
+                            <td>
+                                <strong>{{ fornecedor.razao_social }}</strong>
+                                <br>
+                                <small class="texto-nao-participa"
+                                       id="texto_nao_participa_fornecedor_{{ fornecedor.id }}"
+                                       style="display:none;">
+                                    Não participa deste item
+                                </small>
+                            </td>
 
-                        <td>
-                            {{ fornecedor.cnpj }}
-                        </td>
+                            <td>{{ fornecedor.cnpj }}</td>
 
-                        <td>
-                            <input
-                                type="text"
-                                name="marca_{{ fornecedor.id }}"
-                                id="marca_{{ fornecedor.id }}"
-                                value="{% if proposta and proposta.participa %}{{ proposta.marca }}{% endif %}"
-                                placeholder="Marca do produto"
-                            >
-                        </td>
+                            <td>
+                                <input
+                                    type="text"
+                                    name="marca_{{ fornecedor.id }}"
+                                    id="marca_fornecedor_{{ fornecedor.id }}"
+                                    value="{% if proposta and proposta.participa %}{{ proposta.marca }}{% endif %}"
+                                    placeholder="Marca do produto"
+                                >
+                            </td>
 
-                        <td>
-                            <input
-                                type="text"
-                                name="preco_inicial_{{ fornecedor.id }}"
-                                id="preco_inicial_{{ fornecedor.id }}"
-                                value="{% if proposta and proposta.participa and proposta.preco_inicial %}{{ proposta.preco_inicial }}{% endif %}"
-                                placeholder="0,00"
-                            >
-                        </td>
-                    </tr>
-                    {% endwith %}
+                            <td>
+                                <input
+                                    type="text"
+                                    name="preco_inicial_{{ fornecedor.id }}"
+                                    id="preco_fornecedor_{{ fornecedor.id }}"
+                                    value="{% if proposta and proposta.participa and proposta.preco_inicial %}{{ proposta.preco_inicial }}{% endif %}"
+                                    placeholder="0,00"
+                                >
+                            </td>
+                        </tr>
+                        {% endwith %}
                     {% empty %}
-                    <tr>
-                        <td colspan="5">
-                            Nenhum fornecedor ativo vinculado a este pregão presencial.
-                        </td>
-                    </tr>
+                        <tr>
+                            <td colspan="5">
+                                Nenhum fornecedor ativo vinculado a este pregão presencial.
+                            </td>
+                        </tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -154,7 +272,7 @@
             <button class="btn btn-success" type="submit" name="acao" value="salvar">
                 Salvar Propostas Iniciais
             </button>
-        
+
             <button class="btn btn-primary" type="submit" name="acao" value="salvar_avancar">
                 Salvar e Avançar para Próximo Item
             </button>
@@ -163,118 +281,280 @@
 </div>
 {% endif %}
 
-<script>
-    document.addEventListener("DOMContentLoaded", function () {
-        const campoPregao = document.getElementById("id_pregao");
-        const campoItem = document.getElementById("id_item");
+{% if modo == "fornecedor" and pregao and fornecedor_selecionado %}
+<div class="card">
+    <h2>Cadastro de Propostas Iniciais por Fornecedor</h2>
 
-        if (!campoPregao || !campoItem) {
+    <p>
+        <strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}<br>
+        <strong>Situação:</strong> {{ pregao.get_status_display }}<br>
+        <strong>Fornecedor:</strong> {{ fornecedor_selecionado.razao_social }}
+        {% if fornecedor_selecionado.cnpj %} — {{ fornecedor_selecionado.cnpj }}{% endif %}
+    </p>
+
+    <div class="alert alert-success">
+        Marque os itens em que este fornecedor participará. Para os itens marcados, informe a marca e o preço inicial.
+        Os itens desmarcados ficarão registrados como não participantes para este fornecedor.
+    </div>
+
+    <form method="post" id="form-propostas-fornecedor">
+        {% csrf_token %}
+        <input type="hidden" name="modo" value="fornecedor">
+        <input type="hidden" name="pregao" value="{{ pregao.id }}">
+        <input type="hidden" name="fornecedor" value="{{ fornecedor_selecionado.id }}">
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:110px; text-align:center;">Participa?</th>
+                        <th style="width:90px;">Item</th>
+                        <th>Descrição do Item</th>
+                        <th>Marca</th>
+                        <th>Preço Inicial</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for pi in itens_pregao %}
+                        {% with proposta=propostas_salvas|get_item:pi.id %}
+                        <tr id="linha_item_{{ pi.id }}">
+                            <td class="check-centralizado">
+                                <input
+                                    type="checkbox"
+                                    name="participa_item_{{ pi.id }}"
+                                    class="check-participa-item"
+                                    data-item="{{ pi.id }}"
+                                    {% if proposta and proposta.participa %}checked{% endif %}
+                                >
+                            </td>
+
+                            <td>
+                                <span class="item-numero">{{ pi.ordem }}</span>
+                            </td>
+
+                            <td>
+                                <div class="item-identificacao">
+                                    <strong>{{ pi.item.nome_item }}</strong>
+                                    <small class="texto-nao-participa"
+                                           id="texto_nao_participa_item_{{ pi.id }}"
+                                           style="display:none;">
+                                        Fornecedor não participa deste item
+                                    </small>
+                                </div>
+                            </td>
+
+                            <td>
+                                <input
+                                    class="campo-marca"
+                                    type="text"
+                                    name="marca_item_{{ pi.id }}"
+                                    id="marca_item_{{ pi.id }}"
+                                    value="{% if proposta and proposta.participa %}{{ proposta.marca }}{% endif %}"
+                                    placeholder="Marca do produto"
+                                >
+                            </td>
+
+                            <td>
+                                <input
+                                    class="campo-preco"
+                                    type="text"
+                                    name="preco_item_{{ pi.id }}"
+                                    id="preco_item_{{ pi.id }}"
+                                    value="{% if proposta and proposta.participa and proposta.preco_inicial %}{{ proposta.preco_inicial }}{% endif %}"
+                                    placeholder="0,00"
+                                >
+                            </td>
+                        </tr>
+                        {% endwith %}
+                    {% empty %}
+                        <tr>
+                            <td colspan="5">
+                                Nenhum item cadastrado para este pregão.
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit" name="acao" value="salvar">
+                Salvar Propostas do Fornecedor
+            </button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    // =========================================================
+    // MODO POR ITEM
+    // =========================================================
+    const campoPregaoItem = document.getElementById("id_pregao_item");
+    const campoItem = document.getElementById("id_item");
+
+    function limparItens(mensagem) {
+        if (!campoItem) return;
+
+        campoItem.innerHTML = "";
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = mensagem || "Selecione o item";
+        campoItem.appendChild(option);
+    }
+
+    function carregarItensPorPregao(pregaoId) {
+        if (!campoItem) return;
+
+        if (!pregaoId) {
+            limparItens("Selecione primeiro o pregão");
             return;
         }
 
-        function limparItens(mensagem) {
-            campoItem.innerHTML = "";
+        limparItens("Carregando itens...");
 
-            const option = document.createElement("option");
-            option.value = "";
-            option.textContent = mensagem || "Selecione o item";
+        fetch(`/pregoes/ajax/itens-por-pregao/${pregaoId}/`)
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error("Erro ao buscar itens.");
+                }
+                return response.json();
+            })
+            .then(function (data) {
+                campoItem.innerHTML = "";
 
-            campoItem.appendChild(option);
-        }
+                const optionInicial = document.createElement("option");
+                optionInicial.value = "";
+                optionInicial.textContent = data.itens.length
+                    ? "Selecione o item"
+                    : "Nenhum item cadastrado para este pregão";
 
-        function carregarItensPorPregao(pregaoId) {
-            if (!pregaoId) {
-                limparItens("Selecione primeiro o pregão");
-                return;
-            }
+                campoItem.appendChild(optionInicial);
 
-            limparItens("Carregando itens...");
-
-            fetch(`/pregoes/ajax/itens-por-pregao/${pregaoId}/`)
-                .then(function (response) {
-                    if (!response.ok) {
-                        throw new Error("Erro ao buscar itens.");
-                    }
-
-                    return response.json();
-                })
-                .then(function (data) {
-                    campoItem.innerHTML = "";
-
-                    const optionInicial = document.createElement("option");
-                    optionInicial.value = "";
-
-                    if (data.itens.length === 0) {
-                        optionInicial.textContent = "Nenhum item cadastrado para este pregão";
-                    } else {
-                        optionInicial.textContent = "Selecione o item";
-                    }
-
-                    campoItem.appendChild(optionInicial);
-
-                    data.itens.forEach(function (item) {
-                        const option = document.createElement("option");
-                        option.value = item.id;
-                        option.textContent = item.ordem + " - " + item.nome;
-
-                        campoItem.appendChild(option);
-                    });
-                })
-                .catch(function () {
-                    limparItens("Erro ao carregar itens");
+                data.itens.forEach(function (item) {
+                    const option = document.createElement("option");
+                    option.value = item.id;
+                    option.textContent = item.ordem + " - " + item.nome;
+                    campoItem.appendChild(option);
                 });
-        }
-
-        function atualizarParticipacaoFornecedor(checkbox) {
-            const fornecedorId = checkbox.dataset.fornecedor;
-            const participa = checkbox.checked;
-
-            const campoMarca = document.getElementById(`marca_${fornecedorId}`);
-            const campoPreco = document.getElementById(`preco_inicial_${fornecedorId}`);
-            const textoNaoParticipa = document.getElementById(`texto_nao_participa_${fornecedorId}`);
-
-            if (campoMarca) {
-                campoMarca.disabled = !participa;
-                campoMarca.required = participa;
-                if (!participa) {
-                    campoMarca.value = "";
-                }
-            }
-
-            if (campoPreco) {
-                campoPreco.disabled = !participa;
-                campoPreco.required = participa;
-                if (!participa) {
-                    campoPreco.value = "";
-                }
-            }
-
-            if (textoNaoParticipa) {
-                textoNaoParticipa.style.display = participa ? "none" : "inline";
-            }
-        }
-
-        document.querySelectorAll(".check-participa").forEach(function (checkbox) {
-            atualizarParticipacaoFornecedor(checkbox);
-
-            checkbox.addEventListener("change", function () {
-                atualizarParticipacaoFornecedor(this);
+            })
+            .catch(function () {
+                limparItens("Erro ao carregar itens");
             });
-        });
+    }
 
-        campoPregao.addEventListener("change", function () {
+    if (campoPregaoItem && campoItem) {
+        campoPregaoItem.addEventListener("change", function () {
             carregarItensPorPregao(this.value);
         });
 
         campoItem.addEventListener("change", function () {
-            const pregaoId = campoPregao.value;
+            const pregaoId = campoPregaoItem.value;
             const itemId = campoItem.value;
 
             if (pregaoId && itemId) {
-                window.location.href = `?pregao=${pregaoId}&item=${itemId}`;
+                window.location.href =
+                    `?modo=item&pregao=${pregaoId}&item=${itemId}`;
             }
         });
+    }
+
+    document.querySelectorAll(".check-participa-fornecedor").forEach(function (checkbox) {
+        function atualizar() {
+            const id = checkbox.dataset.fornecedor;
+            const participa = checkbox.checked;
+            const marca = document.getElementById(`marca_fornecedor_${id}`);
+            const preco = document.getElementById(`preco_fornecedor_${id}`);
+            const texto = document.getElementById(`texto_nao_participa_fornecedor_${id}`);
+
+            if (marca) {
+                marca.disabled = !participa;
+                marca.required = participa;
+                if (!participa) marca.value = "";
+            }
+
+            if (preco) {
+                preco.disabled = !participa;
+                preco.required = participa;
+                if (!participa) preco.value = "";
+            }
+
+            if (texto) {
+                texto.style.display = participa ? "none" : "inline";
+            }
+        }
+
+        atualizar();
+        checkbox.addEventListener("change", atualizar);
     });
+
+    // =========================================================
+    // MODO POR FORNECEDOR
+    // =========================================================
+    const campoPregaoFornecedor = document.getElementById("id_pregao_fornecedor");
+    const campoFornecedor = document.getElementById("id_fornecedor");
+
+    if (campoPregaoFornecedor) {
+        campoPregaoFornecedor.addEventListener("change", function () {
+            const pregaoId = this.value;
+
+            if (pregaoId) {
+                window.location.href =
+                    `?modo=fornecedor&pregao=${pregaoId}`;
+            } else {
+                window.location.href = "?modo=fornecedor";
+            }
+        });
+    }
+
+    if (campoFornecedor) {
+        campoFornecedor.addEventListener("change", function () {
+            const pregaoId = campoPregaoFornecedor ? campoPregaoFornecedor.value : "";
+            const fornecedorId = this.value;
+
+            if (pregaoId && fornecedorId) {
+                window.location.href =
+                    `?modo=fornecedor&pregao=${pregaoId}&fornecedor=${fornecedorId}`;
+            }
+        });
+    }
+
+    document.querySelectorAll(".check-participa-item").forEach(function (checkbox) {
+        function atualizar() {
+            const id = checkbox.dataset.item;
+            const participa = checkbox.checked;
+            const marca = document.getElementById(`marca_item_${id}`);
+            const preco = document.getElementById(`preco_item_${id}`);
+            const texto = document.getElementById(`texto_nao_participa_item_${id}`);
+            const linha = document.getElementById(`linha_item_${id}`);
+
+            if (marca) {
+                marca.disabled = !participa;
+                marca.required = participa;
+                if (!participa) marca.value = "";
+            }
+
+            if (preco) {
+                preco.disabled = !participa;
+                preco.required = participa;
+                if (!participa) preco.value = "";
+            }
+
+            if (texto) {
+                texto.style.display = participa ? "none" : "inline";
+            }
+
+            if (linha) {
+                linha.classList.toggle("linha-nao-participa", !participa);
+            }
+        }
+
+        atualizar();
+        checkbox.addEventListener("change", atualizar);
+    });
+});
 </script>
 
 {% endblock %}

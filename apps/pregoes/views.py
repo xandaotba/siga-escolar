@@ -5,9 +5,16 @@ from django.core.paginator import Paginator
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
 
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from apps.cadastros.models import Escola, Item
 from .forms import PregaoForm
+
+from io import BytesIO
+from copy import deepcopy
+from pathlib import Path
+
+from django.conf import settings
+from docx import Document
 
 def paginar_queryset(request, queryset, por_pagina=25):
     paginator = Paginator(queryset, por_pagina)
@@ -23,6 +30,187 @@ from .models import (
     QuantitativoPregao,
     PropostaInicialItem,
 )
+
+
+
+def _substituir_texto_celula_preservando_rotulo(cell, valor, rotulo=None):
+    """
+    Preenche uma célula do modelo mantendo o rótulo em negrito quando existir.
+    """
+    valor = str(valor or "").strip() or "-"
+
+    paragraph = cell.paragraphs[0]
+
+    if rotulo:
+        # Mantém o primeiro run (rótulo) do modelo e substitui apenas o conteúdo.
+        if not paragraph.runs:
+            run_rotulo = paragraph.add_run(rotulo)
+            run_rotulo.bold = True
+            paragraph.add_run(f" {valor}")
+            return
+
+        paragraph.runs[0].text = rotulo
+        paragraph.runs[0].bold = True
+
+        if len(paragraph.runs) >= 2:
+            paragraph.runs[1].text = f" {valor}"
+            for run in paragraph.runs[2:]:
+                run.text = ""
+        else:
+            paragraph.add_run(f" {valor}")
+    else:
+        if paragraph.runs:
+            paragraph.runs[0].text = valor
+            for run in paragraph.runs[1:]:
+                run.text = ""
+        else:
+            paragraph.add_run(valor)
+
+
+def _preencher_tabela_fornecedor(table, fornecedor):
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(0, 1),
+        fornecedor.razao_social,
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(1, 1),
+        fornecedor.cnpj,
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(2, 1),
+        fornecedor.endereco,
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(3, 1),
+        fornecedor.representante_legal,
+        "NOME:",
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(4, 1),
+        fornecedor.cpf_representante,
+        "CPF:",
+    )
+    identidade = fornecedor.rg_representante or ""
+    orgao = fornecedor.orgao_expedidor_representante or ""
+
+    if identidade and orgao:
+        identidade_completa = f"{identidade} - {orgao}"
+    else:
+        identidade_completa = identidade or orgao
+
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(5, 1),
+        identidade_completa,
+        "IDENTIDADE:",
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(6, 1),
+        fornecedor.telefone,
+    )
+
+
+def relacao_fornecedores_word(request, pregao_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
+    # Este documento é exclusivo dos Pregões Presenciais.
+    if not pregao.eh_pregao_presencial:
+        messages.error(
+            request,
+            "A Relação de Fornecedores está disponível somente para Pregões Presenciais.",
+        )
+        return redirect("pregoes:pregoes")
+
+    fornecedores_pregao = list(
+        PregaoFornecedor.objects.filter(
+            pregao=pregao,
+            ativo_no_pregao=True,
+        )
+        .select_related("fornecedor")
+        .order_by("ordem_inicial", "fornecedor__razao_social")
+    )
+
+    if not fornecedores_pregao:
+        messages.warning(
+            request,
+            "Não há fornecedores cadastrados para este pregão.",
+        )
+        return redirect("pregoes:pregoes")
+
+    caminho_modelo = (
+        Path(settings.BASE_DIR)
+        / "templates"
+        / "documentos"
+        / "modelo_relacao_fornecedores_pregao.docx"
+    )
+
+    if not caminho_modelo.exists():
+        messages.error(
+            request,
+            "O modelo Word da Relação de Fornecedores não foi encontrado no servidor.",
+        )
+        return redirect("pregoes:pregoes")
+
+    document = Document(caminho_modelo)
+
+    if not document.tables:
+        messages.error(
+            request,
+            "O modelo Word da Relação de Fornecedores não possui a tabela esperada.",
+        )
+        return redirect("pregoes:pregoes")
+
+    tabela_modelo = document.tables[0]
+
+    # Guarda uma cópia da tabela original antes do preenchimento.
+    tabela_xml_modelo = deepcopy(tabela_modelo._tbl)
+
+    # Primeiro fornecedor usa a própria tabela existente no modelo.
+    _preencher_tabela_fornecedor(
+        tabela_modelo,
+        fornecedores_pregao[0].fornecedor,
+    )
+
+    # Os demais fornecedores recebem uma cópia idêntica da tabela do modelo.
+    elemento_anterior = tabela_modelo._tbl
+
+    for vinculo in fornecedores_pregao[1:]:
+        # Espaço entre as tabelas.
+        paragrafo_espaco = document.add_paragraph()
+        elemento_anterior.addnext(paragrafo_espaco._p)
+        elemento_anterior = paragrafo_espaco._p
+
+        nova_tabela_xml = deepcopy(tabela_xml_modelo)
+        elemento_anterior.addnext(nova_tabela_xml)
+        elemento_anterior = nova_tabela_xml
+
+        # Localiza a tabela recém-inserida para preencher seus dados.
+        nova_tabela = document.tables[-1]
+        _preencher_tabela_fornecedor(
+            nova_tabela,
+            vinculo.fornecedor,
+        )
+
+    arquivo = BytesIO()
+    document.save(arquivo)
+    arquivo.seek(0)
+
+    nome_arquivo = (
+        f"Relacao_Fornecedores_Pregao_{pregao.numero}_{pregao.ano}.docx"
+        .replace("/", "-")
+        .replace("\\", "-")
+    )
+
+    response = HttpResponse(
+        arquivo.getvalue(),
+        content_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+    )
+    response["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+
+    return response
+
 
 
 def pregoes(request):
@@ -824,16 +1012,22 @@ def propostas_iniciais(request):
             status__in=[
                 Pregao.STATUS_NAO_INICIADO,
                 Pregao.STATUS_EM_ANDAMENTO,
-            ]
+            ],
         )
         .order_by("-ano", "-numero")
     )
 
+    modo = request.GET.get("modo") or request.POST.get("modo") or "item"
+    if modo not in ["item", "fornecedor"]:
+        modo = "item"
+
     pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
     item_id = request.GET.get("item") or request.POST.get("item")
+    fornecedor_id = request.GET.get("fornecedor") or request.POST.get("fornecedor")
 
     pregao = None
     item_pregao = None
+    fornecedor_selecionado = None
     itens_pregao = []
     fornecedores = []
     propostas_salvas = {}
@@ -858,17 +1052,10 @@ def propostas_iniciais(request):
         if not PregaoItem.objects.filter(pregao=pregao).exists():
             garantir_itens_pregao_para_propostas(pregao)
 
-        itens_pregao = (
+        itens_pregao = list(
             PregaoItem.objects.filter(pregao=pregao)
             .select_related("item")
             .order_by("ordem", "item__nome_item")
-        )
-
-    if pregao and item_id:
-        item_pregao = get_object_or_404(
-            PregaoItem.objects.select_related("item"),
-            id=item_id,
-            pregao=pregao,
         )
 
         fornecedores = [
@@ -883,6 +1070,16 @@ def propostas_iniciais(request):
             )
         ]
 
+    # ============================================================
+    # MODO 1: CADASTRO POR ITEM
+    # ============================================================
+    if modo == "item" and pregao and item_id:
+        item_pregao = get_object_or_404(
+            PregaoItem.objects.select_related("item"),
+            id=item_id,
+            pregao=pregao,
+        )
+
         propostas_salvas = {
             proposta.fornecedor_id: proposta
             for proposta in PropostaInicialItem.objects.filter(
@@ -891,9 +1088,39 @@ def propostas_iniciais(request):
             )
         }
 
+    # ============================================================
+    # MODO 2: CADASTRO POR FORNECEDOR
+    # ============================================================
+    if modo == "fornecedor" and pregao and fornecedor_id:
+        fornecedor_selecionado = next(
+            (
+                fornecedor
+                for fornecedor in fornecedores
+                if str(fornecedor.id) == str(fornecedor_id)
+            ),
+            None,
+        )
+
+        if not fornecedor_selecionado:
+            messages.error(
+                request,
+                "O fornecedor selecionado não está ativo neste pregão.",
+            )
+            return redirect(
+                f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+            )
+
+        propostas_salvas = {
+            proposta.pregao_item_id: proposta
+            for proposta in PropostaInicialItem.objects.filter(
+                pregao=pregao,
+                fornecedor=fornecedor_selecionado,
+            )
+        }
+
     if request.method == "POST":
-        if not pregao or not item_pregao:
-            messages.error(request, "Selecione o pregão e o item.")
+        if not pregao:
+            messages.error(request, "Selecione o pregão.")
             return redirect("pregoes:propostas_iniciais")
 
         if pregao.status not in [
@@ -906,141 +1133,314 @@ def propostas_iniciais(request):
             )
             return redirect("pregoes:propostas_iniciais")
 
-        erros = []
-        salvos = 0
+        # --------------------------------------------------------
+        # SALVAR POR ITEM
+        # --------------------------------------------------------
+        if modo == "item":
+            if not item_pregao:
+                messages.error(request, "Selecione o pregão e o item.")
+                return redirect(
+                    f"{request.path}?modo=item&pregao={pregao.id}"
+                )
 
-        for fornecedor in fornecedores:
-            participa = request.POST.get(f"participa_{fornecedor.id}") == "on"
-            marca = request.POST.get(f"marca_{fornecedor.id}", "").strip()
-            preco_texto = request.POST.get(
-                f"preco_inicial_{fornecedor.id}",
-                "",
-            ).strip()
+            erros = []
+            salvos = 0
 
-            # Se o fornecedor não participa deste item, registra isso e não exige
-            # marca nem preço inicial. Esse registro será usado depois na execução
-            # para retirar o fornecedor da disputa daquele item.
-            if not participa:
+            for fornecedor in fornecedores:
+                participa = request.POST.get(
+                    f"participa_{fornecedor.id}"
+                ) == "on"
+                marca = request.POST.get(
+                    f"marca_{fornecedor.id}",
+                    "",
+                ).strip()
+                preco_texto = request.POST.get(
+                    f"preco_inicial_{fornecedor.id}",
+                    "",
+                ).strip()
+
+                if not participa:
+                    PropostaInicialItem.objects.update_or_create(
+                        pregao=pregao,
+                        pregao_item=item_pregao,
+                        fornecedor=fornecedor,
+                        defaults={
+                            "participa": False,
+                            "marca": "",
+                            "preco_inicial": None,
+                        },
+                    )
+                    salvos += 1
+                    continue
+
+                if not marca:
+                    erros.append(
+                        f"Informe a marca para o fornecedor "
+                        f"{fornecedor.razao_social}, ou desmarque a opção Participa."
+                    )
+                    continue
+
+                if not preco_texto:
+                    erros.append(
+                        f"Informe o preço inicial para o fornecedor "
+                        f"{fornecedor.razao_social}, ou desmarque a opção Participa."
+                    )
+                    continue
+
+                preco_texto = preco_texto.replace(",", ".")
+
+                try:
+                    preco_inicial = Decimal(preco_texto)
+                except InvalidOperation:
+                    erros.append(
+                        f"Preço inicial inválido para o fornecedor "
+                        f"{fornecedor.razao_social}."
+                    )
+                    continue
+
+                if preco_inicial <= 0:
+                    erros.append(
+                        f"O preço inicial do fornecedor "
+                        f"{fornecedor.razao_social} deve ser maior que zero."
+                    )
+                    continue
+
                 PropostaInicialItem.objects.update_or_create(
                     pregao=pregao,
                     pregao_item=item_pregao,
                     fornecedor=fornecedor,
                     defaults={
-                        "participa": False,
-                        "marca": "",
-                        "preco_inicial": None,
+                        "participa": True,
+                        "marca": marca,
+                        "preco_inicial": preco_inicial,
                     },
                 )
-
                 salvos += 1
-                continue
 
-            if not marca:
-                erros.append(
-                    f"Informe a marca para o fornecedor {fornecedor.razao_social}, ou desmarque a opção Participa."
-                )
-                continue
+            if erros:
+                for erro in erros:
+                    messages.error(request, erro)
 
-            if not preco_texto:
-                erros.append(
-                    f"Informe o preço inicial para o fornecedor {fornecedor.razao_social}, ou desmarque a opção Participa."
-                )
-                continue
+                propostas_salvas = {
+                    proposta.fornecedor_id: proposta
+                    for proposta in PropostaInicialItem.objects.filter(
+                        pregao=pregao,
+                        pregao_item=item_pregao,
+                    )
+                }
 
-            preco_texto = preco_texto.replace(",", ".")
-
-            try:
-                preco_inicial = Decimal(preco_texto)
-            except InvalidOperation:
-                erros.append(
-                    f"Preço inicial inválido para o fornecedor {fornecedor.razao_social}."
-                )
-                continue
-
-            if preco_inicial <= 0:
-                erros.append(
-                    f"O preço inicial do fornecedor {fornecedor.razao_social} deve ser maior que zero."
-                )
-                continue
-
-            PropostaInicialItem.objects.update_or_create(
-                pregao=pregao,
-                pregao_item=item_pregao,
-                fornecedor=fornecedor,
-                defaults={
-                    "participa": True,
-                    "marca": marca,
-                    "preco_inicial": preco_inicial,
-                },
-            )
-
-            salvos += 1
-
-        if erros:
-            for erro in erros:
-                messages.error(request, erro)
-
-            propostas_salvas = {
-                proposta.fornecedor_id: proposta
-                for proposta in PropostaInicialItem.objects.filter(
-                    pregao=pregao,
-                    pregao_item=item_pregao,
-                )
-            }
-
-            return render(
-                request,
-                "pregoes/propostas_iniciais.html",
-                {
-                    "pregoes": pregoes_lista,
-                    "pregao": pregao,
-                    "itens_pregao": itens_pregao,
-                    "item_pregao": item_pregao,
-                    "fornecedores": fornecedores,
-                    "propostas_salvas": propostas_salvas,
-                },
-            )
-
-        messages.success(
-            request,
-            f"Propostas iniciais salvas com sucesso. Registros salvos: {salvos}.",
-        )
-
-        acao = request.POST.get("acao")
-
-        if acao == "salvar_avancar":
-            proximo_item = (
-                PregaoItem.objects.filter(
-                    pregao=pregao,
-                    ordem__gt=item_pregao.ordem,
-                )
-                .select_related("item")
-                .order_by("ordem", "item__nome_item")
-                .first()
-            )
-
-            if proximo_item:
-                return redirect(
-                    f"{request.path}?pregao={pregao.id}&item={proximo_item.id}"
+                return render(
+                    request,
+                    "pregoes/propostas_iniciais.html",
+                    {
+                        "pregoes": pregoes_lista,
+                        "modo": modo,
+                        "pregao": pregao,
+                        "itens_pregao": itens_pregao,
+                        "item_pregao": item_pregao,
+                        "fornecedores": fornecedores,
+                        "fornecedor_selecionado": None,
+                        "propostas_salvas": propostas_salvas,
+                    },
                 )
 
             messages.success(
                 request,
-                "Este era o último item do pregão. Não há próximo item para avançar.",
+                f"Propostas iniciais salvas com sucesso. Registros salvos: {salvos}.",
             )
 
-        return redirect(
-            f"{request.path}?pregao={pregao.id}&item={item_pregao.id}"
-        )
+            acao = request.POST.get("acao")
+
+            if acao == "salvar_avancar":
+                proximo_item = (
+                    PregaoItem.objects.filter(
+                        pregao=pregao,
+                        ordem__gt=item_pregao.ordem,
+                    )
+                    .select_related("item")
+                    .order_by("ordem", "item__nome_item")
+                    .first()
+                )
+
+                if proximo_item:
+                    return redirect(
+                        f"{request.path}?modo=item&pregao={pregao.id}"
+                        f"&item={proximo_item.id}"
+                    )
+
+                messages.success(
+                    request,
+                    "Este era o último item do pregão. Não há próximo item para avançar.",
+                )
+
+            return redirect(
+                f"{request.path}?modo=item&pregao={pregao.id}"
+                f"&item={item_pregao.id}"
+            )
+
+        # --------------------------------------------------------
+        # SALVAR POR FORNECEDOR
+        # --------------------------------------------------------
+        if modo == "fornecedor":
+            if not fornecedor_selecionado:
+                messages.error(
+                    request,
+                    "Selecione o pregão e o fornecedor.",
+                )
+                return redirect(
+                    f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                )
+
+            erros = []
+            dados_validados = []
+
+            # Primeiro valida tudo. Só grava depois que todas as linhas
+            # selecionadas estiverem corretas.
+            for pi in itens_pregao:
+                participa = request.POST.get(
+                    f"participa_item_{pi.id}"
+                ) == "on"
+                marca = request.POST.get(
+                    f"marca_item_{pi.id}",
+                    "",
+                ).strip()
+                preco_texto = request.POST.get(
+                    f"preco_item_{pi.id}",
+                    "",
+                ).strip()
+
+                if not participa:
+                    dados_validados.append(
+                        {
+                            "pregao_item": pi,
+                            "participa": False,
+                            "marca": "",
+                            "preco_inicial": None,
+                        }
+                    )
+                    continue
+
+                if not marca:
+                    erros.append(
+                        f"Informe a marca do item {pi.ordem} - "
+                        f"{pi.item.nome_item}, ou desmarque a participação."
+                    )
+                    continue
+
+                if not preco_texto:
+                    erros.append(
+                        f"Informe o preço inicial do item {pi.ordem} - "
+                        f"{pi.item.nome_item}, ou desmarque a participação."
+                    )
+                    continue
+
+                preco_normalizado = preco_texto.replace(",", ".")
+
+                try:
+                    preco_inicial = Decimal(preco_normalizado)
+                except InvalidOperation:
+                    erros.append(
+                        f"Preço inicial inválido para o item {pi.ordem} - "
+                        f"{pi.item.nome_item}."
+                    )
+                    continue
+
+                if preco_inicial <= 0:
+                    erros.append(
+                        f"O preço inicial do item {pi.ordem} - "
+                        f"{pi.item.nome_item} deve ser maior que zero."
+                    )
+                    continue
+
+                dados_validados.append(
+                    {
+                        "pregao_item": pi,
+                        "participa": True,
+                        "marca": marca,
+                        "preco_inicial": preco_inicial,
+                    }
+                )
+
+            if erros:
+                for erro in erros:
+                    messages.error(request, erro)
+
+                # Mantém na tela exatamente o que o usuário acabou de digitar.
+                propostas_digitadas = {}
+                for pi in itens_pregao:
+                    participa = request.POST.get(
+                        f"participa_item_{pi.id}"
+                    ) == "on"
+
+                    propostas_digitadas[pi.id] = {
+                        "participa": participa,
+                        "marca": request.POST.get(
+                            f"marca_item_{pi.id}",
+                            "",
+                        ).strip(),
+                        "preco_inicial": request.POST.get(
+                            f"preco_item_{pi.id}",
+                            "",
+                        ).strip(),
+                    }
+
+                return render(
+                    request,
+                    "pregoes/propostas_iniciais.html",
+                    {
+                        "pregoes": pregoes_lista,
+                        "modo": modo,
+                        "pregao": pregao,
+                        "itens_pregao": itens_pregao,
+                        "item_pregao": None,
+                        "fornecedores": fornecedores,
+                        "fornecedor_selecionado": fornecedor_selecionado,
+                        "propostas_salvas": propostas_digitadas,
+                    },
+                )
+
+            salvos = 0
+            participantes = 0
+
+            for dados in dados_validados:
+                PropostaInicialItem.objects.update_or_create(
+                    pregao=pregao,
+                    pregao_item=dados["pregao_item"],
+                    fornecedor=fornecedor_selecionado,
+                    defaults={
+                        "participa": dados["participa"],
+                        "marca": dados["marca"],
+                        "preco_inicial": dados["preco_inicial"],
+                    },
+                )
+                salvos += 1
+                if dados["participa"]:
+                    participantes += 1
+
+            messages.success(
+                request,
+                f"Propostas do fornecedor {fornecedor_selecionado.razao_social} "
+                f"salvas com sucesso. Itens participantes: {participantes}. "
+                f"Registros processados: {salvos}.",
+            )
+
+            return redirect(
+                f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                f"&fornecedor={fornecedor_selecionado.id}"
+            )
+
     return render(
         request,
         "pregoes/propostas_iniciais.html",
         {
             "pregoes": pregoes_lista,
+            "modo": modo,
             "pregao": pregao,
             "itens_pregao": itens_pregao,
             "item_pregao": item_pregao,
             "fornecedores": fornecedores,
+            "fornecedor_selecionado": fornecedor_selecionado,
             "propostas_salvas": propostas_salvas,
         },
     )
+

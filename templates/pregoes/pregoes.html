@@ -57,6 +57,30 @@
         flex: 0 0 16px;
         cursor: pointer;
     }
+
+    .acoes-certame {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex-wrap: wrap;
+        margin: 0;
+    }
+
+    .acoes-certame .btn {
+        padding: 6px 9px;
+        font-size: 12px;
+        line-height: 1.1;
+        min-height: auto;
+        border-radius: 8px;
+        white-space: nowrap;
+    }
+
+    .acoes-certame .badge {
+        font-size: 11px;
+        padding: 4px 7px;
+        line-height: 1.1;
+        white-space: nowrap;
+    }
 </style>
 
 
@@ -222,13 +246,22 @@
                         </td>
 
                         <td>
-                            {% if pregao.status == "nao_iniciado" %}
-                            <a class="btn btn-primary" href="{% url 'pregoes:editar_pregao' pregao.id %}">
-                                Editar
-                            </a>
-                            {% else %}
-                            <span class="badge badge-danger">Edição bloqueada</span>
-                            {% endif %}
+                            <div class="acoes-certame">
+                                {% if pregao.tipo_certame == "pregao_presencial" %}
+                                <a class="btn btn-secondary"
+                                   href="{% url 'pregoes:relacao_fornecedores_word' pregao.id %}">
+                                    Fornecedores
+                                </a>
+                                {% endif %}
+
+                                {% if pregao.status == "nao_iniciado" %}
+                                <a class="btn btn-primary" href="{% url 'pregoes:editar_pregao' pregao.id %}">
+                                    Editar
+                                </a>
+                                {% else %}
+                                <span class="badge badge-danger">Edição bloqueada</span>
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     {% empty %}
