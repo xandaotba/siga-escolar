@@ -42,6 +42,16 @@ urlpatterns = [
         name="excluir_lance_conferencia",
     ),
     path(
+        "pregao/<int:pregao_id>/item/<int:item_id>/beneficio-me-epp/<int:beneficio_id>/exercer/",
+        views.exercer_beneficio_me_epp,
+        name="exercer_beneficio_me_epp",
+    ),
+    path(
+        "pregao/<int:pregao_id>/item/<int:item_id>/beneficio-me-epp/<int:beneficio_id>/recusar/",
+        views.recusar_beneficio_me_epp,
+        name="recusar_beneficio_me_epp",
+    ),
+    path(
         "pregao/<int:pregao_id>/finalizar/",
         views.finalizar_pregao,
         name="finalizar_pregao",

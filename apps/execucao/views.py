@@ -1,5 +1,6 @@
 from decimal import Decimal, InvalidOperation
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Max, Min
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -13,6 +14,8 @@ from apps.pregoes.models import (
     ResultadoItem,
     PropostaInicialItem,
 )
+from .models import BeneficioMEEPP
+
 from .services import (
     definir_fornecedor_atual_se_necessario,
     fornecedores_ativos_do_item,
@@ -75,6 +78,142 @@ def calcular_alerta_media(item_atual, valor_adjudicado):
         "diferenca_percentual": diferenca_percentual,
     }
 
+
+
+
+def _melhores_valores_fornecedores(pregao, item_atual):
+    return list(
+        Lance.objects.filter(
+            pregao=pregao,
+            pregao_item=item_atual,
+        )
+        .values("fornecedor")
+        .annotate(melhor_valor=Min("valor_lance"))
+        .order_by("melhor_valor", "fornecedor")
+    )
+
+
+def _sincronizar_beneficios_me_epp(pregao, item_atual, classificados):
+    BeneficioMEEPP.objects.filter(
+        pregao=pregao,
+        pregao_item=item_atual,
+    ).delete()
+
+    if not classificados:
+        return None
+
+    vencedor_id = classificados[0]["fornecedor"]
+    valor_referencia = classificados[0]["melhor_valor"]
+
+    vencedor = PregaoFornecedor.objects.filter(
+        pregao=pregao,
+        fornecedor_id=vencedor_id,
+        ativo_no_pregao=True,
+    ).select_related("fornecedor").first()
+
+    if not vencedor or getattr(vencedor.fornecedor, "fornecedor_me_epp", False):
+        return None
+
+    limite = valor_referencia * Decimal("1.05")
+    candidatos = []
+
+    for classificado in classificados[1:]:
+        vinculo = PregaoFornecedor.objects.filter(
+            pregao=pregao,
+            fornecedor_id=classificado["fornecedor"],
+            ativo_no_pregao=True,
+        ).select_related("fornecedor").first()
+
+        if not vinculo:
+            continue
+
+        fornecedor = vinculo.fornecedor
+
+        if not getattr(fornecedor, "fornecedor_me_epp", False):
+            continue
+
+        if classificado["melhor_valor"] <= limite:
+            candidatos.append((fornecedor, classificado["melhor_valor"]))
+
+    for ordem, (fornecedor, valor) in enumerate(candidatos, start=1):
+        BeneficioMEEPP.objects.create(
+            pregao=pregao,
+            pregao_item=item_atual,
+            fornecedor=fornecedor,
+            ordem_convocacao=ordem,
+            valor_referencia=valor_referencia,
+            valor_original_me_epp=valor,
+            percentual_margem=Decimal("5.00"),
+            status=BeneficioMEEPP.STATUS_PENDENTE,
+        )
+
+    return _beneficio_me_epp_atual(pregao, item_atual)
+
+
+def _beneficio_me_epp_atual(pregao, item_atual):
+    return (
+        BeneficioMEEPP.objects.filter(
+            pregao=pregao,
+            pregao_item=item_atual,
+            status=BeneficioMEEPP.STATUS_PENDENTE,
+        )
+        .select_related("fornecedor")
+        .order_by("ordem_convocacao", "id")
+        .first()
+    )
+
+
+def _resultado_apos_beneficio(pregao, item_atual, beneficio, nova_oferta):
+    resultado = get_object_or_404(
+        ResultadoItem,
+        pregao=pregao,
+        pregao_item=item_atual,
+    )
+
+    classificados = _melhores_valores_fornecedores(pregao, item_atual)
+    antigo_primeiro_id = resultado.primeiro_fornecedor_id
+    antigo_primeiro_valor = resultado.primeiro_valor
+
+    nova_classificacao = [
+        {"fornecedor": beneficio.fornecedor_id, "melhor_valor": nova_oferta}
+    ]
+
+    if antigo_primeiro_id and antigo_primeiro_id != beneficio.fornecedor_id:
+        nova_classificacao.append(
+            {"fornecedor": antigo_primeiro_id, "melhor_valor": antigo_primeiro_valor}
+        )
+
+    for classificado in classificados:
+        if classificado["fornecedor"] in {beneficio.fornecedor_id, antigo_primeiro_id}:
+            continue
+        nova_classificacao.append(classificado)
+
+    nova_classificacao = nova_classificacao[:3]
+
+    resultado.primeiro_fornecedor = None
+    resultado.primeiro_valor = None
+    resultado.segundo_fornecedor = None
+    resultado.segundo_valor = None
+    resultado.terceiro_fornecedor = None
+    resultado.terceiro_valor = None
+
+    if len(nova_classificacao) >= 1:
+        resultado.primeiro_fornecedor_id = nova_classificacao[0]["fornecedor"]
+        resultado.primeiro_valor = nova_classificacao[0]["melhor_valor"]
+    if len(nova_classificacao) >= 2:
+        resultado.segundo_fornecedor_id = nova_classificacao[1]["fornecedor"]
+        resultado.segundo_valor = nova_classificacao[1]["melhor_valor"]
+    if len(nova_classificacao) >= 3:
+        resultado.terceiro_fornecedor_id = nova_classificacao[2]["fornecedor"]
+        resultado.terceiro_valor = nova_classificacao[2]["melhor_valor"]
+
+    resultado.save()
+
+    item_atual.fornecedor_vencedor = beneficio.fornecedor
+    item_atual.menor_lance = nova_oferta
+    item_atual.save(update_fields=["fornecedor_vencedor", "menor_lance"])
+
+    return resultado
 
 
 def execucao_pregao(request):
@@ -244,6 +383,17 @@ def tela_lances(request, pregao_id, item_id):
         False,
     )
 
+    beneficio_me_epp_atual = _beneficio_me_epp_atual(pregao, item_atual)
+    beneficios_me_epp = list(
+        BeneficioMEEPP.objects.filter(
+            pregao=pregao,
+            pregao_item=item_atual,
+        )
+        .select_related("fornecedor")
+        .order_by("ordem_convocacao", "id")
+    )
+    beneficio_me_epp_pendente = beneficio_me_epp_atual is not None
+
     lances_com_marca = []
 
     for lance in lances:
@@ -278,6 +428,9 @@ def tela_lances(request, pregao_id, item_id):
             "menor_valor_origem": menor_valor_origem,
             "alerta_media": alerta_media,
             "modo_conferencia_alteracao": modo_conferencia_alteracao,
+            "beneficio_me_epp_atual": beneficio_me_epp_atual,
+            "beneficios_me_epp": beneficios_me_epp,
+            "beneficio_me_epp_pendente": beneficio_me_epp_pendente,
         },
     )
 
@@ -529,14 +682,7 @@ def finalizar_item(request, pregao, item_atual):
         messages.error(request, "Não é possível finalizar o item sem nenhum lance. Use Deserto ou Fracassado.")
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
 
-    melhores_lances = (
-        lances_existentes
-        .values("fornecedor")
-        .annotate(melhor_valor=Min("valor_lance"))
-        .order_by("melhor_valor")[:3]
-    )
-
-    classificados = list(melhores_lances)
+    classificados = _melhores_valores_fornecedores(pregao, item_atual)
 
     if not classificados:
         messages.error(request, "Não foi possível identificar o vencedor do item.")
@@ -555,13 +701,9 @@ def finalizar_item(request, pregao, item_atual):
     resultado, criado = ResultadoItem.objects.get_or_create(
         pregao=pregao,
         pregao_item=item_atual,
-        defaults={
-            "status_resultado": ResultadoItem.STATUS_ADJUDICADO,
-        },
+        defaults={"status_resultado": ResultadoItem.STATUS_ADJUDICADO},
     )
-
     resultado.status_resultado = ResultadoItem.STATUS_ADJUDICADO
-
     resultado.primeiro_fornecedor = None
     resultado.primeiro_valor = None
     resultado.segundo_fornecedor = None
@@ -572,22 +714,153 @@ def finalizar_item(request, pregao, item_atual):
     if len(classificados) >= 1:
         resultado.primeiro_fornecedor_id = classificados[0]["fornecedor"]
         resultado.primeiro_valor = classificados[0]["melhor_valor"]
-
     if len(classificados) >= 2:
         resultado.segundo_fornecedor_id = classificados[1]["fornecedor"]
         resultado.segundo_valor = classificados[1]["melhor_valor"]
-
     if len(classificados) >= 3:
         resultado.terceiro_fornecedor_id = classificados[2]["fornecedor"]
         resultado.terceiro_valor = classificados[2]["melhor_valor"]
 
     resultado.save()
 
+    item_atual.fornecedor_vencedor_id = classificados[0]["fornecedor"]
+    item_atual.menor_lance = classificados[0]["melhor_valor"]
     item_atual.status = PregaoItem.STATUS_ENCERRADO
     item_atual.encerrado_em = timezone.now()
-    item_atual.save(update_fields=["status", "encerrado_em"])
+    item_atual.save(
+        update_fields=["fornecedor_vencedor", "menor_lance", "status", "encerrado_em"]
+    )
 
-    messages.success(request, "Item finalizado com sucesso.")
+    beneficio_atual = _sincronizar_beneficios_me_epp(pregao, item_atual, classificados)
+
+    if beneficio_atual:
+        messages.warning(
+            request,
+            "Item finalizado provisoriamente. Existe ME/EPP dentro da faixa de até 5% do melhor valor. Resolva o benefício ME/EPP antes de avançar para o próximo item.",
+        )
+    else:
+        messages.success(request, "Item finalizado com sucesso.")
+
+    return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+
+@transaction.atomic
+def exercer_beneficio_me_epp(request, pregao_id, item_id, beneficio_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+    item_atual = get_object_or_404(PregaoItem, id=item_id, pregao=pregao)
+    beneficio = get_object_or_404(
+        BeneficioMEEPP.objects.select_related("fornecedor"),
+        id=beneficio_id,
+        pregao=pregao,
+        pregao_item=item_atual,
+    )
+
+    if request.method != "POST":
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    beneficio_atual = _beneficio_me_epp_atual(pregao, item_atual)
+    if not beneficio_atual or beneficio_atual.id != beneficio.id:
+        messages.error(request, "Este fornecedor não é o próximo ME/EPP habilitado para exercer o benefício.")
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    valor_texto = (request.POST.get("nova_oferta_me_epp") or "").strip()
+    if not valor_texto:
+        messages.error(request, "Informe a nova oferta da ME/EPP.")
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    try:
+        nova_oferta = Decimal(
+            valor_texto.replace(".", "").replace(",", ".") if "," in valor_texto else valor_texto
+        )
+    except InvalidOperation:
+        messages.error(request, "Nova oferta ME/EPP inválida.")
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    if nova_oferta <= 0:
+        messages.error(request, "A nova oferta ME/EPP deve ser maior que zero.")
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    if nova_oferta >= beneficio.valor_referencia:
+        messages.error(
+            request,
+            f"Para exercer o benefício, a nova oferta da ME/EPP deve ser inferior ao melhor valor atual de R$ {beneficio.valor_referencia:.2f}.",
+        )
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    # Registra a oferta vencedora do benefício também como Lance.
+    # Assim ela passa a integrar o histórico oficial e a Planilha de Lances,
+    # sem perder o registro específico do benefício ME/EPP.
+    ultima_ordem = Lance.objects.filter(
+        pregao=pregao,
+        pregao_item=item_atual,
+    ).aggregate(Max("ordem_lance"))["ordem_lance__max"]
+
+    proxima_ordem = 1 if ultima_ordem is None else ultima_ordem + 1
+
+    Lance.objects.create(
+        pregao=pregao,
+        pregao_item=item_atual,
+        fornecedor=beneficio.fornecedor,
+        valor_lance=nova_oferta,
+        ordem_lance=proxima_ordem,
+        registrado_por=request.user if request.user.is_authenticated else None,
+    )
+
+    beneficio.nova_oferta = nova_oferta
+    beneficio.status = BeneficioMEEPP.STATUS_EXERCIDO
+    beneficio.registrado_por = request.user if request.user.is_authenticated else None
+    beneficio.save(update_fields=["nova_oferta", "status", "registrado_por", "atualizado_em"])
+
+    BeneficioMEEPP.objects.filter(
+        pregao=pregao,
+        pregao_item=item_atual,
+        status=BeneficioMEEPP.STATUS_PENDENTE,
+    ).exclude(id=beneficio.id).update(status=BeneficioMEEPP.STATUS_ENCERRADO)
+
+    _resultado_apos_beneficio(pregao, item_atual, beneficio, nova_oferta)
+
+    messages.success(
+        request,
+        f"Benefício ME/EPP exercido por {beneficio.fornecedor.razao_social}. A classificação do item foi atualizada.",
+    )
+    return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+
+@transaction.atomic
+def recusar_beneficio_me_epp(request, pregao_id, item_id, beneficio_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+    item_atual = get_object_or_404(PregaoItem, id=item_id, pregao=pregao)
+    beneficio = get_object_or_404(
+        BeneficioMEEPP.objects.select_related("fornecedor"),
+        id=beneficio_id,
+        pregao=pregao,
+        pregao_item=item_atual,
+    )
+
+    if request.method != "POST":
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    beneficio_atual = _beneficio_me_epp_atual(pregao, item_atual)
+    if not beneficio_atual or beneficio_atual.id != beneficio.id:
+        messages.error(request, "Este fornecedor não é o próximo ME/EPP habilitado para responder ao benefício.")
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    beneficio.status = BeneficioMEEPP.STATUS_RECUSADO
+    beneficio.registrado_por = request.user if request.user.is_authenticated else None
+    beneficio.save(update_fields=["status", "registrado_por", "atualizado_em"])
+
+    proximo = _beneficio_me_epp_atual(pregao, item_atual)
+    if proximo:
+        messages.warning(
+            request,
+            f"{beneficio.fornecedor.razao_social} não exerceu o benefício. A próxima ME/EPP habilitada é {proximo.fornecedor.razao_social}.",
+        )
+    else:
+        messages.success(
+            request,
+            "A ME/EPP não exerceu o benefício e não há outra ME/EPP habilitada. Mantida a classificação original do item.",
+        )
+
     return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
 
 
@@ -745,6 +1018,26 @@ def excluir_lance_conferencia(request, pregao_id, item_id, lance_id):
 def proximo_item(request, pregao_id):
     pregao = get_object_or_404(Pregao, id=pregao_id)
 
+    beneficio_pendente = (
+        BeneficioMEEPP.objects.filter(
+            pregao=pregao,
+            status=BeneficioMEEPP.STATUS_PENDENTE,
+        )
+        .select_related("pregao_item")
+        .order_by("pregao_item__ordem", "ordem_convocacao")
+        .first()
+    )
+    if beneficio_pendente:
+        messages.error(
+            request,
+            "Resolva o benefício ME/EPP pendente antes de avançar para o próximo item.",
+        )
+        return redirect(
+            "execucao:tela_lances",
+            pregao_id=pregao.id,
+            item_id=beneficio_pendente.pregao_item_id,
+        )
+
     proximo = PregaoItem.objects.filter(
         pregao=pregao,
         status=PregaoItem.STATUS_PENDENTE,
@@ -796,6 +1089,14 @@ def montar_linhas_conferencia_pregao(pregao):
         for proposta in PropostaInicialItem.objects.filter(pregao=pregao)
         .select_related("pregao_item", "fornecedor")
     }
+
+    beneficios_por_item = {}
+    for beneficio in (
+        BeneficioMEEPP.objects.filter(pregao=pregao)
+        .select_related("fornecedor")
+        .order_by("pregao_item_id", "ordem_convocacao", "id")
+    ):
+        beneficios_por_item.setdefault(beneficio.pregao_item_id, []).append(beneficio)
 
     linhas = []
 
@@ -856,6 +1157,7 @@ def montar_linhas_conferencia_pregao(pregao):
                 "primeiro": primeiro,
                 "segundo": segundo,
                 "terceiro": terceiro,
+                "beneficios_me_epp": beneficios_por_item.get(item_pregao.id, []),
             }
         )
 
@@ -927,6 +1229,11 @@ def alterar_item_conferencia(request, pregao_id, item_id):
         pregao_item=item,
     ).delete()
 
+    BeneficioMEEPP.objects.filter(
+        pregao=pregao,
+        pregao_item=item,
+    ).delete()
+
     item.status = PregaoItem.STATUS_EM_DISPUTA
     item.encerrado_em = None
     item.iniciado_em = item.iniciado_em or timezone.now()
@@ -973,6 +1280,16 @@ def finalizar_pregao(request, pregao_id):
     pregao = get_object_or_404(Pregao, id=pregao_id)
 
     if request.method != "POST":
+        return redirect("execucao:conferencia_pregao", pregao_id=pregao.id)
+
+    if BeneficioMEEPP.objects.filter(
+        pregao=pregao,
+        status=BeneficioMEEPP.STATUS_PENDENTE,
+    ).exists():
+        messages.error(
+            request,
+            "Não é possível finalizar oficialmente o pregão enquanto houver benefício ME/EPP pendente.",
+        )
         return redirect("execucao:conferencia_pregao", pregao_id=pregao.id)
 
     itens_abertos = PregaoItem.objects.filter(

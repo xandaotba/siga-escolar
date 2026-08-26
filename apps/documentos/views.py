@@ -13,6 +13,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.cadastros.models import Escola, Fornecedor, Item
+from apps.execucao.models import BeneficioMEEPP
+
 from apps.pregoes.models import (
     Lance,
     Pregao,
@@ -292,6 +294,27 @@ def planilha_lances(request, pregao_id):
                 .order_by("ordem_lance")
                 .values_list("valor_lance", flat=True)
             )
+
+            # Compatibilidade com benefícios ME/EPP já exercidos antes desta
+            # atualização: nesses casos a nova oferta ficou salva no histórico
+            # do benefício, mas ainda não existia como registro em Lance.
+            beneficio_exercido = (
+                BeneficioMEEPP.objects.filter(
+                    pregao=pregao,
+                    pregao_item=item_pregao,
+                    fornecedor=fornecedor,
+                    status=BeneficioMEEPP.STATUS_EXERCIDO,
+                    nova_oferta__isnull=False,
+                )
+                .order_by("-atualizado_em", "-id")
+                .first()
+            )
+
+            if (
+                beneficio_exercido
+                and beneficio_exercido.nova_oferta not in lances_fornecedor
+            ):
+                lances_fornecedor.append(beneficio_exercido.nova_oferta)
 
             lances_10 = selecionar_lances_para_planilha(lances_fornecedor)
 

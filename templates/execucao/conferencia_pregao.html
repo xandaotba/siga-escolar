@@ -169,7 +169,24 @@
                     <td>{{ linha.marca }}</td>
                     <td>{{ linha.unidade }}</td>
                     <td>{{ linha.quantidade|quantidade_br }}</td>
-                    <td>{{ linha.status }}</td>
+                    <td>
+                        {{ linha.status }}
+                        {% if linha.beneficios_me_epp %}
+                            <br>
+                            {% for beneficio in linha.beneficios_me_epp %}
+                                {% if beneficio.status == "exercido" %}
+                                    <span class="texto-muted">
+                                        ME/EPP: benefício exercido por {{ beneficio.fornecedor.razao_social }}
+                                        {% if beneficio.nova_oferta %} — {{ beneficio.nova_oferta|moeda_br }}{% endif %}
+                                    </span><br>
+                                {% elif beneficio.status == "recusado" %}
+                                    <span class="texto-muted">
+                                        ME/EPP: {{ beneficio.fornecedor.razao_social }} não exerceu o benefício
+                                    </span><br>
+                                {% endif %}
+                            {% endfor %}
+                        {% endif %}
+                    </td>
 
                     <td>
                         <div class="vencedor-box">

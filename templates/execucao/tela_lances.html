@@ -189,6 +189,50 @@
         background: #f0fdf4;
     }
 
+    .beneficio-me-epp-box {
+        margin-top: 18px;
+        padding: 16px;
+        border: 2px solid #d97706;
+        border-radius: 14px;
+        background: #fffbeb;
+    }
+
+    .beneficio-me-epp-box h3 {
+        margin: 0 0 8px;
+        color: #92400e;
+    }
+
+    .beneficio-me-epp-acoes {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+        align-items: flex-end;
+    }
+
+    .beneficio-me-epp-acoes form { margin: 0; }
+
+    .beneficio-me-epp-oferta {
+        min-width: 220px;
+    }
+
+    .beneficio-me-epp-historico {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #475569;
+    }
+
+    .badge-me-epp {
+        display: inline-block;
+        background: #7c3aed;
+        color: #fff;
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 800;
+        margin-top: 5px;
+    }
+
     @media (max-width: 1100px) {
 
         .telao-grid,
@@ -855,9 +899,7 @@
 
     <p>
         <strong>Status:</strong>
-        <span class="badge badge-success">
-            {{ resultado.get_status_resultado_display }}
-        </span>
+        <span class="badge badge-success">{{ resultado.get_status_resultado_display }}</span>
     </p>
 
     <div class="grid grid-3">
@@ -867,9 +909,10 @@
                 {% if resultado.primeiro_fornecedor %}
                 <strong>{{ resultado.primeiro_fornecedor }}</strong><br>
                 {{ resultado.primeiro_valor|moeda_br }}
-                {% else %}
-                -
+                {% if resultado.primeiro_fornecedor.fornecedor_me_epp %}
+                <br><span class="badge-me-epp">ME/EPP</span>
                 {% endif %}
+                {% else %}-{% endif %}
             </div>
         </div>
 
@@ -879,9 +922,10 @@
                 {% if resultado.segundo_fornecedor %}
                 <strong>{{ resultado.segundo_fornecedor }}</strong><br>
                 {{ resultado.segundo_valor|moeda_br }}
-                {% else %}
-                -
+                {% if resultado.segundo_fornecedor.fornecedor_me_epp %}
+                <br><span class="badge-me-epp">ME/EPP</span>
                 {% endif %}
+                {% else %}-{% endif %}
             </div>
         </div>
 
@@ -891,18 +935,78 @@
                 {% if resultado.terceiro_fornecedor %}
                 <strong>{{ resultado.terceiro_fornecedor }}</strong><br>
                 {{ resultado.terceiro_valor|moeda_br }}
-                {% else %}
-                -
+                {% if resultado.terceiro_fornecedor.fornecedor_me_epp %}
+                <br><span class="badge-me-epp">ME/EPP</span>
                 {% endif %}
+                {% else %}-{% endif %}
             </div>
         </div>
     </div>
 
+    {% if beneficio_me_epp_atual %}
+    <div class="beneficio-me-epp-box">
+        <h3>Benefício ME/EPP disponível</h3>
+        <p>
+            <strong>{{ beneficio_me_epp_atual.fornecedor.razao_social }}</strong>
+            está dentro da faixa de até 5% do melhor valor.
+        </p>
+        <p>
+            <strong>Melhor valor atual:</strong> {{ beneficio_me_epp_atual.valor_referencia|moeda_br }}<br>
+            <strong>Valor da ME/EPP:</strong> {{ beneficio_me_epp_atual.valor_original_me_epp|moeda_br }}
+        </p>
+        <p>
+            Para exercer o benefício, a nova oferta deve ser <strong>inferior ao melhor valor atual</strong>.
+        </p>
+
+        <div class="beneficio-me-epp-acoes">
+            <form method="post"
+                  action="{% url 'execucao:exercer_beneficio_me_epp' pregao.id item_atual.id beneficio_me_epp_atual.id %}">
+                {% csrf_token %}
+                <div class="form-group beneficio-me-epp-oferta" style="margin-bottom:8px;">
+                    <label>Nova oferta da ME/EPP</label>
+                    <input type="text" name="nova_oferta_me_epp" placeholder="0,00" required>
+                </div>
+                <button class="btn btn-success" type="submit"
+                        onclick="return confirm('Confirma que a ME/EPP deseja exercer o benefício com esta nova oferta?');">
+                    Utilizar benefício ME/EPP
+                </button>
+            </form>
+
+            <form method="post"
+                  action="{% url 'execucao:recusar_beneficio_me_epp' pregao.id item_atual.id beneficio_me_epp_atual.id %}">
+                {% csrf_token %}
+                <button class="btn btn-secondary" type="submit"
+                        onclick="return confirm('Confirma que esta ME/EPP não deseja exercer o benefício?');">
+                    Não exercer benefício
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if beneficios_me_epp %}
+    <div class="beneficio-me-epp-historico">
+        <strong>Histórico ME/EPP:</strong>
+        {% for beneficio in beneficios_me_epp %}
+        <div>
+            {{ beneficio.fornecedor.razao_social }} — {{ beneficio.get_status_display }}
+            {% if beneficio.nova_oferta %} — nova oferta: {{ beneficio.nova_oferta|moeda_br }}{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if not beneficio_me_epp_pendente %}
     <div style="margin-top: 15px;">
         <a class="btn btn-primary btn-telao" href="{% url 'execucao:proximo_item' pregao.id %}">
             Próximo Item
         </a>
     </div>
+    {% else %}
+    <div class="alert alert-error" style="margin-top:15px;">
+        Resolva o benefício ME/EPP antes de avançar para o próximo item.
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
