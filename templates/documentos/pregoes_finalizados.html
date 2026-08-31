@@ -11,70 +11,363 @@
 
 
 <style>
-    /* Menu suspenso da Ata RP */
-    .ata-rp-menu {
+    /* =========================================================
+       MENU ÚNICO DE DOCUMENTOS
+       ========================================================= */
+
+    .documentos-menu {
         position: relative;
         display: inline-flex;
-        align-items: center;
         overflow: visible;
     }
 
-    .ata-rp-trigger {
-        display: inline-block;
+    .documentos-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 12px;
+        cursor: default;
+        white-space: nowrap;
     }
 
-    .ata-rp-opcoes {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        z-index: 99999;
+    .documentos-trigger::after {
+        content: "▾";
+        font-size: 10px;
+        opacity: 0.85;
+    }
 
-        min-width: 155px;
-        padding-top: 5px;
+    .documentos-dropdown {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        z-index: 99999;
+        width: 260px;
 
         opacity: 0;
         visibility: hidden;
         pointer-events: none;
-        transform: translateY(-3px);
+        transform: translateY(-4px);
+
         transition:
             opacity 0.12s ease,
             visibility 0.12s ease,
             transform 0.12s ease;
     }
 
-    .ata-rp-menu:hover .ata-rp-opcoes {
+    /* Pequena ponte invisível para o mouse não perder o hover */
+    .documentos-dropdown::before {
+        content: "";
+        position: absolute;
+        top: -8px;
+        left: 0;
+        width: 100%;
+        height: 10px;
+    }
+
+    .documentos-menu:hover > .documentos-dropdown,
+    .documentos-menu:focus-within > .documentos-dropdown {
         opacity: 1;
         visibility: visible;
         pointer-events: auto;
         transform: translateY(0);
     }
 
-    .ata-rp-opcoes-caixa {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-
-        padding: 7px;
-        background: #fff;
-        border: 1px solid #d1d5db;
-        border-radius: 8px;
-        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.20);
+    .documentos-dropdown-caixa,
+    .documentos-submenu-caixa {
+        background: #ffffff;
+        border: 1px solid #dbe3ec;
+        border-radius: 10px;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+        padding: 6px;
     }
 
-    .ata-rp-opcoes-caixa .btn {
-        display: block;
+    .documentos-item,
+    .documentos-submenu-trigger {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
         width: 100%;
         box-sizing: border-box;
+
+        padding: 9px 11px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+
+        color: #1e293b;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.25;
+        text-align: left;
+        text-decoration: none;
         white-space: nowrap;
-        text-align: center;
+        cursor: pointer;
     }
 
-    /* Permite que o submenu fique sobre os demais elementos da tabela. */
+    .documentos-item:hover,
+    .documentos-submenu:hover > .documentos-submenu-trigger {
+        background: #f1f5f9;
+        color: #0f172a;
+    }
+
+    .documentos-item-destaque {
+        color: #0f6f47;
+    }
+
+    .documentos-item-contratos {
+        color: #1565c0;
+    }
+
+    .documentos-separador {
+        height: 1px;
+        margin: 5px 4px;
+        background: #e2e8f0;
+    }
+
+    /* =========================================================
+       SUBMENUS
+       ========================================================= */
+
+    .documentos-submenu {
+        position: relative;
+    }
+
+    .documentos-submenu-trigger::after {
+        content: "›";
+        font-size: 18px;
+        line-height: 1;
+        color: #64748b;
+    }
+
+    .documentos-submenu-painel {
+        position: absolute;
+        top: -6px;
+        left: auto;
+        right: calc(100% - 2px);
+        z-index: 100000;
+        min-width: 190px;
+        padding-left: 0;
+        padding-right: 7px;
+
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transform: translateX(-4px);
+
+        transition:
+            opacity 0.12s ease,
+            visibility 0.12s ease,
+            transform 0.12s ease;
+    }
+
+    /* Ponte entre os menus para facilitar o movimento horizontal */
+    .documentos-submenu-painel::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: auto;
+        right: -8px;
+        width: 12px;
+        height: 100%;
+    }
+
+    .documentos-submenu:hover > .documentos-submenu-painel,
+    .documentos-submenu:focus-within > .documentos-submenu-painel {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transform: translateX(0);
+    }
+
+    .documentos-submenu-caixa {
+        min-width: 180px;
+    }
+
+    .documentos-municipio {
+        position: relative;
+    }
+
+    .documentos-municipio-nome {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 9px 11px;
+        border-radius: 7px;
+
+        color: #334155;
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+        cursor: default;
+    }
+
+    .documentos-municipio-nome::after {
+        content: "›";
+        font-size: 18px;
+        line-height: 1;
+        color: #64748b;
+    }
+
+    .documentos-municipio:hover > .documentos-municipio-nome {
+        background: #f1f5f9;
+    }
+
+    .documentos-municipio-opcoes {
+        position: absolute;
+        top: -6px;
+        left: auto;
+        right: calc(100% - 2px);
+        z-index: 100001;
+        min-width: 165px;
+        padding-left: 0;
+        padding-right: 7px;
+
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transform: translateX(-4px);
+
+        transition:
+            opacity 0.12s ease,
+            visibility 0.12s ease,
+            transform 0.12s ease;
+    }
+
+    .documentos-municipio-opcoes::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: auto;
+        right: -8px;
+        width: 12px;
+        height: 100%;
+    }
+
+    .documentos-municipio:hover > .documentos-municipio-opcoes {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transform: translateX(0);
+    }
+
+    .documentos-vazio {
+        padding: 10px 11px;
+        color: #64748b;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+
+    /* Mantém os menus sobre a tabela e evita que a célula corte o dropdown */
+    .table-wrapper,
+    table,
+    tbody,
+    tr,
+    td,
     .actions,
     .actions > * {
         overflow: visible;
     }
+
+    /* Coluna de documentos mais compacta */
+    td.documentos-coluna {
+        width: 1%;
+        white-space: nowrap;
+    }
+
+
+    /* =========================================================
+       TABELA MAIS COMPACTA
+       ========================================================= */
+
+    .table-wrapper table {
+        width: 100%;
+        table-layout: fixed;
+    }
+
+    .table-wrapper th,
+    .table-wrapper td {
+        padding: 9px 10px;
+        vertical-align: middle;
+    }
+
+    /* Pregão */
+    .table-wrapper th:nth-child(1),
+    .table-wrapper td:nth-child(1) {
+        width: 7%;
+    }
+
+    /* Ano */
+    .table-wrapper th:nth-child(2),
+    .table-wrapper td:nth-child(2) {
+        width: 6%;
+    }
+
+    /* Pregoeiro */
+    .table-wrapper th:nth-child(3),
+    .table-wrapper td:nth-child(3) {
+        width: 27%;
+    }
+
+    /* Data */
+    .table-wrapper th:nth-child(4),
+    .table-wrapper td:nth-child(4) {
+        width: 10%;
+    }
+
+    /* Status */
+    .table-wrapper th:nth-child(5),
+    .table-wrapper td:nth-child(5) {
+        width: 10%;
+    }
+
+    /* Finalizado em */
+    .table-wrapper th:nth-child(6),
+    .table-wrapper td:nth-child(6) {
+        width: 25%;
+    }
+
+    /* Documentos */
+    .table-wrapper th:nth-child(7),
+    .table-wrapper td:nth-child(7) {
+        width: 15%;
+        text-align: right;
+    }
+
+    .table-wrapper td:nth-child(3),
+    .table-wrapper td:nth-child(6) {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .documentos-dropdown {
+        width: 245px;
+    }
+
+    .documentos-trigger {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
 </style>
+
+
+{% if messages %}
+<div style="margin-bottom:16px;">
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+        <div class="alert alert-success">{{ message }}</div>
+        {% elif message.tags == "warning" %}
+        <div class="alert alert-warning">{{ message }}</div>
+        {% else %}
+        <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+
+
 
 
 
@@ -112,46 +405,122 @@
                         -
                         {% endif %}
                     </td>
-                    <td>
-                        <div class="actions">
-                            <a class="btn btn-primary" href="{% url 'documentos:planilha_lances' pregao.id %}"
-                                target="_blank">
-                                Planilha de Lances
-                            </a>
+                    <td class="documentos-coluna">
+                        <div class="documentos-menu">
+                            <span class="btn btn-primary documentos-trigger">
+                                Documentos
+                            </span>
 
-                            <a class="btn btn-success" href="{% url 'documentos:fornecedores_vencedores' pregao.id %}"
-                                target="_blank">
-                                Fornecedores Vencedores
-                            </a>
+                            <div class="documentos-dropdown">
+                                <div class="documentos-dropdown-caixa">
 
-                            <a class="btn btn-warning" href="{% url 'documentos:resultado_final' pregao.id %}"
-                                target="_blank">
-                                Resultado Final
-                            </a>
+                                    <a class="documentos-item"
+                                        href="{% url 'documentos:planilha_lances' pregao.id %}"
+                                        target="_blank">
+                                        Planilha de Lances
+                                    </a>
 
-                            <div class="ata-rp-menu">
-                                <span class="btn btn-success ata-rp-trigger">
-                                    Ata RP
-                                </span>
+                                    <a class="documentos-item"
+                                        href="{% url 'documentos:fornecedores_vencedores' pregao.id %}"
+                                        target="_blank">
+                                        Fornecedores Vencedores
+                                    </a>
 
-                                <div class="ata-rp-opcoes">
-                                    <div class="ata-rp-opcoes-caixa">
-                                        <a class="btn btn-success"
-                                            href="{% url 'documentos:ata_registro_precos_word' pregao.id %}">
-                                            Baixar em Word
-                                        </a>
+                                    <a class="documentos-item"
+                                        href="{% url 'documentos:resultado_final' pregao.id %}"
+                                        target="_blank">
+                                        Resultado Final
+                                    </a>
 
-                                        <a class="btn btn-warning"
-                                            href="{% url 'documentos:ata_registro_precos_pdf' pregao.id %}">
-                                            Baixar em PDF
-                                        </a>
+                                    <div class="documentos-separador"></div>
+
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Ata de Registro de Preços
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_registro_precos_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
+
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_registro_precos_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
+                                            </div>
+                                        </div>
                                     </div>
+
+                                    {% if pregao.tipo_certame == "pregao_presencial" %}
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Extrato de Homologação
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:extrato_homologacao_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
+
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:extrato_homologacao_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Extrato de Contrato
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                {% for municipio in pregao.municipios.all %}
+                                                <div class="documentos-municipio">
+                                                    <span class="documentos-municipio-nome">
+                                                        {{ municipio.nome }}/{{ municipio.uf }}
+                                                    </span>
+
+                                                    <div class="documentos-municipio-opcoes">
+                                                        <div class="documentos-submenu-caixa">
+                                                            <a class="documentos-item"
+                                                                href="{% url 'documentos:extrato_contrato_word' pregao.id municipio.id %}">
+                                                                Baixar em Word
+                                                            </a>
+
+                                                            <a class="documentos-item"
+                                                                href="{% url 'documentos:extrato_contrato_pdf' pregao.id municipio.id %}">
+                                                                Baixar em PDF
+                                                            </a>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                {% empty %}
+                                                <div class="documentos-vazio">
+                                                    Nenhum município vinculado.
+                                                </div>
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
+
+                                    <div class="documentos-separador"></div>
+
+                                    <a class="documentos-item documentos-item-contratos"
+                                        href="{% url 'documentos:contratos_pregao' pregao.id %}">
+                                        Gerar Contratos
+                                    </a>
+
                                 </div>
                             </div>
-
-                            <a class="btn btn-primary" href="{% url 'documentos:contratos_pregao' pregao.id %}">
-                                Gerar Contratos
-                            </a>
                         </div>
                     </td>
                 </tr>

@@ -62,6 +62,25 @@ class Pregao(models.Model):
         max_length=14,
         validators=[validar_cpf],
     )
+
+    nome_ordenador_despesas = models.CharField(
+        "Nome do Ordenador de Despesas",
+        max_length=255,
+        blank=True,
+        help_text="Nome completo do ordenador de despesas vinculado ao certame.",
+    )
+    rg_ordenador_despesas = models.CharField(
+        "RG do Ordenador de Despesas",
+        max_length=50,
+        blank=True,
+    )
+    cpf_ordenador_despesas = models.CharField(
+        "CPF do Ordenador de Despesas",
+        max_length=14,
+        blank=True,
+        validators=[validar_cpf],
+    )
+
     local_pregao = models.CharField("Local do Pregão", max_length=255)
     data_pregao = models.DateField("Data do Pregão")
 

@@ -175,6 +175,26 @@ urlpatterns = [
         name="ata_registro_precos_pdf",
     ),
     path(
+        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/<int:municipio_id>/word/",
+        views.gerar_extrato_contrato_word,
+        name="extrato_contrato_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/<int:municipio_id>/pdf/",
+        views.gerar_extrato_contrato_pdf,
+        name="extrato_contrato_pdf",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/extrato-homologacao/word/",
+        views.gerar_extrato_homologacao_word,
+        name="extrato_homologacao_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/extrato-homologacao/pdf/",
+        views.gerar_extrato_homologacao_pdf,
+        name="extrato_homologacao_pdf",
+    ),
+    path(
         "pregoes-finalizados/<int:pregao_id>/contratos/",
         views.contratos_pregao,
         name="contratos_pregao",

@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from django.http import HttpResponse, JsonResponse
 from apps.cadastros.models import Escola, Item
-from .forms import PregaoForm
+from .forms import OrdenadorDespesasForm, PregaoForm
 
 from io import BytesIO
 from copy import deepcopy
@@ -282,6 +282,45 @@ def editar_pregao(request, pregao_id):
             "pregoes": pregoes_pagina,
             "modo_edicao": True,
             "pregao_edicao": pregao,
+        },
+    )
+
+
+
+def editar_ordenador_despesas(request, pregao_id):
+    """
+    Permite cadastrar/alterar somente Nome, RG e CPF do ordenador de despesas.
+
+    Esta edição permanece disponível para certames em qualquer status porque
+    não altera dados da disputa, quantitativos, fornecedores, municípios ou
+    resultados do certame.
+    """
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
+    if request.method == "POST":
+        form = OrdenadorDespesasForm(request.POST, instance=pregao)
+
+        if form.is_valid():
+            form.save()
+            messages.success(
+                request,
+                "Dados do ordenador de despesas atualizados com sucesso.",
+            )
+            return redirect("pregoes:pregoes")
+
+        messages.error(
+            request,
+            "Verifique os dados informados para o ordenador de despesas.",
+        )
+    else:
+        form = OrdenadorDespesasForm(instance=pregao)
+
+    return render(
+        request,
+        "pregoes/ordenador_despesas.html",
+        {
+            "form": form,
+            "pregao": pregao,
         },
     )
 

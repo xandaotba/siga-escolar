@@ -6,6 +6,11 @@ app_name = "pregoes"
 urlpatterns = [
     path("", views.pregoes, name="pregoes"),
     path("<int:pregao_id>/editar/", views.editar_pregao, name="editar_pregao"),
+    path(
+        "<int:pregao_id>/ordenador-despesas/",
+        views.editar_ordenador_despesas,
+        name="editar_ordenador_despesas",
+    ),
 
     path(
         "<int:pregao_id>/relacao-fornecedores/",

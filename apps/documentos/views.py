@@ -46,6 +46,7 @@ from pathlib import Path
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from docx import Document
+from docx.text.paragraph import Paragraph
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.section import WD_ORIENT
@@ -58,7 +59,10 @@ import os
 import shutil
 import subprocess
 import tempfile
+import logging
 from zipfile import ZipFile, ZIP_DEFLATED
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -178,9 +182,13 @@ def usuario_pode_acessar_pregao_documentos(request, pregao):
 
 
 def pregoes_finalizados(request):
-    pregoes = Pregao.objects.filter(
-        status=Pregao.STATUS_FINALIZADO
-    ).order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_FINALIZADO
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     pregoes = aplicar_restricao_escola_pregoes(request, pregoes)
 
@@ -2438,6 +2446,925 @@ def gerar_ata_registro_precos_pdf(request, pregao_id):
         )
 
         return response
+
+
+
+# ============================================================
+# EXTRATO DE CONTRATO - POR CERTAME E MUNICÍPIO
+# ============================================================
+
+def caminho_modelo_extrato_contrato():
+    """
+    Localiza o modelo Word do Extrato de Contrato.
+
+    Aceita o nome padronizado do sistema e também o nome original
+    fornecido pelo usuário.
+    """
+    pasta_modelos = Path(settings.BASE_DIR) / "templates" / "documentos"
+
+    candidatos = [
+        pasta_modelos / "modelo_extrato_contrato.docx",
+        pasta_modelos / "Modelo extrato contrato.docx",
+        pasta_modelos / "MODELO EXTRATO CONTRATO.docx",
+    ]
+
+    for caminho in candidatos:
+        if caminho.exists():
+            return caminho
+
+    return candidatos[0]
+
+
+def _extrato_rotulo_lista(indice):
+    """
+    Retorna a, b, c ... z, aa, ab...
+    Recebe índice começando em zero.
+    """
+    numero = int(indice) + 1
+    partes = []
+
+    while numero > 0:
+        numero, resto = divmod(numero - 1, 26)
+        partes.append(chr(ord("a") + resto))
+
+    return "".join(reversed(partes))
+
+
+def _extrato_remover_paragrafo(paragrafo):
+    elemento = paragrafo._element
+    pai = elemento.getparent()
+
+    if pai is not None:
+        pai.remove(elemento)
+
+
+def _extrato_remover_numeracao_paragrafo(paragrafo):
+    p_pr = paragrafo._p.get_or_add_pPr()
+    num_pr = p_pr.numPr
+
+    if num_pr is not None:
+        p_pr.remove(num_pr)
+
+
+def _extrato_documento_fornecedor(fornecedor):
+    return (
+        fornecedor.cnpj
+        or getattr(fornecedor, "cpf_fornecedor_individual", "")
+        or ""
+    )
+
+
+def _extrato_valor_sem_cifrao(valor):
+    texto = formatar_moeda_br(valor)
+
+    if texto.startswith("R$ "):
+        return texto[3:]
+
+    if texto.startswith("R$"):
+        return texto[2:].strip()
+
+    return texto
+
+
+def _extrato_contratos_municipio(pregao, municipio):
+    """
+    Retorna somente contratos vigentes do pregão e município.
+
+    Contratos cancelados e totalmente distratados não integram o extrato.
+    Contratos parcialmente distratados continuam sendo contratos vigentes
+    e, por isso, permanecem no documento com o valor registrado no contrato.
+    """
+    return list(
+        ContratoGerado.objects.filter(
+            pregao=pregao,
+            escola__municipio=municipio,
+            status__in=[
+                ContratoGerado.STATUS_GERADO,
+                ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
+            ],
+        )
+        .select_related(
+            "escola",
+            "escola__municipio",
+            "fornecedor",
+        )
+        .order_by(
+            "escola__nome_escola",
+            "fornecedor__razao_social",
+            "numero_sequencial",
+            "id",
+        )
+    )
+
+
+def _extrato_agrupar_dados(pregao, municipio):
+    contratos = _extrato_contratos_municipio(pregao, municipio)
+
+    if not contratos:
+        raise ValueError(
+            f"Não existem contratos gerados para o município de {municipio.nome} "
+            f"neste certame."
+        )
+
+    escolas_dict = {}
+    fornecedores_dict = {}
+    valor_total_geral = Decimal("0")
+
+    for contrato in contratos:
+        valor = contrato.valor_total or Decimal("0")
+        escola = contrato.escola
+        fornecedor = contrato.fornecedor
+
+        valor_total_geral += valor
+
+        if escola.id not in escolas_dict:
+            escolas_dict[escola.id] = {
+                "escola": escola,
+                "fornecedores": {},
+            }
+
+        fornecedores_escola = escolas_dict[escola.id]["fornecedores"]
+
+        if fornecedor.id not in fornecedores_escola:
+            fornecedores_escola[fornecedor.id] = {
+                "fornecedor": fornecedor,
+                "valor_total": Decimal("0"),
+            }
+
+        fornecedores_escola[fornecedor.id]["valor_total"] += valor
+
+        if fornecedor.id not in fornecedores_dict:
+            fornecedores_dict[fornecedor.id] = {
+                "fornecedor": fornecedor,
+                "valor_total": Decimal("0"),
+            }
+
+        fornecedores_dict[fornecedor.id]["valor_total"] += valor
+
+    escolas = []
+
+    for grupo in escolas_dict.values():
+        fornecedores = sorted(
+            grupo["fornecedores"].values(),
+            key=lambda item: (item["fornecedor"].razao_social or "").casefold(),
+        )
+
+        escolas.append(
+            {
+                "escola": grupo["escola"],
+                "fornecedores": fornecedores,
+            }
+        )
+
+    escolas.sort(
+        key=lambda item: (item["escola"].nome_escola or "").casefold()
+    )
+
+    fornecedores = sorted(
+        fornecedores_dict.values(),
+        key=lambda item: (item["fornecedor"].razao_social or "").casefold(),
+    )
+
+    return {
+        "contratos": contratos,
+        "escolas": escolas,
+        "fornecedores": fornecedores,
+        "valor_total_geral": valor_total_geral,
+    }
+
+
+def _extrato_encontrar_paragrafo(documento, predicado):
+    for paragrafo in documento.paragraphs:
+        if predicado(paragrafo.text):
+            return paragrafo
+
+    return None
+
+
+def _extrato_inserir_blocos_escolas(documento, escolas):
+    paragrafo_contratante = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: "{{NOME DA ESCOLA}}" in texto,
+    )
+    paragrafo_contratadas = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: texto.strip().startswith("Contratadas"),
+    )
+    paragrafo_fornecedor = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: (
+            "{{NOME DO FORNECEDOR}}" in texto
+            and "{{VALOR TOTAL CONTRATOS}}" in texto
+        ),
+    )
+
+    if not paragrafo_contratante or not paragrafo_contratadas or not paragrafo_fornecedor:
+        raise ValueError(
+            "O modelo do Extrato de Contrato não possui o bloco-base "
+            "Contratante/Contratadas esperado."
+        )
+
+    paragrafos_atuais = documento.paragraphs
+    indice_fornecedor = next(
+        indice
+        for indice, paragrafo in enumerate(paragrafos_atuais)
+        if paragrafo._p is paragrafo_fornecedor._p
+    )
+
+    paragrafo_espaco = (
+        paragrafos_atuais[indice_fornecedor + 1]
+        if indice_fornecedor + 1 < len(paragrafos_atuais)
+        else None
+    )
+
+    modelo_contratante = deepcopy(paragrafo_contratante._p)
+    modelo_contratadas = deepcopy(paragrafo_contratadas._p)
+    modelo_fornecedor = deepcopy(paragrafo_fornecedor._p)
+    modelo_espaco = deepcopy(paragrafo_espaco._p) if paragrafo_espaco else None
+
+    ancora = paragrafo_contratante._p
+
+    for grupo_escola in escolas:
+        escola = grupo_escola["escola"]
+
+        elemento = deepcopy(modelo_contratante)
+        ancora.addprevious(elemento)
+        novo_paragrafo = Paragraph(elemento, paragrafo_contratante._parent)
+        substituir_texto_em_paragrafo(
+            novo_paragrafo,
+            {"{{NOME DA ESCOLA}}": escola.nome_escola or ""},
+        )
+
+        elemento = deepcopy(modelo_contratadas)
+        ancora.addprevious(elemento)
+
+        for indice, item_fornecedor in enumerate(grupo_escola["fornecedores"]):
+            fornecedor = item_fornecedor["fornecedor"]
+            valor_total = item_fornecedor["valor_total"]
+
+            elemento = deepcopy(modelo_fornecedor)
+            ancora.addprevious(elemento)
+            novo_paragrafo = Paragraph(elemento, paragrafo_fornecedor._parent)
+
+            # O modelo usa lista automática no exemplo-base. Para que a letra
+            # volte para "a)" em cada escola, a letra é escrita manualmente.
+            _extrato_remover_numeracao_paragrafo(novo_paragrafo)
+
+            novo_paragrafo.text = (
+                f"{_extrato_rotulo_lista(indice)}) "
+                f"{fornecedor.razao_social}, "
+                f"{formatar_moeda_br(valor_total)};"
+            )
+
+            for run in novo_paragrafo.runs:
+                run.font.size = Pt(12)
+
+        if modelo_espaco is not None:
+            ancora.addprevious(deepcopy(modelo_espaco))
+
+    _extrato_remover_paragrafo(paragrafo_contratante)
+    _extrato_remover_paragrafo(paragrafo_contratadas)
+    _extrato_remover_paragrafo(paragrafo_fornecedor)
+
+    if paragrafo_espaco is not None:
+        _extrato_remover_paragrafo(paragrafo_espaco)
+
+
+def _extrato_inserir_fornecedores_consolidados(documento, fornecedores):
+    paragrafo_modelo = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: "{{VALOR TOTAL DO FORNECEDOR}}" in texto,
+    )
+
+    if not paragrafo_modelo:
+        raise ValueError(
+            "O modelo do Extrato de Contrato não possui a linha-base "
+            "da relação consolidada de fornecedores."
+        )
+
+    modelo_xml = deepcopy(paragrafo_modelo._p)
+    ancora = paragrafo_modelo._p
+
+    for indice, item_fornecedor in enumerate(fornecedores):
+        fornecedor = item_fornecedor["fornecedor"]
+        valor_total = item_fornecedor["valor_total"]
+
+        elemento = deepcopy(modelo_xml)
+        ancora.addprevious(elemento)
+
+        paragrafo = Paragraph(elemento, paragrafo_modelo._parent)
+        paragrafo.text = ""
+
+        run = paragrafo.add_run(
+            f"{_extrato_rotulo_lista(indice)}) Fornecedor – "
+            f"{fornecedor.razao_social}"
+        )
+        run.bold = True
+        run.font.size = Pt(13)
+
+        run = paragrafo.add_run(
+            f", CNPJ: {_extrato_documento_fornecedor(fornecedor)}, Valor Total "
+        )
+        run.font.size = Pt(13)
+
+        run = paragrafo.add_run(formatar_moeda_br(valor_total))
+        run.bold = True
+        run.font.size = Pt(13)
+
+        run = paragrafo.add_run(
+            f" ({valor_por_extenso(valor_total)})."
+        )
+        run.font.size = Pt(13)
+
+    _extrato_remover_paragrafo(paragrafo_modelo)
+
+
+def montar_extrato_contrato_word(pregao, municipio):
+    caminho_modelo = caminho_modelo_extrato_contrato()
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo do Extrato de Contrato não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    if not pregao.municipios.filter(id=municipio.id).exists():
+        raise ValueError(
+            "O município informado não pertence a este certame."
+        )
+
+    dados = _extrato_agrupar_dados(pregao, municipio)
+
+    nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
+    rg_ordenador = (pregao.rg_ordenador_despesas or "").strip()
+    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
+
+    if not nome_ordenador or not rg_ordenador or not cpf_ordenador:
+        raise ValueError(
+            "Cadastre Nome, RG e CPF do Ordenador de Despesas neste certame "
+            "antes de gerar o Extrato de Contrato."
+        )
+
+    documento = Document(caminho_modelo)
+
+    _extrato_inserir_blocos_escolas(
+        documento,
+        dados["escolas"],
+    )
+    _extrato_inserir_fornecedores_consolidados(
+        documento,
+        dados["fornecedores"],
+    )
+
+    substituicoes = {
+        "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
+        "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
+        "{{NOME DO MUNICÍPIO}}": municipio.nome or "",
+        "{{ESTADO DO MUNICÍPIO}}": municipio.uf or "",
+        "{{VALOR TOTAL CONTRATOS}}": _extrato_valor_sem_cifrao(
+            dados["valor_total_geral"]
+        ),
+        "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
+        "{{RG ORDENADOR DESPESAS}}": rg_ordenador,
+        "{{CPF ORDENADOR DESPESAS}}": cpf_ordenador,
+    }
+
+    substituir_placeholders_documento(documento, substituicoes)
+
+    placeholders_pendentes = encontrar_placeholders_pendentes_documento(documento)
+
+    if placeholders_pendentes:
+        raise ValueError(
+            "O Extrato de Contrato ainda possui campos não preenchidos: "
+            + ", ".join(placeholders_pendentes)
+            + "."
+        )
+
+    return documento
+
+
+def _extrato_nome_base(pregao, municipio):
+    return (
+        f"Extrato_Contrato_Pregao_{pregao.numero}_{pregao.ano}_"
+        f"{municipio.nome}_{municipio.uf}"
+    )
+
+
+def gerar_extrato_contrato_word(request, pregao_id, municipio_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    municipio = get_object_or_404(
+        pregao.municipios.all(),
+        id=municipio_id,
+    )
+
+    try:
+        documento = montar_extrato_contrato_word(pregao, municipio)
+        return resposta_download_docx(
+            documento,
+            _extrato_nome_base(pregao, municipio),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Contrato Word - pregão %s, município %s",
+            pregao_id,
+            municipio_id,
+        )
+        messages.error(
+            request,
+            f"Não foi possível gerar o Extrato de Contrato em Word: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_extrato_contrato_pdf(request, pregao_id, municipio_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    municipio = get_object_or_404(
+        pregao.municipios.all(),
+        id=municipio_id,
+    )
+
+    try:
+        documento = montar_extrato_contrato_word(pregao, municipio)
+        return resposta_download_pdf(
+            documento,
+            _extrato_nome_base(pregao, municipio),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Contrato PDF - pregão %s, município %s",
+            pregao_id,
+            municipio_id,
+        )
+        messages.error(
+            request,
+            f"Não foi possível gerar o Extrato de Contrato em PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+
+# ============================================================
+# EXTRATO DE HOMOLOGAÇÃO - UM DOCUMENTO POR CERTAME
+# ============================================================
+
+def caminho_modelo_extrato_homologacao():
+    """
+    Localiza o modelo Word do Extrato de Homologação do Pregão.
+    """
+    pasta_modelos = Path(settings.BASE_DIR) / "templates" / "documentos"
+
+    candidatos = [
+        pasta_modelos / "modelo_extrato_homologacao_pregao.docx",
+        pasta_modelos / "Modelo Extrato Homologação do Pregão.docx",
+        pasta_modelos / "Modelo Extrato Homologacao do Pregao.docx",
+    ]
+
+    for caminho in candidatos:
+        if caminho.exists():
+            return caminho
+
+    return candidatos[0]
+
+
+def _homologacao_substituir_preservando_runs(paragrafo, chave, valor):
+    """
+    Substitui uma ocorrência mesmo quando o Word dividiu o marcador em
+    vários runs, preservando a formatação dos demais trechos do parágrafo.
+    """
+    valor = str(valor or "")
+    texto_completo = "".join(run.text for run in paragrafo.runs)
+    inicio = texto_completo.find(chave)
+
+    if inicio < 0:
+        return False
+
+    fim = inicio + len(chave)
+
+    posicao = 0
+    run_inicio = None
+    run_fim = None
+    offset_inicio = 0
+    offset_fim = 0
+
+    for indice, run in enumerate(paragrafo.runs):
+        proxima = posicao + len(run.text)
+
+        if run_inicio is None and inicio < proxima:
+            run_inicio = indice
+            offset_inicio = inicio - posicao
+
+        if run_inicio is not None and fim <= proxima:
+            run_fim = indice
+            offset_fim = fim - posicao
+            break
+
+        posicao = proxima
+
+    if run_inicio is None or run_fim is None:
+        return False
+
+    runs = paragrafo.runs
+    prefixo = runs[run_inicio].text[:offset_inicio]
+    sufixo = runs[run_fim].text[offset_fim:]
+
+    if run_inicio == run_fim:
+        runs[run_inicio].text = prefixo + valor + sufixo
+    else:
+        runs[run_inicio].text = prefixo + valor
+
+        for indice in range(run_inicio + 1, run_fim):
+            runs[indice].text = ""
+
+        runs[run_fim].text = sufixo
+
+    return True
+
+
+def _homologacao_texto_municipios(pregao):
+    """
+    Retorna os municípios do certame em formato de texto:
+    Sinop/MT, Sorriso/MT e Lucas do Rio Verde/MT.
+    """
+    municipios = list(
+        pregao.municipios.all().order_by("nome")
+    )
+
+    if not municipios:
+        raise ValueError(
+            "Este certame não possui municípios vinculados."
+        )
+
+    nomes = [
+        f"{municipio.nome}/{municipio.uf}"
+        for municipio in municipios
+    ]
+
+    if len(nomes) == 1:
+        return nomes[0]
+
+    if len(nomes) == 2:
+        return f"{nomes[0]} e {nomes[1]}"
+
+    return ", ".join(nomes[:-1]) + f" e {nomes[-1]}"
+
+
+def _homologacao_dados_certame(pregao):
+    """
+    Consolida o valor adjudicado dos vencedores considerando TODOS os
+    municípios vinculados ao certame.
+
+    Para cada item, soma o quantitativo distribuído às escolas dos municípios
+    do certame e multiplica pelo valor final adjudicado do item no Resultado
+    Final. Em seguida, consolida os valores por fornecedor.
+    """
+    municipios_ids = list(
+        pregao.municipios.values_list("id", flat=True)
+    )
+
+    if not municipios_ids:
+        raise ValueError(
+            "Este certame não possui municípios vinculados."
+        )
+
+    quantidades_por_item = {
+        linha["item_id"]: linha["quantidade_total"] or Decimal("0")
+        for linha in (
+            QuantitativoEscola.objects.filter(
+                pregao=pregao,
+                escola__municipio_id__in=municipios_ids,
+                quantidade__gt=0,
+            )
+            .values("item_id")
+            .annotate(quantidade_total=Sum("quantidade"))
+        )
+    }
+
+    if not quantidades_por_item:
+        raise ValueError(
+            "Não existem quantitativos distribuídos às escolas dos municípios "
+            "deste certame."
+        )
+
+    resultados = (
+        ResultadoItem.objects.filter(
+            pregao=pregao,
+            status_resultado=ResultadoItem.STATUS_ADJUDICADO,
+            primeiro_fornecedor__isnull=False,
+            primeiro_valor__isnull=False,
+        )
+        .select_related(
+            "pregao_item",
+            "pregao_item__item",
+            "primeiro_fornecedor",
+        )
+        .order_by("pregao_item__ordem")
+    )
+
+    fornecedores = {}
+    valor_total_certame = Decimal("0")
+
+    for resultado in resultados:
+        item_id = resultado.pregao_item.item_id
+        quantidade_certame = quantidades_por_item.get(
+            item_id,
+            Decimal("0"),
+        )
+
+        if quantidade_certame <= 0:
+            continue
+
+        valor_unitario = resultado.primeiro_valor or Decimal("0")
+        valor_adjudicado = quantidade_certame * valor_unitario
+        fornecedor = resultado.primeiro_fornecedor
+
+        if fornecedor.id not in fornecedores:
+            fornecedores[fornecedor.id] = {
+                "fornecedor": fornecedor,
+                "valor_total": Decimal("0"),
+            }
+
+        fornecedores[fornecedor.id]["valor_total"] += valor_adjudicado
+        valor_total_certame += valor_adjudicado
+
+    lista_fornecedores = list(fornecedores.values())
+
+    if not lista_fornecedores:
+        raise ValueError(
+            "Não foram encontrados fornecedores adjudicados com quantitativo "
+            "para este certame."
+        )
+
+    return {
+        "fornecedores": lista_fornecedores,
+        "valor_total": valor_total_certame,
+    }
+
+
+def _homologacao_lista_resumida_fornecedores(fornecedores):
+    partes = []
+
+    for indice, item in enumerate(fornecedores):
+        fornecedor = item["fornecedor"]
+        valor_total = item["valor_total"]
+
+        partes.append(
+            f"{_extrato_rotulo_lista(indice)}) "
+            f"{fornecedor.razao_social}, {formatar_moeda_br(valor_total)}"
+        )
+
+    # O modelo já possui o ponto final logo após o bloco dos vencedores.
+    # Por isso, não acrescentamos ";" após o último fornecedor.
+    return "; ".join(partes)
+
+
+def _homologacao_inserir_fornecedores_detalhados(documento, fornecedores):
+    paragrafo_modelo = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: "{{VALOR TOTAL DO FORNECEDOR}}" in texto,
+    )
+
+    if not paragrafo_modelo:
+        raise ValueError(
+            "O modelo do Extrato de Homologação não possui a linha-base "
+            "da relação detalhada de fornecedores."
+        )
+
+    modelo_xml = deepcopy(paragrafo_modelo._p)
+    ancora = paragrafo_modelo._p
+
+    for indice, item in enumerate(fornecedores):
+        fornecedor = item["fornecedor"]
+        valor_total = item["valor_total"]
+
+        elemento = deepcopy(modelo_xml)
+        ancora.addprevious(elemento)
+
+        paragrafo = Paragraph(elemento, paragrafo_modelo._parent)
+        _extrato_remover_numeracao_paragrafo(paragrafo)
+
+        # Limpa apenas o conteúdo; o XML do parágrafo mantém alinhamento,
+        # recuos, espaçamento e demais propriedades do modelo.
+        for run in paragrafo.runs:
+            run.text = ""
+
+        if not paragrafo.runs:
+            paragrafo.add_run()
+
+        run = paragrafo.runs[0]
+        run.text = (
+            f"{_extrato_rotulo_lista(indice)}) Fornecedor – "
+        )
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(10)
+        run.bold = True
+
+        run = paragrafo.add_run(
+            f"{fornecedor.razao_social}, "
+            f"CNPJ: {_extrato_documento_fornecedor(fornecedor)}, "
+            f"Valor Total "
+        )
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(10)
+
+        run = paragrafo.add_run(formatar_moeda_br(valor_total))
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(10)
+        run.bold = True
+
+        run = paragrafo.add_run(
+            f" ({valor_por_extenso(valor_total)})."
+        )
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(10)
+
+    _extrato_remover_paragrafo(paragrafo_modelo)
+
+
+def montar_extrato_homologacao_word(pregao):
+    caminho_modelo = caminho_modelo_extrato_homologacao()
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo do Extrato de Homologação não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
+    rg_ordenador = (pregao.rg_ordenador_despesas or "").strip()
+    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
+
+    if not nome_ordenador or not rg_ordenador or not cpf_ordenador:
+        raise ValueError(
+            "Cadastre Nome, RG e CPF do Ordenador de Despesas neste certame "
+            "antes de gerar o Extrato de Homologação."
+        )
+
+    dados = _homologacao_dados_certame(pregao)
+    fornecedores = dados["fornecedores"]
+    valor_total = dados["valor_total"]
+    texto_municipios = _homologacao_texto_municipios(pregao)
+
+    documento = Document(caminho_modelo)
+
+    if not documento.paragraphs:
+        raise ValueError(
+            "O modelo do Extrato de Homologação está vazio."
+        )
+
+    # O primeiro parágrafo possui vários estilos em runs. Fazemos as
+    # substituições nele sem reconstruí-lo para preservar a formatação.
+    paragrafo_abertura = documento.paragraphs[0]
+
+    lista_resumida = _homologacao_lista_resumida_fornecedores(
+        fornecedores
+    )
+
+    quantidade_municipios = pregao.municipios.count()
+    trecho_municipios = (
+        f"do Município {texto_municipios}"
+        if quantidade_municipios == 1
+        else f"dos Municípios {texto_municipios}"
+    )
+
+    substituicoes_abertura = {
+        "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
+        "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
+        "do Município {{NOME DO MUNICÍPIO}}/{{ESTADO DO MUNICÍPIO}}":
+            trecho_municipios,
+        "a) {{NOME DO FORNECEDOR}}, R$ {{VALOR TOTAL ADJUDICADO}};":
+            lista_resumida,
+        "{{VALOR TOTAL CONSOLIDADO}}":
+            _extrato_valor_sem_cifrao(valor_total),
+        "{{DATA DO PREGÃO POR EXTENSO}}":
+            data_por_extenso(pregao.data_pregao) if pregao.data_pregao else "",
+        "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
+        "SINOP/MT/2025": f"SINOP/MT/{pregao.ano}",
+    }
+
+    for chave, valor in substituicoes_abertura.items():
+        _homologacao_substituir_preservando_runs(
+            paragrafo_abertura,
+            chave,
+            valor,
+        )
+
+    _homologacao_inserir_fornecedores_detalhados(
+        documento,
+        fornecedores,
+    )
+
+    # Demais marcadores, fora do parágrafo de abertura.
+    substituicoes_restantes = {
+        "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
+        "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
+        "{{VALOR TOTAL FORNECEDORES}}":
+            _extrato_valor_sem_cifrao(valor_total),
+        "{{DATA DO PREGÃO POR EXTENSO}}":
+            data_por_extenso(pregao.data_pregao) if pregao.data_pregao else "",
+        "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
+        "{{RG ORDENADOR DESPESAS}}": rg_ordenador,
+        "{{CPF ORDENADOR DESPESAS}}": cpf_ordenador,
+    }
+
+    substituir_placeholders_documento(
+        documento,
+        substituicoes_restantes,
+    )
+
+    placeholders_pendentes = encontrar_placeholders_pendentes_documento(
+        documento
+    )
+
+    if placeholders_pendentes:
+        raise ValueError(
+            "O Extrato de Homologação ainda possui campos não preenchidos: "
+            + ", ".join(placeholders_pendentes)
+            + "."
+        )
+
+    return documento
+
+
+def _homologacao_nome_base(pregao):
+    return (
+        f"Extrato_Homologacao_Pregao_{pregao.numero}_{pregao.ano}"
+    )
+
+
+def gerar_extrato_homologacao_word(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_extrato_homologacao_word(pregao)
+        return resposta_download_docx(
+            documento,
+            _homologacao_nome_base(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Homologação Word - pregão %s",
+            pregao_id,
+        )
+        messages.error(
+            request,
+            f"Não foi possível gerar o Extrato de Homologação em Word: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_extrato_homologacao_pdf(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_extrato_homologacao_word(pregao)
+        return resposta_download_pdf(
+            documento,
+            _homologacao_nome_base(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Homologação PDF - pregão %s",
+            pregao_id,
+        )
+        messages.error(
+            request,
+            f"Não foi possível gerar o Extrato de Homologação em PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
 
 
 def obter_quantidade_distratada_contrato_item(contrato_item):

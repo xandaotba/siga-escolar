@@ -28,6 +28,9 @@ class PregaoForm(forms.ModelForm):
             "ano",
             "nome_pregoeiro",
             "cpf_pregoeiro",
+            "nome_ordenador_despesas",
+            "rg_ordenador_despesas",
+            "cpf_ordenador_despesas",
             "local_pregao",
             "data_pregao",
             "municipios",
@@ -43,6 +46,15 @@ class PregaoForm(forms.ModelForm):
             "ano": forms.NumberInput(attrs={"placeholder": "Exemplo: 2026"}),
             "nome_pregoeiro": forms.TextInput(attrs={"placeholder": "Nome do pregoeiro"}),
             "cpf_pregoeiro": forms.TextInput(attrs={"placeholder": "000.000.000-00"}),
+            "nome_ordenador_despesas": forms.TextInput(
+                attrs={"placeholder": "Nome completo do ordenador de despesas"}
+            ),
+            "rg_ordenador_despesas": forms.TextInput(
+                attrs={"placeholder": "RG do ordenador"}
+            ),
+            "cpf_ordenador_despesas": forms.TextInput(
+                attrs={"placeholder": "000.000.000-00"}
+            ),
             "local_pregao": forms.TextInput(attrs={"placeholder": "Local do pregão"}),
             "data_pregao": forms.DateInput(attrs={"type": "date"}),
         }
@@ -86,3 +98,31 @@ class PregaoForm(forms.ModelForm):
                 ordem += 1
 
         return pregao
+
+class OrdenadorDespesasForm(forms.ModelForm):
+    """
+    Formulário restrito aos dados do ordenador de despesas.
+
+    Pode ser usado mesmo quando o certame já estiver em andamento ou finalizado,
+    sem liberar a edição dos demais dados do certame.
+    """
+
+    class Meta:
+        model = Pregao
+        fields = [
+            "nome_ordenador_despesas",
+            "rg_ordenador_despesas",
+            "cpf_ordenador_despesas",
+        ]
+
+        widgets = {
+            "nome_ordenador_despesas": forms.TextInput(
+                attrs={"placeholder": "Nome completo do ordenador de despesas"}
+            ),
+            "rg_ordenador_despesas": forms.TextInput(
+                attrs={"placeholder": "RG do ordenador"}
+            ),
+            "cpf_ordenador_despesas": forms.TextInput(
+                attrs={"placeholder": "000.000.000-00"}
+            ),
+        }
