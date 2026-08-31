@@ -254,6 +254,27 @@ def tela_lances(request, pregao_id, item_id):
     pregao = get_object_or_404(Pregao, id=pregao_id)
     item_atual = get_object_or_404(PregaoItem, id=item_id, pregao=pregao)
 
+    # Ao navegar diretamente para um item ainda pendente, ele passa
+    # automaticamente a ficar disponível para disputa.
+    # Isso permite pular itens, disputar fornecedores específicos e
+    # retornar depois aos itens anteriores.
+    if (
+        pregao.status != Pregao.STATUS_FINALIZADO
+        and item_atual.status == PregaoItem.STATUS_PENDENTE
+    ):
+        item_atual.status = PregaoItem.STATUS_EM_DISPUTA
+        item_atual.iniciado_em = timezone.now()
+        item_atual.rodada_atual = 1
+        item_atual.fornecedor_atual = None
+        item_atual.save(
+            update_fields=[
+                "status",
+                "iniciado_em",
+                "rodada_atual",
+                "fornecedor_atual",
+            ]
+        )
+
     if item_atual.status == PregaoItem.STATUS_EM_DISPUTA:
         definir_fornecedor_atual_se_necessario(pregao, item_atual)
         item_atual.refresh_from_db()
@@ -293,6 +314,39 @@ def tela_lances(request, pregao_id, item_id):
     fornecedores_ativos = fornecedores_ativos_do_item(pregao, item_atual)
     fornecedor_atual = item_atual.fornecedor_atual
     proximo_fornecedor = obter_proximo_fornecedor_visual(pregao, item_atual)
+
+    # Navegação livre entre os itens do pregão.
+    # Esta navegação é apenas visual: abrir um item pendente não altera seu status.
+    itens_navegacao = list(
+        PregaoItem.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("ordem", "item__nome_item")
+    )
+
+    item_anterior = (
+        PregaoItem.objects.filter(
+            pregao=pregao,
+            ordem__lt=item_atual.ordem,
+        )
+        .select_related("item")
+        .order_by("-ordem")
+        .first()
+    )
+
+    item_proximo_navegacao = (
+        PregaoItem.objects.filter(
+            pregao=pregao,
+            ordem__gt=item_atual.ordem,
+        )
+        .select_related("item")
+        .order_by("ordem")
+        .first()
+    )
+
+    pode_editar_lances_execucao = (
+        pregao.status != Pregao.STATUS_FINALIZADO
+        and item_atual.status == PregaoItem.STATUS_EM_DISPUTA
+    )
 
     if request.method == "POST":
         acao = request.POST.get("acao")
@@ -431,6 +485,13 @@ def tela_lances(request, pregao_id, item_id):
             "beneficio_me_epp_atual": beneficio_me_epp_atual,
             "beneficios_me_epp": beneficios_me_epp,
             "beneficio_me_epp_pendente": beneficio_me_epp_pendente,
+            "itens_navegacao": itens_navegacao,
+            "item_anterior": item_anterior,
+            "item_proximo_navegacao": item_proximo_navegacao,
+            "pode_editar_lances_execucao": pode_editar_lances_execucao,
+            "exibir_acoes_lance": (
+                modo_conferencia_alteracao or pode_editar_lances_execucao
+            ),
         },
     )
 
@@ -920,27 +981,40 @@ def marcar_fracassado(request, pregao, item_atual):
 
 
 def usuario_pode_alterar_lances_conferencia(request, pregao, item):
+    """
+    Permite corrigir lances durante a execução normal e também no fluxo
+    de reabertura pela Conferência Final.
+    """
     if pregao.status == Pregao.STATUS_FINALIZADO:
-        messages.error(request, "Este pregão já foi finalizado oficialmente e não permite alteração de lances.")
+        messages.error(
+            request,
+            "Este pregão já foi finalizado oficialmente e não permite alteração de lances.",
+        )
         return False
+
+    if item.status != PregaoItem.STATUS_EM_DISPUTA:
+        messages.error(
+            request,
+            "Para alterar um lance, o item precisa estar em disputa.",
+        )
+        return False
+
+    if pregao.status == Pregao.STATUS_EM_ANDAMENTO:
+        return True
 
     modo_conferencia = request.session.get(
         f"conferencia_alteracao_item_{pregao.id}_{item.id}",
         False,
     )
 
-    if not modo_conferencia:
-        messages.error(
-            request,
-            "A alteração de lances só fica disponível quando o item é aberto pela Conferência Final do Pregão.",
-        )
-        return False
+    if modo_conferencia:
+        return True
 
-    if item.status != PregaoItem.STATUS_EM_DISPUTA:
-        messages.error(request, "Para alterar lances, o item precisa estar reaberto em disputa.")
-        return False
-
-    return True
+    messages.error(
+        request,
+        "Este item não está disponível para alteração de lances.",
+    )
+    return False
 
 
 def alterar_lance_conferencia(request, pregao_id, item_id, lance_id):
@@ -974,10 +1048,22 @@ def alterar_lance_conferencia(request, pregao_id, item_id, lance_id):
     lance.valor_lance = novo_valor
     lance.save(update_fields=["valor_lance"])
 
-    # Como o item foi reaberto pela conferência, o resultado será recalculado ao finalizar novamente.
-    ResultadoItem.objects.filter(pregao=pregao, pregao_item=item).delete()
+    resultado_anterior_excluido = ResultadoItem.objects.filter(
+        pregao=pregao,
+        pregao_item=item,
+    ).delete()[0] > 0
 
-    messages.success(request, "Lance alterado com sucesso. Finalize o item novamente para recalcular os vencedores.")
+    if resultado_anterior_excluido:
+        messages.success(
+            request,
+            "Lance alterado com sucesso. Finalize o item novamente para recalcular os vencedores.",
+        )
+    else:
+        messages.success(
+            request,
+            "Lance alterado com sucesso. O menor lance e o vencedor atual foram recalculados.",
+        )
+
     return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item.id)
 
 

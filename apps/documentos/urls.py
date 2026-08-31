@@ -150,9 +150,29 @@ urlpatterns = [
         name="fornecedores_vencedores",
     ),
     path(
+        "pregoes-finalizados/<int:pregao_id>/fornecedores-vencedores/word/",
+        views.fornecedores_vencedores_word,
+        name="fornecedores_vencedores_word",
+    ),
+    path(
         "pregoes-finalizados/<int:pregao_id>/resultado-final/",
         views.resultado_final,
         name="resultado_final",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/resultado-final/word/",
+        views.resultado_final_word,
+        name="resultado_final_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-registro-precos/word/",
+        views.gerar_ata_registro_precos_word,
+        name="ata_registro_precos_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-registro-precos/pdf/",
+        views.gerar_ata_registro_precos_pdf,
+        name="ata_registro_precos_pdf",
     ),
     path(
         "pregoes-finalizados/<int:pregao_id>/contratos/",

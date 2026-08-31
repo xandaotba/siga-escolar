@@ -3,6 +3,7 @@
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from collections import defaultdict
+from copy import deepcopy
 
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
@@ -14,10 +15,10 @@ from django.utils import timezone
 
 from apps.cadastros.models import Escola, Fornecedor, Item
 from apps.execucao.models import BeneficioMEEPP
-
 from apps.pregoes.models import (
     Lance,
     Pregao,
+    PregaoFornecedor,
     PregaoItem,
     ResultadoItem,
     PropostaInicialItem,
@@ -47,6 +48,7 @@ from django.http import HttpResponse, JsonResponse
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.section import WD_ORIENT
 from docx.shared import Pt, Cm, Inches
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -220,6 +222,20 @@ def planilha_lances(request, pregao_id):
 
     relatorio = []
 
+    # Compatibilidade com benefícios ME/EPP:
+    # - benefícios novos normalmente já são registrados também como Lance;
+    # - benefícios antigos podem existir apenas em BeneficioMEEPP.nova_oferta.
+    # Mantemos um mapa para acrescentar a oferta somente quando ela ainda não
+    # estiver no histórico de Lance, evitando duplicidade.
+    ofertas_beneficio_me_epp = {
+        (beneficio.pregao_item_id, beneficio.fornecedor_id): beneficio.nova_oferta
+        for beneficio in BeneficioMEEPP.objects.filter(
+            pregao=pregao,
+            status=BeneficioMEEPP.STATUS_EXERCIDO,
+            nova_oferta__isnull=False,
+        )
+    }
+
     for item_pregao in itens:
         linhas_fornecedores = []
 
@@ -295,26 +311,15 @@ def planilha_lances(request, pregao_id):
                 .values_list("valor_lance", flat=True)
             )
 
-            # Compatibilidade com benefícios ME/EPP já exercidos antes desta
-            # atualização: nesses casos a nova oferta ficou salva no histórico
-            # do benefício, mas ainda não existia como registro em Lance.
-            beneficio_exercido = (
-                BeneficioMEEPP.objects.filter(
-                    pregao=pregao,
-                    pregao_item=item_pregao,
-                    fornecedor=fornecedor,
-                    status=BeneficioMEEPP.STATUS_EXERCIDO,
-                    nova_oferta__isnull=False,
-                )
-                .order_by("-atualizado_em", "-id")
-                .first()
+            oferta_beneficio = ofertas_beneficio_me_epp.get(
+                (item_pregao.id, fornecedor.id)
             )
 
             if (
-                beneficio_exercido
-                and beneficio_exercido.nova_oferta not in lances_fornecedor
+                oferta_beneficio is not None
+                and oferta_beneficio not in lances_fornecedor
             ):
-                lances_fornecedor.append(beneficio_exercido.nova_oferta)
+                lances_fornecedor.append(oferta_beneficio)
 
             lances_10 = selecionar_lances_para_planilha(lances_fornecedor)
 
@@ -1262,6 +1267,1178 @@ def resultado_final(request, pregao_id):
             "valor_total_pregao": valor_total_formatado,
         },
     )
+
+
+# ============================================================
+# WORD - FORNECEDORES VENCEDORES / RESULTADO FINAL
+# ============================================================
+
+def _word_definir_fonte(run, nome="Arial", tamanho=9, negrito=False):
+    run.font.name = nome
+    run.font.size = Pt(tamanho)
+    run.bold = negrito
+
+    # Compatibilidade de fonte no Word/LibreOffice.
+    r_pr = run._element.get_or_add_rPr()
+    r_fonts = r_pr.rFonts
+    if r_fonts is None:
+        r_fonts = OxmlElement("w:rFonts")
+        r_pr.insert(0, r_fonts)
+
+    r_fonts.set(qn("w:ascii"), nome)
+    r_fonts.set(qn("w:hAnsi"), nome)
+    r_fonts.set(qn("w:eastAsia"), nome)
+
+
+def _word_aplicar_fonte_paragrafo(paragrafo, nome="Arial", tamanho=9, negrito=False):
+    if not paragrafo.runs:
+        run = paragrafo.add_run("")
+        _word_definir_fonte(run, nome, tamanho, negrito)
+        return
+
+    for run in paragrafo.runs:
+        _word_definir_fonte(run, nome, tamanho, negrito)
+
+
+def _word_sombrear_celula(celula, preenchimento):
+    tc_pr = celula._tc.get_or_add_tcPr()
+    shd = tc_pr.find(qn("w:shd"))
+
+    if shd is None:
+        shd = OxmlElement("w:shd")
+        tc_pr.append(shd)
+
+    shd.set(qn("w:fill"), preenchimento)
+
+
+def _word_margens_celula(celula, top=40, start=55, bottom=40, end=55):
+    tc = celula._tc
+    tc_pr = tc.get_or_add_tcPr()
+
+    tc_mar = tc_pr.first_child_found_in("w:tcMar")
+    if tc_mar is None:
+        tc_mar = OxmlElement("w:tcMar")
+        tc_pr.append(tc_mar)
+
+    for margem, valor in (
+        ("top", top),
+        ("start", start),
+        ("bottom", bottom),
+        ("end", end),
+    ):
+        node = tc_mar.find(qn(f"w:{margem}"))
+        if node is None:
+            node = OxmlElement(f"w:{margem}")
+            tc_mar.append(node)
+        node.set(qn("w:w"), str(valor))
+        node.set(qn("w:type"), "dxa")
+
+
+def _word_preencher_celula(
+    celula,
+    texto,
+    nome_fonte="Arial",
+    tamanho=8,
+    negrito=False,
+    alinhamento=WD_ALIGN_PARAGRAPH.LEFT,
+):
+    celula.text = ""
+
+    paragrafo = celula.paragraphs[0]
+    paragrafo.alignment = alinhamento
+    paragrafo.paragraph_format.space_before = Pt(0)
+    paragrafo.paragraph_format.space_after = Pt(0)
+    paragrafo.paragraph_format.line_spacing = 1
+
+    run = paragrafo.add_run("" if texto is None else str(texto))
+    _word_definir_fonte(run, nome_fonte, tamanho, negrito)
+
+    celula.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    _word_margens_celula(celula)
+
+
+def _word_configurar_tabela(tabela):
+    tabela.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tabela.autofit = False
+
+    tbl_pr = tabela._tbl.tblPr
+    layout = tbl_pr.first_child_found_in("w:tblLayout")
+    if layout is None:
+        layout = OxmlElement("w:tblLayout")
+        tbl_pr.append(layout)
+    layout.set(qn("w:type"), "fixed")
+
+
+def _word_bordas_tabela(tabela, cor="000000", tamanho="4"):
+    tbl = tabela._tbl
+    tbl_pr = tbl.tblPr
+
+    borders = tbl_pr.first_child_found_in("w:tblBorders")
+    if borders is None:
+        borders = OxmlElement("w:tblBorders")
+        tbl_pr.append(borders)
+
+    for nome in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        borda = borders.find(qn(f"w:{nome}"))
+        if borda is None:
+            borda = OxmlElement(f"w:{nome}")
+            borders.append(borda)
+
+        borda.set(qn("w:val"), "single")
+        borda.set(qn("w:sz"), tamanho)
+        borda.set(qn("w:space"), "0")
+        borda.set(qn("w:color"), cor)
+
+
+def _word_resposta(documento, nome_arquivo):
+    arquivo = BytesIO()
+    documento.save(arquivo)
+    arquivo.seek(0)
+
+    response = HttpResponse(
+        arquivo.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return response
+
+
+def _dados_fornecedores_vencedores_word(pregao):
+    itens = (
+        PregaoItem.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("ordem")
+    )
+
+    resultados = {
+        resultado.pregao_item_id: resultado
+        for resultado in ResultadoItem.objects.filter(
+            pregao=pregao
+        ).select_related(
+            "primeiro_fornecedor",
+            "segundo_fornecedor",
+            "terceiro_fornecedor",
+        )
+    }
+
+    propostas = {
+        (proposta.pregao_item_id, proposta.fornecedor_id): proposta
+        for proposta in PropostaInicialItem.objects.filter(
+            pregao=pregao
+        ).select_related("fornecedor", "pregao_item")
+    }
+
+    relatorio = []
+
+    for item_pregao in itens:
+        resultado = resultados.get(item_pregao.id)
+
+        primeiro = {"fornecedor": "", "marca": "", "preco": ""}
+        segundo = {"fornecedor": "", "marca": "", "preco": ""}
+        terceiro = {"fornecedor": "", "marca": "", "preco": ""}
+
+        if item_pregao.status == PregaoItem.STATUS_DESERTO:
+            primeiro["fornecedor"] = "DESERTO -"
+            segundo["fornecedor"] = "DESERTO -"
+            terceiro["fornecedor"] = "DESERTO -"
+
+        elif item_pregao.status == PregaoItem.STATUS_FRACASSADO:
+            primeiro["fornecedor"] = "FRACASSADO -"
+            segundo["fornecedor"] = "FRACASSADO -"
+            terceiro["fornecedor"] = "FRACASSADO -"
+
+        elif resultado:
+            if resultado.primeiro_fornecedor:
+                proposta = propostas.get(
+                    (item_pregao.id, resultado.primeiro_fornecedor_id)
+                )
+                primeiro = {
+                    "fornecedor": (
+                        f"{resultado.primeiro_fornecedor.razao_social} - "
+                        f"{resultado.primeiro_fornecedor.cnpj}"
+                    ),
+                    "marca": proposta.marca if proposta else "",
+                    "preco": resultado.primeiro_valor,
+                }
+
+            if resultado.segundo_fornecedor:
+                proposta = propostas.get(
+                    (item_pregao.id, resultado.segundo_fornecedor_id)
+                )
+                segundo = {
+                    "fornecedor": (
+                        f"{resultado.segundo_fornecedor.razao_social} - "
+                        f"{resultado.segundo_fornecedor.cnpj}"
+                    ),
+                    "marca": proposta.marca if proposta else "",
+                    "preco": resultado.segundo_valor,
+                }
+
+            if resultado.terceiro_fornecedor:
+                proposta = propostas.get(
+                    (item_pregao.id, resultado.terceiro_fornecedor_id)
+                )
+                terceiro = {
+                    "fornecedor": (
+                        f"{resultado.terceiro_fornecedor.razao_social} - "
+                        f"{resultado.terceiro_fornecedor.cnpj}"
+                    ),
+                    "marca": proposta.marca if proposta else "",
+                    "preco": resultado.terceiro_valor,
+                }
+
+        relatorio.append(
+            {
+                "ordem": item_pregao.ordem,
+                "item": item_pregao.item,
+                "unidade": item_pregao.item.get_unidade_medida_display(),
+                "quantidade": item_pregao.quantidade_total,
+                "primeiro": primeiro,
+                "segundo": segundo,
+                "terceiro": terceiro,
+            }
+        )
+
+    return relatorio
+
+
+def fornecedores_vencedores_word(request, pregao_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    relatorio = _dados_fornecedores_vencedores_word(pregao)
+    municipios = pregao.municipios.all().order_by("nome")
+
+    documento = Document()
+    secao = documento.sections[0]
+    secao.orientation = WD_ORIENT.LANDSCAPE
+    secao.page_width = Cm(29.7)
+    secao.page_height = Cm(21)
+    secao.top_margin = Cm(0.8)
+    secao.bottom_margin = Cm(0.8)
+    secao.left_margin = Cm(0.8)
+    secao.right_margin = Cm(0.8)
+
+    estilo_normal = documento.styles["Normal"]
+    estilo_normal.font.name = "Arial"
+    estilo_normal.font.size = Pt(8)
+
+    cabecalho = documento.add_table(rows=2, cols=1)
+    _word_configurar_tabela(cabecalho)
+    _word_bordas_tabela(cabecalho)
+
+    _word_preencher_celula(
+        cabecalho.cell(0, 0),
+        "CÂMARA DE NEGÓCIOS DA ALIMENTAÇÃO ESCOLAR DA DIRETORIA REGIONAL DE EDUCAÇÃO",
+        tamanho=9,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+    _word_preencher_celula(
+        cabecalho.cell(1, 0),
+        f"FORNECEDORES VENCEDORES - PREGÃO PRESENCIAL Nº {pregao.numero}/{pregao.ano}",
+        tamanho=9,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+
+    p = documento.add_paragraph()
+    p.paragraph_format.space_after = Pt(2)
+
+    dados = documento.add_table(rows=2, cols=3)
+    _word_configurar_tabela(dados)
+    _word_bordas_tabela(dados)
+
+    _word_preencher_celula(
+        dados.cell(0, 0),
+        f"Pregão: {pregao.numero}/{pregao.ano}",
+        tamanho=8,
+    )
+    _word_preencher_celula(
+        dados.cell(0, 1),
+        f"Data: {pregao.data_pregao.strftime('%d/%m/%Y') if pregao.data_pregao else ''}",
+        tamanho=8,
+    )
+    _word_preencher_celula(
+        dados.cell(0, 2),
+        f"Pregoeiro: {pregao.nome_pregoeiro or ''}",
+        tamanho=8,
+    )
+
+    municipios_texto = ", ".join(
+        [
+            f"{municipio.nome}/{municipio.uf}"
+            if getattr(municipio, "uf", "")
+            else municipio.nome
+            for municipio in municipios
+        ]
+    )
+
+    celula_municipios = dados.cell(1, 0).merge(dados.cell(1, 2))
+    _word_preencher_celula(
+        celula_municipios,
+        f"Município(s): {municipios_texto or '-'}",
+        tamanho=8,
+    )
+
+    p = documento.add_paragraph()
+    p.paragraph_format.space_after = Pt(2)
+
+    tabela = documento.add_table(rows=2, cols=13)
+    _word_configurar_tabela(tabela)
+    _word_bordas_tabela(tabela)
+
+    # Cabeçalho principal com mesclas.
+    tabela.cell(0, 0).merge(tabela.cell(1, 0))
+    tabela.cell(0, 1).merge(tabela.cell(1, 1))
+    tabela.cell(0, 2).merge(tabela.cell(1, 2))
+    tabela.cell(0, 3).merge(tabela.cell(1, 3))
+
+    tabela.cell(0, 4).merge(tabela.cell(0, 6))
+    tabela.cell(0, 7).merge(tabela.cell(0, 9))
+    tabela.cell(0, 10).merge(tabela.cell(0, 12))
+
+    cabecalhos_fixos = [
+        (0, "Nº"),
+        (1, "Gênero Alimentício"),
+        (2, "Unid."),
+        (3, "Quant."),
+    ]
+
+    for coluna, texto in cabecalhos_fixos:
+        _word_preencher_celula(
+            tabela.cell(0, coluna),
+            texto,
+            tamanho=7,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(tabela.cell(0, coluna), "D9D9D9")
+
+    for coluna, titulo in ((4, "1º vencedor"), (7, "2º vencedor"), (10, "3º vencedor")):
+        _word_preencher_celula(
+            tabela.cell(0, coluna),
+            titulo,
+            tamanho=7,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(tabela.cell(0, coluna), "CFE2F3")
+
+    subcabecalhos = [
+        "Fornecedor", "Marca", "Preço",
+        "Fornecedor", "Marca", "Preço",
+        "Fornecedor", "Marca", "Preço",
+    ]
+
+    for idx, texto in enumerate(subcabecalhos, start=4):
+        _word_preencher_celula(
+            tabela.cell(1, idx),
+            texto,
+            tamanho=7,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(tabela.cell(1, idx), "D9D9D9")
+
+    larguras_cm = [
+        0.8, 3.2, 1.7, 1.5,
+        4.0, 1.7, 1.7,
+        4.0, 1.7, 1.7,
+        4.0, 1.7, 1.7,
+    ]
+
+    for row in tabela.rows:
+        for idx, cell in enumerate(row.cells):
+            try:
+                cell.width = Cm(larguras_cm[idx])
+            except IndexError:
+                pass
+
+    for linha in relatorio:
+        row = tabela.add_row().cells
+
+        valores = [
+            linha["ordem"],
+            linha["item"].nome_item,
+            linha["unidade"],
+            formatar_numero_br(linha["quantidade"]),
+            linha["primeiro"]["fornecedor"],
+            linha["primeiro"]["marca"],
+            formatar_moeda_br(linha["primeiro"]["preco"]) if linha["primeiro"]["preco"] else "",
+            linha["segundo"]["fornecedor"],
+            linha["segundo"]["marca"],
+            formatar_moeda_br(linha["segundo"]["preco"]) if linha["segundo"]["preco"] else "",
+            linha["terceiro"]["fornecedor"],
+            linha["terceiro"]["marca"],
+            formatar_moeda_br(linha["terceiro"]["preco"]) if linha["terceiro"]["preco"] else "",
+        ]
+
+        for idx, valor in enumerate(valores):
+            alinhamento = (
+                WD_ALIGN_PARAGRAPH.CENTER
+                if idx in (0, 2, 3, 5, 6, 8, 9, 11, 12)
+                else WD_ALIGN_PARAGRAPH.LEFT
+            )
+            negrito = idx == 1
+
+            _word_preencher_celula(
+                row[idx],
+                valor,
+                tamanho=7,
+                negrito=negrito,
+                alinhamento=alinhamento,
+            )
+            row[idx].width = Cm(larguras_cm[idx])
+
+    documento.add_paragraph()
+    assinaturas = documento.add_table(rows=1, cols=2)
+    assinaturas.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    for idx, texto in enumerate(
+        [
+            f"{pregao.nome_pregoeiro or ''}\nPregoeiro",
+            "Responsável / Comissão",
+        ]
+    ):
+        paragrafo = assinaturas.cell(0, idx).paragraphs[0]
+        paragrafo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragrafo.paragraph_format.space_before = Pt(24)
+
+        run = paragrafo.add_run("________________________________________\n")
+        _word_definir_fonte(run, "Arial", 9)
+        run2 = paragrafo.add_run(texto)
+        _word_definir_fonte(run2, "Arial", 9)
+
+    return _word_resposta(
+        documento,
+        f"Fornecedores_Vencedores_Pregao_{pregao.numero}_{pregao.ano}.docx",
+    )
+
+
+def _dados_resultado_final_word(pregao):
+    itens = (
+        PregaoItem.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("ordem")
+    )
+
+    resultados = {
+        resultado.pregao_item_id: resultado
+        for resultado in ResultadoItem.objects.filter(
+            pregao=pregao
+        ).select_related("primeiro_fornecedor")
+    }
+
+    propostas = {
+        (proposta.pregao_item_id, proposta.fornecedor_id): proposta
+        for proposta in PropostaInicialItem.objects.filter(
+            pregao=pregao
+        ).select_related("fornecedor", "pregao_item")
+    }
+
+    relatorio = []
+    valor_total_pregao = Decimal("0")
+
+    for item_pregao in itens:
+        resultado = resultados.get(item_pregao.id)
+
+        marca = ""
+        fornecedor = ""
+        valor_unitario = Decimal("0")
+        valor_total = Decimal("0")
+
+        if item_pregao.status == PregaoItem.STATUS_DESERTO:
+            fornecedor = "DESERTO -"
+
+        elif item_pregao.status == PregaoItem.STATUS_FRACASSADO:
+            fornecedor = "FRACASSADO -"
+
+        elif resultado and resultado.primeiro_fornecedor:
+            proposta = propostas.get(
+                (item_pregao.id, resultado.primeiro_fornecedor_id)
+            )
+
+            marca = proposta.marca if proposta else ""
+            fornecedor = (
+                f"{resultado.primeiro_fornecedor.razao_social} - "
+                f"{resultado.primeiro_fornecedor.cnpj}"
+            )
+            valor_unitario = resultado.primeiro_valor or Decimal("0")
+            valor_total = item_pregao.quantidade_total * valor_unitario
+
+        valor_total_pregao += valor_total
+
+        relatorio.append(
+            {
+                "ordem": item_pregao.ordem,
+                "genero": item_pregao.item.nome_item,
+                "unidade": item_pregao.item.get_unidade_medida_display(),
+                "quantidade": formatar_numero_br(item_pregao.quantidade_total),
+                "marca": marca,
+                "fornecedor": fornecedor,
+                "valor_unitario": formatar_moeda_br(valor_unitario),
+                "valor_total": formatar_moeda_br(valor_total),
+            }
+        )
+
+    return relatorio, valor_total_pregao
+
+
+def resultado_final_word(request, pregao_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    relatorio, valor_total_pregao = _dados_resultado_final_word(pregao)
+    municipios = pregao.municipios.all().order_by("nome")
+
+    municipios_texto = ", ".join(
+        [
+            f"{municipio.nome}/{municipio.uf}"
+            if getattr(municipio, "uf", "")
+            else municipio.nome
+            for municipio in municipios
+        ]
+    )
+
+    documento = Document()
+    secao = documento.sections[0]
+    secao.page_width = Cm(21)
+    secao.page_height = Cm(29.7)
+    secao.top_margin = Cm(1.2)
+    secao.bottom_margin = Cm(1.2)
+    secao.left_margin = Cm(1.2)
+    secao.right_margin = Cm(1.2)
+
+    estilo_normal = documento.styles["Normal"]
+    estilo_normal.font.name = "Times New Roman"
+    estilo_normal.font.size = Pt(11)
+
+    titulo = documento.add_paragraph()
+    titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    titulo.paragraph_format.space_after = Pt(12)
+
+    run = titulo.add_run("RESULTADO DO PREGÃO PRESENCIAL")
+    _word_definir_fonte(run, "Times New Roman", 14, True)
+
+    abertura = documento.add_paragraph()
+    abertura.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    abertura.paragraph_format.space_after = Pt(10)
+    abertura.paragraph_format.line_spacing = 1.05
+
+    run = abertura.add_run(
+        f"RESULTADO DO PREGÃO PRESENCIAL ARP N.º {pregao.numero}/{pregao.ano} "
+    )
+    _word_definir_fonte(run, "Times New Roman", 11, True)
+
+    texto = "A CÂMARA DE NEGÓCIOS DA ALIMENTAÇÃO ESCOLAR "
+    if municipios_texto:
+        texto += f"DO(S) MUNICÍPIO(S) DE {municipios_texto}, "
+
+    texto += (
+        "torna público para conhecimento dos interessados o Resultado do Certame "
+        f"Licitatório do Pregão Presencial ARP de n.º {pregao.numero}/{pregao.ano}, "
+        "cujo objeto é Aquisição de Gêneros Alimentícios, para atendimento dos alunos "
+        "matriculados nas Unidades Escolares da Rede Pública Estadual "
+    )
+
+    if municipios_texto:
+        texto += f"no(s) Município(s) de {municipios_texto}, "
+
+    texto += (
+        "em observância ao FNDE/PNAE, nos termos do Edital, sendo declarado(s) vencedor(es):"
+    )
+
+    run = abertura.add_run(texto)
+    _word_definir_fonte(run, "Times New Roman", 11)
+
+    tabela = documento.add_table(rows=1, cols=8)
+    _word_configurar_tabela(tabela)
+    _word_bordas_tabela(tabela)
+
+    cabecalhos = [
+        "Item",
+        "Gênero Alimentício",
+        "Unid.",
+        "Quant.",
+        "Marca",
+        "Fornecedor",
+        "Valor Unit.",
+        "Valor Total",
+    ]
+
+    larguras_cm = [1.0, 3.4, 2.0, 1.4, 2.0, 4.4, 2.1, 2.1]
+
+    for idx, texto in enumerate(cabecalhos):
+        _word_preencher_celula(
+            tabela.rows[0].cells[idx],
+            texto,
+            nome_fonte="Times New Roman",
+            tamanho=8,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(tabela.rows[0].cells[idx], "BFBFBF")
+        tabela.rows[0].cells[idx].width = Cm(larguras_cm[idx])
+
+    for linha in relatorio:
+        row = tabela.add_row().cells
+        valores = [
+            linha["ordem"],
+            linha["genero"],
+            linha["unidade"],
+            linha["quantidade"],
+            linha["marca"],
+            linha["fornecedor"],
+            linha["valor_unitario"],
+            linha["valor_total"],
+        ]
+
+        for idx, valor in enumerate(valores):
+            alinhamento = (
+                WD_ALIGN_PARAGRAPH.CENTER
+                if idx in (0, 2, 3, 4, 6, 7)
+                else WD_ALIGN_PARAGRAPH.LEFT
+            )
+
+            _word_preencher_celula(
+                row[idx],
+                valor,
+                nome_fonte="Times New Roman",
+                tamanho=8,
+                negrito=idx == 1,
+                alinhamento=alinhamento,
+            )
+            row[idx].width = Cm(larguras_cm[idx])
+
+    total_row = tabela.add_row().cells
+    total_label = total_row[0].merge(total_row[6])
+
+    _word_preencher_celula(
+        total_label,
+        "VALOR TOTAL DO PREGÃO",
+        nome_fonte="Times New Roman",
+        tamanho=9,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.LEFT,
+    )
+    _word_sombrear_celula(total_label, "D9D9D9")
+
+    _word_preencher_celula(
+        total_row[7],
+        formatar_moeda_br(valor_total_pregao),
+        nome_fonte="Times New Roman",
+        tamanho=9,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+    _word_sombrear_celula(total_row[7], "D9D9D9")
+
+    local_data = documento.add_paragraph()
+    local_data.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    local_data.paragraph_format.space_before = Pt(20)
+
+    nomes_municipios = ", ".join([municipio.nome for municipio in municipios])
+    data_texto = (
+        pregao.data_pregao.strftime("%d/%m/%Y")
+        if pregao.data_pregao
+        else ""
+    )
+    run = local_data.add_run(
+        f"{nomes_municipios + ', ' if nomes_municipios else ''}{data_texto}"
+    )
+    _word_definir_fonte(run, "Times New Roman", 11)
+
+    assinatura = documento.add_paragraph()
+    assinatura.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    assinatura.paragraph_format.space_before = Pt(55)
+
+    run = assinatura.add_run("_______________________________________________\n")
+    _word_definir_fonte(run, "Times New Roman", 11)
+
+    run = assinatura.add_run(
+        f"{pregao.nome_pregoeiro or ''}\nPregoeiro"
+    )
+    _word_definir_fonte(run, "Times New Roman", 11)
+
+    return _word_resposta(
+        documento,
+        f"Resultado_Final_Pregao_{pregao.numero}_{pregao.ano}.docx",
+    )
+
+
+
+# ============================================================
+# ATA DE REGISTRO DE PREÇOS
+# ============================================================
+
+def caminho_modelo_ata_registro_precos():
+    """
+    Localiza o modelo Word da Ata de Registro de Preços.
+    """
+    pasta_modelos = Path(settings.BASE_DIR) / "templates" / "documentos"
+
+    candidatos = [
+        pasta_modelos / "modelo_ata_registro_precos.docx",
+        pasta_modelos / "MODELO ATA DE REGISTRO DE PREÇOS.docx",
+        pasta_modelos / "MODELO ATA DE REGISTRO DE PRECOS.docx",
+    ]
+
+    for caminho in candidatos:
+        if caminho.exists():
+            return caminho
+
+    return candidatos[0]
+
+
+def _ata_texto_municipios(pregao):
+    municipios = list(pregao.municipios.all().order_by("nome"))
+
+    if not municipios:
+        return ""
+
+    return ", ".join(municipio.nome for municipio in municipios)
+
+
+def _ata_identidade_representante(fornecedor):
+    rg = (fornecedor.rg_representante or "").strip()
+    orgao = (fornecedor.orgao_expedidor_representante or "").strip()
+
+    if rg and orgao:
+        return f"{rg} - {orgao}"
+
+    return rg or orgao
+
+
+def _ata_documento_fornecedor(fornecedor):
+    return (
+        fornecedor.cnpj
+        or fornecedor.cpf_fornecedor_individual
+        or ""
+    )
+
+
+def _ata_preencher_tabela_fornecedor(tabela, fornecedor):
+    substituicoes = {
+        "NOME DA EMPRESA": fornecedor.razao_social or "",
+        "CNPJ": _ata_documento_fornecedor(fornecedor),
+        "ENDEREÇO COMPLETO": fornecedor.endereco or "",
+        "NOME REPRESENTANTE": fornecedor.representante_legal or "",
+        "CPF DO REPRESENTANTE": fornecedor.cpf_representante or "",
+        "RG DO REPRESENTANTE": _ata_identidade_representante(fornecedor),
+        "TELEFONE DA EMPRESA": fornecedor.telefone or "",
+    }
+
+    # No modelo, a primeira coluna contém os rótulos e a segunda os valores.
+    # Preenche somente as células de valores, preservando "CNPJ:", "ENDEREÇO:" etc.
+    for linha in tabela.rows:
+        celulas = linha.cells
+        celulas_preencher = celulas[1:] if len(celulas) >= 2 else celulas
+
+        for celula in celulas_preencher:
+            for paragrafo in celula.paragraphs:
+                substituir_texto_em_paragrafo(paragrafo, substituicoes)
+
+
+def _ata_repetir_tabela_fornecedores(documento, pregao):
+    """
+    Usa a primeira tabela do modelo como bloco-base do fornecedor e
+    repete uma tabela abaixo da outra para todos os fornecedores ativos
+    vinculados ao pregão.
+    """
+    fornecedores = [
+        vinculo.fornecedor
+        for vinculo in (
+            PregaoFornecedor.objects.filter(
+                pregao=pregao,
+                ativo_no_pregao=True,
+            )
+            .select_related("fornecedor")
+            .order_by("ordem_inicial", "fornecedor__razao_social")
+        )
+    ]
+
+    if not documento.tables:
+        raise ValueError(
+            "O modelo da Ata de Registro de Preços não possui a tabela-base dos fornecedores."
+        )
+
+    tabela_modelo = documento.tables[0]
+    elemento_modelo = deepcopy(tabela_modelo._tbl)
+
+    if not fornecedores:
+        # Mantém o bloco do modelo vazio caso não exista fornecedor.
+        return
+
+    # Preenche a tabela original com o primeiro fornecedor.
+    _ata_preencher_tabela_fornecedor(tabela_modelo, fornecedores[0])
+
+    ultimo_elemento = tabela_modelo._tbl
+
+    # Insere as demais cópias logo abaixo da anterior.
+    for fornecedor in fornecedores[1:]:
+        separador = OxmlElement("w:p")
+        ultimo_elemento.addnext(separador)
+
+        novo_elemento = deepcopy(elemento_modelo)
+        separador.addnext(novo_elemento)
+
+        # Encontra a nova tabela pelo XML inserido.
+        nova_tabela = None
+        for tabela in documento.tables:
+            if tabela._tbl is novo_elemento:
+                nova_tabela = tabela
+                break
+
+        # python-docx pode reconstruir wrappers; cria um wrapper simples
+        # localizando pelo elemento quando necessário.
+        if nova_tabela is None:
+            from docx.table import Table
+            nova_tabela = Table(novo_elemento, tabela_modelo._parent)
+
+        _ata_preencher_tabela_fornecedor(nova_tabela, fornecedor)
+        ultimo_elemento = novo_elemento
+
+
+def _ata_inserir_tabela_resultado_final(documento, pregao):
+    placeholder = "{{TABELA DO RESULTADO FINAL DO PREGÃO}}"
+    paragrafo = encontrar_paragrafo_placeholder(documento, placeholder)
+
+    if not paragrafo:
+        raise ValueError(
+            "Não foi encontrado no modelo o marcador da Tabela do Resultado Final do Pregão."
+        )
+
+    relatorio, valor_total_pregao = _dados_resultado_final_word(pregao)
+
+    # Remove o texto do marcador, preservando a posição.
+    substituir_texto_em_paragrafo(paragrafo, {placeholder: ""})
+
+    tabela = documento.add_table(rows=1, cols=8)
+
+    try:
+        tabela.style = "Table Grid"
+    except KeyError:
+        pass
+
+    tabela.alignment = WD_TABLE_ALIGNMENT.CENTER
+    aplicar_bordas_tabela(tabela)
+
+    cabecalhos = [
+        "Item",
+        "Gênero Alimentício",
+        "Unid.",
+        "Quant.",
+        "Marca",
+        "Fornecedor",
+        "Valor Unit.",
+        "Valor Total",
+    ]
+
+    larguras = [
+        600,
+        1900,
+        1000,
+        850,
+        1100,
+        2500,
+        1100,
+        1100,
+    ]
+
+    for indice, titulo in enumerate(cabecalhos):
+        celula = tabela.rows[0].cells[indice]
+        celula.text = titulo
+        definir_largura_coluna(celula, larguras[indice])
+        formatar_celula_tabela(
+            celula,
+            negrito=True,
+            fundo="BFBFBF",
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+            tamanho_fonte=8,
+        )
+
+    for linha in relatorio:
+        row = tabela.add_row().cells
+
+        valores = [
+            linha["ordem"],
+            linha["genero"],
+            linha["unidade"],
+            linha["quantidade"],
+            linha["marca"],
+            linha["fornecedor"],
+            linha["valor_unitario"],
+            linha["valor_total"],
+        ]
+
+        for indice, valor in enumerate(valores):
+            celula = row[indice]
+            celula.text = str(valor or "")
+            definir_largura_coluna(celula, larguras[indice])
+
+            if indice in [1, 5]:
+                alinhamento = WD_ALIGN_PARAGRAPH.LEFT
+            else:
+                alinhamento = WD_ALIGN_PARAGRAPH.CENTER
+
+            formatar_celula_tabela(
+                celula,
+                negrito=(indice == 1),
+                alinhamento=alinhamento,
+                tamanho_fonte=8,
+            )
+
+    # Linha de total, igual ao Resultado Final.
+    row_total = tabela.add_row().cells
+    celula_total = row_total[0].merge(row_total[6])
+    celula_total.text = "VALOR TOTAL DO PREGÃO"
+    formatar_celula_tabela(
+        celula_total,
+        negrito=True,
+        fundo="D9D9D9",
+        alinhamento=WD_ALIGN_PARAGRAPH.LEFT,
+        tamanho_fonte=8,
+    )
+
+    row_total[7].text = formatar_moeda_br(valor_total_pregao)
+    formatar_celula_tabela(
+        row_total[7],
+        negrito=True,
+        fundo="D9D9D9",
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        tamanho_fonte=8,
+    )
+
+    # A tabela deve ocupar exatamente a posição do marcador.
+    paragrafo._p.addnext(tabela._tbl)
+
+
+def montar_ata_registro_precos_word(pregao):
+    caminho_modelo = caminho_modelo_ata_registro_precos()
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo da Ata de Registro de Preços não encontrado em "
+            f"{caminho_modelo}."
+        )
+
+    documento = Document(caminho_modelo)
+
+    municipios_texto = _ata_texto_municipios(pregao)
+    municipio_principal = municipios_texto or pregao.local_pregao or ""
+
+    # Estes três campos serão adicionados no cadastro de certames na próxima etapa.
+    # O getattr permite que esta rotina já passe a preenchê-los automaticamente
+    # assim que os campos forem criados com estes nomes.
+    nome_ordenador = (
+        getattr(pregao, "nome_ordenador_despesas", "")
+        or "________________________________"
+    )
+    rg_ordenador = (
+        getattr(pregao, "rg_ordenador_despesas", "")
+        or "________________"
+    )
+    cpf_ordenador = (
+        getattr(pregao, "cpf_ordenador_despesas", "")
+        or "________________"
+    )
+
+    data_pregao_texto = (
+        pregao.data_pregao.strftime("%d/%m/%Y")
+        if pregao.data_pregao
+        else ""
+    )
+
+    data_extenso = (
+        data_por_extenso(pregao.data_pregao)
+        if pregao.data_pregao
+        else ""
+    )
+
+    substituicoes = {
+        "{{NÚMERO DO PREGÃO}}": str(pregao.numero or ""),
+        "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
+        "{{NÚMERO PROCESSO DO PREGÃO}}": pregao.numero_processo or "",
+        "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
+        "{{RG ORDENADOR DESPESAS}}": rg_ordenador,
+        "{{CPF ORDENADOR DESPESAS}}": cpf_ordenador,
+        "{{DATA DO PREGÃO}}": data_pregao_texto,
+        "{{MUNICÍPIO PREGÃO}}": municipio_principal,
+        "{{DATA POR EXTENSO}}": data_extenso,
+    }
+
+    substituir_placeholders_documento(documento, substituicoes)
+
+    # No modelo original o texto inicial possui "Sinop" fixo.
+    # Mantemos o texto do modelo quando o certame for de Sinop e,
+    # para outros municípios, adequamos somente essas menções.
+    if municipio_principal and municipio_principal.strip().lower() != "sinop":
+        for paragrafo in documento.paragraphs:
+            if "ALIMENTAÇÃO ESCOLAR DO MUNICÍPIO DE SINOP" in paragrafo.text:
+                substituir_texto_em_paragrafo(
+                    paragrafo,
+                    {
+                        "ALIMENTAÇÃO ESCOLAR DO MUNICÍPIO DE SINOP":
+                            f"ALIMENTAÇÃO ESCOLAR DO(S) MUNICÍPIO(S) DE {municipio_principal.upper()}",
+                    },
+                )
+
+            if "sede em Sinop" in paragrafo.text:
+                substituir_texto_em_paragrafo(
+                    paragrafo,
+                    {"sede em Sinop": f"sede em {municipio_principal}"},
+                )
+
+    _ata_repetir_tabela_fornecedores(documento, pregao)
+    _ata_inserir_tabela_resultado_final(documento, pregao)
+
+    return documento
+
+
+def nome_arquivo_ata_registro_precos(pregao, extensao):
+    numero = str(pregao.numero or "").replace("/", "-").replace("\\", "-")
+    return f"Ata_Registro_de_Precos_Pregao_{numero}_{pregao.ano}.{extensao}"
+
+
+def gerar_ata_registro_precos_word(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_ata_registro_precos_word(pregao)
+    except Exception as erro:
+        messages.error(
+            request,
+            f"Não foi possível gerar a Ata de Registro de Preços em Word: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+    arquivo = BytesIO()
+    documento.save(arquivo)
+    arquivo.seek(0)
+
+    response = HttpResponse(
+        arquivo.getvalue(),
+        content_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="{nome_arquivo_ata_registro_precos(pregao, "docx")}"'
+    )
+
+    return response
+
+
+def gerar_ata_registro_precos_pdf(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    libreoffice = encontrar_libreoffice()
+
+    if not libreoffice:
+        messages.error(
+            request,
+            "LibreOffice não encontrado. Verifique a instalação/configuração "
+            "do LibreOffice no servidor.",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_ata_registro_precos_word(pregao)
+    except Exception as erro:
+        messages.error(
+            request,
+            f"Não foi possível montar a Ata de Registro de Preços para PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+    nome_docx = nome_arquivo_ata_registro_precos(pregao, "docx")
+    nome_pdf = nome_arquivo_ata_registro_precos(pregao, "pdf")
+
+    with tempfile.TemporaryDirectory() as pasta_temp:
+        pasta_temp_path = Path(pasta_temp)
+
+        caminho_docx = pasta_temp_path / nome_docx
+        caminho_pdf = pasta_temp_path / nome_pdf
+
+        documento.save(caminho_docx)
+
+        comando = [
+            libreoffice,
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(pasta_temp_path),
+            str(caminho_docx),
+        ]
+
+        try:
+            resultado = subprocess.run(
+                comando,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=90,
+            )
+        except subprocess.TimeoutExpired:
+            messages.error(
+                request,
+                "O LibreOffice demorou muito para converter a Ata em PDF.",
+            )
+            return redirect("documentos:pregoes_finalizados")
+
+        if resultado.returncode != 0:
+            messages.error(
+                request,
+                "Erro ao converter a Ata para PDF pelo LibreOffice: "
+                f"{resultado.stderr or resultado.stdout}",
+            )
+            return redirect("documentos:pregoes_finalizados")
+
+        if not caminho_pdf.exists():
+            arquivos_pdf = list(pasta_temp_path.glob("*.pdf"))
+
+            if arquivos_pdf:
+                caminho_pdf = arquivos_pdf[0]
+            else:
+                messages.error(
+                    request,
+                    "O LibreOffice não gerou o PDF esperado da Ata.",
+                )
+                return redirect("documentos:pregoes_finalizados")
+
+        response = HttpResponse(
+            caminho_pdf.read_bytes(),
+            content_type="application/pdf",
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="{nome_pdf}"'
+        )
+
+        return response
+
 
 def obter_quantidade_distratada_contrato_item(contrato_item):
     total = (
@@ -8127,18 +9304,15 @@ def relatorios_fornecedores_contratos_por_certame(request, pregao_id):
     return JsonResponse({"fornecedores": dados})
 
 
-
 # ============================================================
-# RELATÓRIOS GERENCIAIS - ETAPA 09.2
+# RELATÓRIOS GERENCIAIS - BLOCO RESTAURADO
 # ============================================================
 
 def relatorios_status_registrado(modelo):
     return getattr(modelo, "STATUS_REGISTRADO", "registrado")
 
-
 def relatorios_status_cancelado(modelo):
     return getattr(modelo, "STATUS_CANCELADO", "cancelado")
-
 
 def relatorios_contratos_financeiros_permitidos(request):
     contratos = ContratoGerado.objects.select_related(
@@ -8149,7 +9323,6 @@ def relatorios_contratos_financeiros_permitidos(request):
     ).all()
 
     return aplicar_restricao_escola_contratos(request, contratos)
-
 
 def relatorios_aplicar_filtro_contrato_base(queryset, filtros):
     if filtros.get("pregao"):
@@ -8162,7 +9335,6 @@ def relatorios_aplicar_filtro_contrato_base(queryset, filtros):
         queryset = queryset.filter(fornecedor_id=filtros["fornecedor"])
 
     return queryset
-
 
 def relatorios_resumo_financeiro_certame(request):
     certames = relatorios_certames_permitidos(request)
@@ -8268,7 +9440,6 @@ def relatorios_resumo_financeiro_certame(request):
         },
     )
 
-
 def relatorios_resumo_financeiro_escola(request):
     certames = relatorios_certames_permitidos(request)
     escolas = relatorios_escolas_com_contratos_permitidas(request)
@@ -8367,7 +9538,6 @@ def relatorios_resumo_financeiro_escola(request):
         },
     )
 
-
 def relatorios_distratos(request):
     certames = relatorios_certames_permitidos(request)
     escolas = relatorios_escolas_com_contratos_permitidas(request)
@@ -8435,7 +9605,6 @@ def relatorios_distratos(request):
             "escola_vinculada": relatorios_escola_vinculada_usuario(request),
         },
     )
-
 
 def relatorios_realinhamentos(request):
     certames = relatorios_certames_permitidos(request)
@@ -8510,7 +9679,6 @@ def relatorios_realinhamentos(request):
             "escola_vinculada": relatorios_escola_vinculada_usuario(request),
         },
     )
-
 
 def relatorios_consolidado_chamada_publica(request):
     chamadas = relatorios_certames_permitidos(request).filter(

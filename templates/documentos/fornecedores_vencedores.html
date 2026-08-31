@@ -22,6 +22,10 @@
 
         .no-print {
             margin-bottom: 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
         }
 
         .btn-print {
@@ -32,6 +36,23 @@
             cursor: pointer;
             border-radius: 4px;
             font-size: 12px;
+        }
+
+        .btn-word {
+            display: inline-block;
+            background: #198754;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            text-decoration: none;
+            font-family: Arial, sans-serif;
+        }
+
+        .btn-word:hover {
+            background: #146c43;
         }
 
         .cabecalho {
@@ -178,6 +199,10 @@
         <button class="btn-print" onclick="window.print()">
             Imprimir / Salvar em PDF
         </button>
+
+        <a class="btn-word" href="{% url 'documentos:fornecedores_vencedores_word' pregao.id %}">
+            Baixar em Word
+        </a>
     </div>
 
     <table class="cabecalho">
