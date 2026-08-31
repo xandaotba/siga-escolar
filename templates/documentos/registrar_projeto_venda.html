@@ -211,6 +211,42 @@
         return isNaN(numero) ? 0 : numero;
     }
 
+    function converterQuantidadeBR(valor) {
+        valor = String(valor || "").trim().replaceAll(" ", "");
+
+        if (!valor) {
+            return 0;
+        }
+
+        if (valor.includes(",")) {
+            // Padrão brasileiro:
+            // 1.939,500 -> 1939.500
+            // 849,5     -> 849.5
+            valor = valor.replaceAll(".", "").replace(",", ".");
+        } else if (valor.includes(".")) {
+            const partes = valor.split(".");
+
+            // Quando todos os grupos após o primeiro possuem exatamente
+            // 3 dígitos, o ponto é separador de milhar:
+            // 1.939 -> 1939
+            // 12.000 -> 12000
+            // 1.939.500 -> 1939500
+            const pontoEhMilhar =
+                partes.length > 1 &&
+                /^\d+$/.test(partes[0]) &&
+                partes.slice(1).every(function (parte) {
+                    return /^\d{3}$/.test(parte);
+                });
+
+            if (pontoEhMilhar) {
+                valor = partes.join("");
+            }
+        }
+
+        const numero = parseFloat(valor);
+        return isNaN(numero) ? 0 : numero;
+    }
+
     function formatarMoeda(valor) {
         return valor.toLocaleString("pt-BR", {
             style: "currency",
@@ -226,7 +262,7 @@
         document.querySelectorAll(".quantidade-projeto").forEach(function (input) {
             const itemId = input.dataset.itemId;
             const preco = converterDecimalBR(input.dataset.preco);
-            const quantidade = converterDecimalBR(input.value);
+            const quantidade = converterQuantidadeBR(input.value);
             const total = quantidade * preco;
             totalProjeto += total;
 

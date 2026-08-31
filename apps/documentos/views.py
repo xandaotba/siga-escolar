@@ -8235,19 +8235,44 @@ def montar_documento_realinhamento_por_tipo(realinhamento, tipo_documento, dados
 # ============================================================
 
 def decimal_br_para_decimal(valor):
-    valor = (valor or "").strip()
+    """
+    Converte quantidade digitada no padrão brasileiro para Decimal.
 
-    if not valor:
+    Exemplos:
+    1.939      -> 1939
+    12.000     -> 12000
+    1.939,500  -> 1939.500
+    849        -> 849
+    849,5      -> 849.5
+    1,939      -> 1.939
+    """
+    texto = str(valor or "").strip()
+
+    if not texto:
         return Decimal("0")
 
-    valor = valor.replace("R$", "").replace(" ", "")
+    texto = (
+        texto.replace("R$", "")
+        .replace(" ", "")
+        .replace("\xa0", "")
+        .strip()
+    )
 
-    if "," in valor and "." in valor:
-        valor = valor.replace(".", "").replace(",", ".")
-    else:
-        valor = valor.replace(",", ".")
+    if "," in texto:
+        # Padrão brasileiro: pontos são milhares e vírgula é decimal.
+        texto = texto.replace(".", "").replace(",", ".")
+    elif "." in texto:
+        partes = texto.split(".")
 
-    return Decimal(valor)
+        # 1.939 / 12.000 / 1.939.500 => separador de milhar.
+        if (
+            len(partes) > 1
+            and partes[0].isdigit()
+            and all(parte.isdigit() and len(parte) == 3 for parte in partes[1:])
+        ):
+            texto = "".join(partes)
+
+    return Decimal(texto)
 
 
 def garantir_itens_chamada_publica(pregao):
