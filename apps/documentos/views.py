@@ -8852,9 +8852,23 @@ def resultado_chamada_publica(request):
             .order_by("pregao_item__ordem", "fornecedor__razao_social")
         )
 
+        # IMPORTANTE:
+        # "resultados" possui ordenação por fornecedor para exibir a relação
+        # detalhada logo abaixo. Se essa ordenação for reaproveitada diretamente
+        # na agregação, o banco pode agrupar também por fornecedor e retornar
+        # mais de uma linha para o mesmo item. O dicionário então acaba mantendo
+        # somente uma das quantidades (ex.: 22 em vez de 100 + 22 = 122).
+        #
+        # Limpamos a ordenação somente para o cálculo do resumo, garantindo
+        # uma única soma por item.
         totais = {
             linha["pregao_item"]: linha["total"] or Decimal("0.000")
-            for linha in resultados.values("pregao_item").annotate(total=Sum("quantidade_adjudicada"))
+            for linha in (
+                resultados
+                .order_by()
+                .values("pregao_item")
+                .annotate(total=Sum("quantidade_adjudicada"))
+            )
         }
 
         for item_pregao in PregaoItem.objects.filter(pregao=pregao).select_related("item").order_by("ordem"):
