@@ -157,7 +157,7 @@
                 <option value="">Selecione</option>
                 {% for chamada in chamadas %}
                     <option value="{{ chamada.id }}" {% if pregao and pregao.id == chamada.id %}selected{% endif %}>
-                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }}
+                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} — {% for municipio in chamada.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}
                     </option>
                 {% endfor %}
             </select>

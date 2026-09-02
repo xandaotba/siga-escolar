@@ -5299,6 +5299,7 @@ def contratos_chamada_publica(request):
 
     chamadas = (
         Pregao.objects.filter(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+        .prefetch_related("municipios")
         .order_by("-ano", "-numero")
     )
 
@@ -5779,7 +5780,11 @@ def contratos_gerados(request):
     if data_fim:
         contratos = contratos.filter(criado_em__date__lte=data_fim)
 
-    pregoes = Pregao.objects.all().order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.all()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
     pregoes = aplicar_restricao_escola_pregoes(request, pregoes)
 
     if usuario_eh_consulta_escola(request):
@@ -6219,12 +6224,17 @@ def realinhamento_precos(request):
         .order_by("-criado_em")
     )
 
-    pregoes = Pregao.objects.filter(
-        contratos_gerados__status__in=[
-            ContratoGerado.STATUS_GERADO,
-            ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
-        ]
-    ).distinct().order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            contratos_gerados__status__in=[
+                ContratoGerado.STATUS_GERADO,
+                ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
+            ]
+        )
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     escolas = Escola.objects.filter(
         contratos_gerados__status__in=[
@@ -6822,12 +6832,17 @@ def troca_marca(request):
         .order_by("-criado_em")
     )
 
-    pregoes = Pregao.objects.filter(
-        contratos_gerados__status__in=[
-            ContratoGerado.STATUS_GERADO,
-            ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
-        ]
-    ).distinct().order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            contratos_gerados__status__in=[
+                ContratoGerado.STATUS_GERADO,
+                ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
+            ]
+        )
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     escolas = Escola.objects.filter(
         contratos_gerados__status__in=[

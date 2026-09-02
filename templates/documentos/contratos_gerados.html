@@ -241,7 +241,7 @@
 
                     {% for pregao in pregoes %}
                     <option value="{{ pregao.id }}" {% if filtros.pregao == pregao.id|stringformat:"s" %}selected{% endif %}>
-                        {% if pregao.tipo_certame == 'chamada_publica' %}Chamada Pública{% else %}Pregão{% endif %} {{ pregao.numero }}/{{ pregao.ano }}
+                        {% if pregao.tipo_certame == 'chamada_publica' %}Chamada Pública{% else %}Pregão{% endif %} {{ pregao.numero }}/{{ pregao.ano }} — {% for municipio in pregao.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}
                     </option>
                     {% endfor %}
                 </select>

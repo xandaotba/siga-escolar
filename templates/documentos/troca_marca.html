@@ -125,7 +125,7 @@
                     <option value="">Todos</option>
                     {% for pregao in pregoes %}
                     <option value="{{ pregao.id }}" {% if filtros.pregao == pregao.id|stringformat:"s" %}selected{% endif %}>
-                        Pregão {{ pregao.numero }}/{{ pregao.ano }}
+                        Pregão {{ pregao.numero }}/{{ pregao.ano }} — {% for municipio in pregao.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}
                     </option>
                     {% endfor %}
                 </select>

@@ -35,7 +35,7 @@
 
                     {% for p in pregoes %}
                     <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
-                        {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} - {{ p.get_status_display }}
+                        {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} — {% for municipio in p.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %} — {{ p.get_status_display }}
                     </option>
                     {% endfor %}
                 </select>

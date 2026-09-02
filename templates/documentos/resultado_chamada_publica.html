@@ -27,7 +27,7 @@
                 <option value="">Selecione a Chamada Pública</option>
                 {% for chamada in chamadas_publicas %}
                     <option value="{{ chamada.id }}" {% if pregao and pregao.id == chamada.id %}selected{% endif %}>
-                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} — {{ chamada.get_status_display }}
+                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} — {% for municipio in chamada.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %} — {{ chamada.get_status_display }}
                     </option>
                 {% endfor %}
             </select>

@@ -115,9 +115,14 @@ def notas_fiscais(request):
 
     contratos_base = contratos_permitidos(request)
 
-    certames = Pregao.objects.filter(
-        contratos_gerados__in=contratos_base
-    ).distinct().order_by("-ano", "-numero")
+    certames = (
+        Pregao.objects.filter(
+            contratos_gerados__in=contratos_base
+        )
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     escolas = Escola.objects.filter(
         contratos_gerados__in=contratos_base
@@ -349,7 +354,12 @@ def aquisicao_manual_nova(request):
         return redirect("aquisicoes:notas_fiscais")
 
     contratos_base = contratos_permitidos(request)
-    certames = Pregao.objects.filter(contratos_gerados__in=contratos_base).distinct().order_by("-ano", "-numero")
+    certames = (
+        Pregao.objects.filter(contratos_gerados__in=contratos_base)
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
     escolas = Escola.objects.filter(contratos_gerados__in=contratos_base).distinct().order_by("nome_escola")
     fornecedores = Fornecedor.objects.filter(contratos_gerados__in=contratos_base).distinct().order_by("razao_social")
     contratos = contratos_base.order_by("-pregao__ano", "pregao__numero", "escola__nome_escola", "fornecedor__razao_social")
@@ -706,9 +716,14 @@ def relatorio_saldo_aquisicoes(request):
 
     contratos_permitidos_base = contratos_permitidos(request)
 
-    certames = Pregao.objects.filter(
-        contratos_gerados__in=contratos_permitidos_base
-    ).distinct().order_by("-ano", "-numero")
+    certames = (
+        Pregao.objects.filter(
+            contratos_gerados__in=contratos_permitidos_base
+        )
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     escolas = Escola.objects.filter(
         contratos_gerados__in=contratos_permitidos_base
@@ -1115,9 +1130,14 @@ def upload_xml_nfe(request):
 
     contratos_base = contratos_permitidos(request)
 
-    certames = Pregao.objects.filter(
-        contratos_gerados__in=contratos_base
-    ).distinct().order_by("-ano", "-numero")
+    certames = (
+        Pregao.objects.filter(
+            contratos_gerados__in=contratos_base
+        )
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     return render(
         request,

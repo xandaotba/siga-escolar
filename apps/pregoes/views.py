@@ -326,9 +326,13 @@ def editar_ordenador_despesas(request, pregao_id):
 
 
 def quantitativo_pregao(request):
-    pregoes_lista = Pregao.objects.filter(
-        status=Pregao.STATUS_NAO_INICIADO
-    ).order_by("-ano", "-numero")
+    pregoes_lista = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_NAO_INICIADO
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
     pregao = None
@@ -397,9 +401,13 @@ def quantitativo_pregao(request):
 
 
 def quantitativo_escola(request):
-    pregoes_lista = Pregao.objects.filter(
-        status=Pregao.STATUS_NAO_INICIADO
-    ).order_by("-ano", "-numero")
+    pregoes_lista = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_NAO_INICIADO
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
     escola_id = request.GET.get("escola") or request.POST.get("escola")
@@ -923,6 +931,7 @@ def media_precos(request):
                 Pregao.STATUS_EM_ANDAMENTO,
             ]
         )
+        .prefetch_related("municipios")
         .order_by("-ano", "-numero")
     )
 
@@ -1053,6 +1062,7 @@ def propostas_iniciais(request):
                 Pregao.STATUS_EM_ANDAMENTO,
             ],
         )
+        .prefetch_related("municipios")
         .order_by("-ano", "-numero")
     )
 

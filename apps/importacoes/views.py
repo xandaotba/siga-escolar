@@ -1839,9 +1839,13 @@ def baixar_modelo_quantitativo_pregao(request):
 def importar_quantitativo_pregao(request):
     linhas = []
     resumo = None
-    pregoes = Pregao.objects.filter(
-        status=Pregao.STATUS_NAO_INICIADO,
-    ).order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_NAO_INICIADO,
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
     pregao = None
 
     pregao_id = request.POST.get("pregao") or request.GET.get("pregao")
@@ -2609,9 +2613,13 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
 def importar_quantitativo_escola(request):
     linhas = []
     resumo = None
-    pregoes = Pregao.objects.filter(
-        status=Pregao.STATUS_NAO_INICIADO,
-    ).order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_NAO_INICIADO,
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
     pregao = None
 
     pregao_id = request.POST.get("pregao") or request.GET.get("pregao")
@@ -3524,12 +3532,16 @@ def importar_media_precos(request):
     linhas = []
     resumo = None
 
-    pregoes = Pregao.objects.filter(
-        status__in=[
-            Pregao.STATUS_NAO_INICIADO,
-            Pregao.STATUS_EM_ANDAMENTO,
-        ]
-    ).order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            status__in=[
+                Pregao.STATUS_NAO_INICIADO,
+                Pregao.STATUS_EM_ANDAMENTO,
+            ]
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     pregao = None
     pregao_id = request.POST.get("pregao") or request.GET.get("pregao")

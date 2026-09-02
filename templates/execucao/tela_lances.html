@@ -836,7 +836,7 @@
         {% if item_atual.status == "em_disputa" and fornecedor_atual and not propostas_pendentes %}
         <form method="post" class="lance-form" id="formRegistrarLance"
             data-media="{{ item_atual.media_preco|default:'' }}"
-            data-percentual="{{ item_atual.percentual_alerta_media|default:'25' }}">
+            data-percentual="{{ pregao.percentual_alerta_media|default:'50' }}">
             {% csrf_token %}
             <input type="hidden" name="acao" value="registrar_lance">
             <input type="hidden" name="confirmar_media_lance" id="confirmar_media_lance" value="nao">
@@ -1576,7 +1576,7 @@
 
             const campoValor = document.getElementById("valor_lance");
             const media = normalizarNumeroDecimal(formLance.dataset.media);
-            const percentual = normalizarNumeroDecimal(formLance.dataset.percentual || "25");
+            const percentual = normalizarNumeroDecimal(formLance.dataset.percentual || "50");
             const valor = normalizarNumeroDecimal(campoValor ? campoValor.value : "");
 
             if (isNaN(media) || media <= 0 || isNaN(percentual) || isNaN(valor) || valor <= 0) {

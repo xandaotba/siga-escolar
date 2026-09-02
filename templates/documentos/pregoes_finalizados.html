@@ -304,7 +304,7 @@
         width: 6%;
     }
 
-    /* Pregoeiro */
+    /* Municípios */
     .table-wrapper th:nth-child(3),
     .table-wrapper td:nth-child(3) {
         width: 27%;
@@ -378,7 +378,7 @@
                 <tr>
                     <th>Pregão</th>
                     <th>Ano</th>
-                    <th>Pregoeiro</th>
+                    <th>Municípios</th>
                     <th>Data</th>
                     <th>Status</th>
                     <th>Finalizado em</th>
@@ -391,7 +391,13 @@
                 <tr>
                     <td>{{ pregao.numero }}</td>
                     <td>{{ pregao.ano }}</td>
-                    <td>{{ pregao.nome_pregoeiro }}</td>
+                    <td>
+                        {% for municipio in pregao.municipios.all %}
+                            {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+                        {% empty %}
+                            -
+                        {% endfor %}
+                    </td>
                     <td>{{ pregao.data_pregao|date:"d/m/Y" }}</td>
                     <td>
                         <span class="badge badge-success">

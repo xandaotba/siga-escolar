@@ -43,7 +43,7 @@
         <select name="pregao" id="id_pregao" required>
             <option value="">Selecione</option>
             {% for certame in certames %}
-            <option value="{{ certame.id }}">{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }}</option>
+            <option value="{{ certame.id }}">{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }} — {% for municipio in certame.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}</option>
             {% endfor %}
         </select>
     </div>

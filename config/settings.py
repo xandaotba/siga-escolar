@@ -145,5 +145,11 @@ LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"
 LOGOUT_REDIRECT_URL = "login"
 
+# Sessão
+# Expira após 1 hora (3.600 segundos) sem renovação da sessão.
+SESSION_COOKIE_AGE = 60 * 60
+# Renova o prazo da sessão a cada requisição feita pelo usuário.
+SESSION_SAVE_EVERY_REQUEST = True
+
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"

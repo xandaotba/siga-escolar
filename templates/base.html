@@ -385,21 +385,27 @@
 
         .sidebar-tools {
             display: flex;
-            gap: 8px;
-            margin-top: 12px;
+            justify-content: flex-end;
+            align-items: center;
+            margin: 0 10px 12px;
         }
 
         .sidebar-tool-btn {
-            width: 100%;
-            border: 1px solid rgba(147, 197, 253, 0.20);
-            background: rgba(96, 165, 250, 0.10);
+            width: 38px;
+            height: 34px;
+            border: 1px solid rgba(147, 197, 253, 0.24);
+            background: rgba(96, 165, 250, 0.12);
             color: #dbeafe;
-            border-radius: 12px;
-            padding: 8px 10px;
+            border-radius: 10px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             cursor: pointer;
-            font-size: 12px;
+            font-size: 16px;
             font-weight: 900;
             font-family: inherit;
+            line-height: 1;
             transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
         }
 
@@ -430,11 +436,13 @@
 
         body.sidebar-collapsed .sidebar-tools {
             justify-content: center;
+            margin-left: 6px;
+            margin-right: 6px;
         }
 
         body.sidebar-collapsed .sidebar-tool-btn {
-            width: 44px;
-            padding: 8px 0;
+            width: 38px;
+            height: 34px;
         }
 
         body.sidebar-collapsed .sidebar-group {
@@ -530,6 +538,16 @@
                 <a class="brand-logo-wrap" href="{% url 'dashboard' %}" title="SIGA Escolar">
                     <img class="brand-logo-img" src="{% static 'img/logo_siga_escolar_header.png' %}" alt="SIGA Escolar - Sistema Integrado de Gestão da Alimentação Escolar">
                 </a>
+            </div>
+
+            <div class="sidebar-tools">
+                <button
+                    type="button"
+                    id="sidebarToggleBtn"
+                    class="sidebar-tool-btn"
+                    aria-label="Recolher menu lateral"
+                    title="Recolher menu lateral"
+                >⇤</button>
             </div>
 
             <nav class="sidebar-menu">
@@ -826,7 +844,7 @@
                     <span class="user-perfil-badge">{{ request.user.perfil_acesso.get_perfil_display }}</span>
                     {% endif %}
 
-                    <form method="post" action="{% url 'logout' %}" style="margin:0;">
+                    <form method="post" action="{% url 'logout' %}" id="autoLogoutForm" style="margin:0;">
                         {% csrf_token %}
                         <button type="submit" style="
                             border:1px solid #cbd5e1;
@@ -916,8 +934,10 @@
                 document.body.classList.toggle("sidebar-collapsed", collapsed);
 
                 if (sidebarToggleBtn) {
+                    const texto = collapsed ? "Expandir menu lateral" : "Recolher menu lateral";
                     sidebarToggleBtn.textContent = collapsed ? "⇥" : "⇤";
-                    sidebarToggleBtn.title = collapsed ? "Expandir menu" : "Recolher menu";
+                    sidebarToggleBtn.title = texto;
+                    sidebarToggleBtn.setAttribute("aria-label", texto);
                 }
             }
 
@@ -935,6 +955,139 @@
             openActiveGroup();
         });
     </script>
+
+
+    {% if request.user.is_authenticated %}
+    <script>
+        (function () {
+            const LIMITE_INATIVIDADE_MS = 60 * 60 * 1000; // 1 hora
+            const INTERVALO_VERIFICACAO_MS = 30 * 1000;    // 30 segundos
+            const INTERVALO_KEEPALIVE_MS = 5 * 60 * 1000; // 5 minutos
+            const CHAVE_ULTIMA_ATIVIDADE = "sigaEscolarUltimaAtividade";
+
+            const logoutForm = document.getElementById("autoLogoutForm");
+            let encerrandoSessao = false;
+            let ultimaGravacaoLocal = 0;
+
+            function agora() {
+                return Date.now();
+            }
+
+            function obterUltimaAtividade() {
+                const valor = Number(localStorage.getItem(CHAVE_ULTIMA_ATIVIDADE));
+                return Number.isFinite(valor) && valor > 0 ? valor : agora();
+            }
+
+            function executarLogoutAutomatico() {
+                if (encerrandoSessao) return;
+                encerrandoSessao = true;
+
+                localStorage.removeItem(CHAVE_ULTIMA_ATIVIDADE);
+
+                if (logoutForm) {
+                    if (typeof logoutForm.requestSubmit === "function") {
+                        logoutForm.requestSubmit();
+                    } else {
+                        logoutForm.submit();
+                    }
+                } else {
+                    window.location.href = "{% url 'login' %}";
+                }
+            }
+
+            function sessaoEstaInativa() {
+                return agora() - obterUltimaAtividade() >= LIMITE_INATIVIDADE_MS;
+            }
+
+            function registrarAtividade() {
+                if (encerrandoSessao) return;
+
+                // Se o limite já foi atingido, uma nova movimentação não reativa
+                // uma sessão que deveria estar encerrada.
+                if (sessaoEstaInativa()) {
+                    executarLogoutAutomatico();
+                    return;
+                }
+
+                const momento = agora();
+
+                // Evita gravar no localStorage centenas de vezes durante mousemove/scroll.
+                if (momento - ultimaGravacaoLocal >= 15000) {
+                    ultimaGravacaoLocal = momento;
+                    localStorage.setItem(CHAVE_ULTIMA_ATIVIDADE, String(momento));
+                }
+            }
+
+            function verificarInatividade() {
+                if (sessaoEstaInativa()) {
+                    executarLogoutAutomatico();
+                }
+            }
+
+            async function manterSessaoAtivaSeUsuarioEstiverAtivo() {
+                if (encerrandoSessao) return;
+
+                const tempoSemAtividade = agora() - obterUltimaAtividade();
+
+                // Só renova a sessão no servidor se houve atividade real do usuário
+                // nos últimos minutos. Isso evita que um simples navegador aberto
+                // mantenha a sessão ativa indefinidamente.
+                if (tempoSemAtividade > INTERVALO_KEEPALIVE_MS + 60000) {
+                    return;
+                }
+
+                try {
+                    await fetch("{% url 'login' %}", {
+                        method: "HEAD",
+                        credentials: "same-origin",
+                        cache: "no-store",
+                        redirect: "manual"
+                    });
+                } catch (erro) {
+                    // Falha de rede não impede o controle local de inatividade.
+                }
+            }
+
+            // O carregamento desta página é uma atividade válida porque houve
+            // uma requisição autenticada ao servidor.
+            localStorage.setItem(CHAVE_ULTIMA_ATIVIDADE, String(agora()));
+            ultimaGravacaoLocal = agora();
+
+            [
+                "pointerdown",
+                "pointermove",
+                "keydown",
+                "scroll",
+                "touchstart"
+            ].forEach(function (evento) {
+                window.addEventListener(evento, registrarAtividade, { passive: true });
+            });
+
+            document.addEventListener("visibilitychange", function () {
+                if (!document.hidden) {
+                    verificarInatividade();
+
+                    if (!encerrandoSessao) {
+                        registrarAtividade();
+                    }
+                }
+            });
+
+            window.addEventListener("storage", function (event) {
+                if (
+                    event.key === CHAVE_ULTIMA_ATIVIDADE &&
+                    event.newValue &&
+                    !encerrandoSessao
+                ) {
+                    verificarInatividade();
+                }
+            });
+
+            setInterval(verificarInatividade, INTERVALO_VERIFICACAO_MS);
+            setInterval(manterSessaoAtivaSeUsuarioEstiverAtivo, INTERVALO_KEEPALIVE_MS);
+        })();
+    </script>
+    {% endif %}
 
 </body>
 
