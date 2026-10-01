@@ -9196,7 +9196,7 @@ def montar_documento_resultado_final_chamada_publica(pregao):
     titulo = documento.add_paragraph()
     titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
     titulo.paragraph_format.space_after = Pt(18)
-    run = titulo.add_run("RESULTADO DA CHAMADA PÚBLICA")
+    run = titulo.add_run(f"RESULTADO DA CHAMADA PÚBLICA N° {pregao.numero}/{pregao.ano}")
     run.bold = True
     run.font.name = "Arial"
     run.font.size = Pt(10)
@@ -9229,7 +9229,7 @@ def montar_documento_resultado_final_chamada_publica(pregao):
 
     # Larguras fixas das colunas do Resultado Final da Chamada Pública (cm).
     # A coluna Quant. não teve nova largura informada e, por isso, foi mantida em 0,75 cm.
-    larguras = [1.00, 3.30, 1.20, 0.75, 2.00, 5.25, 2.00, 2.21]
+    larguras = [1.00, 3.30, 1.20, 1.20, 2.00, 5.25, 2.00, 2.21]
     cabecalhos = [
         "Item",
         "Gênero Alimentício",
