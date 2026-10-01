@@ -4783,12 +4783,16 @@ def obter_ultimo_distrato_contrato(contrato):
 
 
 def montar_documento_rescisao_total_word(contrato):
-    contrato = ContratoGerado.objects.select_related(
-        "pregao",
-        "escola",
-        "escola__municipio",
-        "fornecedor",
-    ).get(id=contrato.id)
+    contrato = (
+        ContratoGerado.objects.select_related(
+            "pregao",
+            "escola",
+            "escola__municipio",
+            "fornecedor",
+        )
+        .prefetch_related("pregao__municipios")
+        .get(id=contrato.id)
+    )
 
     if contrato.status not in [
         ContratoGerado.STATUS_DISTRATADO,
@@ -5523,16 +5527,39 @@ def montar_documento_contrato_word(contrato):
     documento = Document(modelo_path)
     corrigir_margens_documento(documento)
 
-    data_formatada = data_por_extenso(contrato.criado_em.date())
+    data_contrato = contrato.criado_em.date()
+    data_formatada = data_por_extenso(data_contrato)
+    data_contrato_abreviada = data_contrato.strftime("%d/%m/%Y")
 
     numero_pregao = f"{pregao.numero}/{pregao.ano}"
     numero_contrato = contrato.numero_contrato or f"{contrato.id:04d}/{pregao.ano}"
 
-    municipio_uf = escola.municipio.uf or "MT"
+    municipio_nome = escola.municipio.nome if escola.municipio else ""
+    municipio_uf = escola.municipio.uf if escola.municipio and escola.municipio.uf else "MT"
+
+    municipios_certame = list(pregao.municipios.all().order_by("nome"))
+    nomes_municipios = [municipio.nome for municipio in municipios_certame if municipio.nome]
+
+    if not nomes_municipios:
+        municipios_chamada = municipio_nome
+    elif len(nomes_municipios) == 1:
+        municipios_chamada = nomes_municipios[0]
+    elif len(nomes_municipios) == 2:
+        municipios_chamada = " e ".join(nomes_municipios)
+    else:
+        municipios_chamada = ", ".join(nomes_municipios[:-1]) + " e " + nomes_municipios[-1]
 
     substituicoes = {
         "0XX/202X": numero_contrato,
         "XX/202X": numero_contrato,
+
+        "{{NUMERO_CONTRATO}}": numero_contrato,
+        "{{DATA_CONTRATO_ABREVIADA}}": data_contrato_abreviada,
+        "{{NUMERO_PROCESSO}}": getattr(pregao, "numero_processo", "") or "",
+        "{{ANO_CERTAME}}": str(pregao.ano or ""),
+        "{{MUNICIPIOS_CHAMADA}}": municipios_chamada,
+        "{{MUNICIPIO_CHAMADA}}": municipio_nome,
+        "{{ESCOLA_MUNICIPIO_NOME}}": municipio_nome,
 
         "{{NÚMERO_PREGÃO}}": numero_pregao,
         "{{RAZAO_SOCIAL}}": fornecedor.razao_social or "",
@@ -9186,8 +9213,8 @@ def montar_documento_resultado_final_chamada_publica(pregao):
         "MUNICÍPIO DE SINOP, torna público para conhecimento dos interessados o Resultado da Chamada Pública "
         f"n°{pregao.numero}/{pregao.ano} para Aquisição de Gêneros Alimentícios da Agricultura Familiar e do "
         "Empreendedor Familiar Rural, e de suas organizações, para atendimento dos alunos matriculados Rede Pública "
-        f"Estadual, do município de {municipio_texto}, em observância, ao FNDE/PNAE, Resolução CD/FNDE nº 06 de "
-        "08/05/2020, IN nº 011/2024/GS/SEDUC/MT, nos termos do Edital, declarado (s) vencedor (es) :"
+        f"Estadual, do município de {municipio_texto}, em observância, ao FNDE/PNAE, Resolução CD/FNDE nº 04 de "
+        "26/02/2026, IN nº 011/2024/GS/SEDUC/MT, nos termos do Edital, declarado (s) vencedor (es) :"
     )
 
     run = introducao.add_run(texto_intro)
@@ -9200,8 +9227,9 @@ def montar_documento_resultado_final_chamada_publica(pregao):
     tabela.autofit = False
     configurar_largura_tabela(tabela)
 
-    # Larguras somam aproximadamente a largura útil da página A4 com margens de 1 cm.
-    larguras = [0.70, 3.45, 0.75, 0.75, 1.10, 5.25, 1.35, 1.35]
+    # Larguras fixas das colunas do Resultado Final da Chamada Pública (cm).
+    # A coluna Quant. não teve nova largura informada e, por isso, foi mantida em 0,75 cm.
+    larguras = [1.00, 3.30, 1.20, 0.75, 2.00, 5.25, 2.00, 2.21]
     cabecalhos = [
         "Item",
         "Gênero Alimentício",
@@ -9216,7 +9244,7 @@ def montar_documento_resultado_final_chamada_publica(pregao):
     for indice, cabecalho in enumerate(cabecalhos):
         celula = tabela.rows[0].cells[indice]
         ajustar_largura_celula(celula, larguras[indice])
-        configurar_celula_texto_resultado(celula, cabecalho, negrito=True, tamanho=10)
+        configurar_celula_texto_resultado(celula, cabecalho, negrito=True, tamanho=8)
 
     total_geral = Decimal("0.00")
 
@@ -9242,7 +9270,7 @@ def montar_documento_resultado_final_chamada_publica(pregao):
                 cells[indice],
                 valor,
                 negrito=False,
-                tamanho=10,
+                tamanho=8,
                 alinhamento=alinhamento,
             )
 
@@ -9255,19 +9283,28 @@ def montar_documento_resultado_final_chamada_publica(pregao):
 
         for indice in range(7):
             ajustar_largura_celula(cells[indice], larguras[indice])
-            configurar_celula_texto_resultado(cells[indice], "", tamanho=10)
+            configurar_celula_texto_resultado(cells[indice], "", tamanho=8)
 
         ajustar_largura_celula(cells[7], larguras[7])
-        configurar_celula_texto_resultado(cells[7], "R$ 0,00", tamanho=10)
+        configurar_celula_texto_resultado(cells[7], "R$ 0,00", tamanho=8)
 
-    cells = tabela.add_row().cells
+    # Valor total geral da Chamada Pública, com valor numérico e por extenso.
+    # O total é a soma da coluna "Valor Total" de todas as linhas adjudicadas
+    # que compõem este documento.
+    valor_total_extenso = valor_por_extenso(total_geral).upper()
+    texto_valor_total = (
+        f"VALOR TOTAL DA CHAMADA PÚBLICA {formatar_moeda_br(total_geral)} "
+        f"({valor_total_extenso})."
+    )
 
-    for indice in range(7):
-        ajustar_largura_celula(cells[indice], larguras[indice])
-        configurar_celula_texto_resultado(cells[indice], "", tamanho=10)
+    paragrafo_total = documento.add_paragraph()
+    paragrafo_total.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    paragrafo_total.paragraph_format.space_before = Pt(8)
+    paragrafo_total.paragraph_format.space_after = Pt(0)
+    paragrafo_total.paragraph_format.line_spacing = 1
 
-    ajustar_largura_celula(cells[7], larguras[7])
-    configurar_celula_texto_resultado(cells[7], formatar_moeda_br(total_geral), negrito=True, tamanho=10)
+    run = paragrafo_total.add_run(texto_valor_total)
+    aplicar_fonte_run_resultado(run, tamanho=10, negrito=True)
 
     documento.add_paragraph("")
 
