@@ -217,13 +217,17 @@ def _resultado_apos_beneficio(pregao, item_atual, beneficio, nova_oferta):
 
 
 def execucao_pregao(request):
-    pregoes = Pregao.objects.filter(
-        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
-        status__in=[
-            Pregao.STATUS_NAO_INICIADO,
-            Pregao.STATUS_EM_ANDAMENTO,
-        ]
-    ).order_by("-ano", "-numero")
+    pregoes = (
+        Pregao.objects.filter(
+            tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+            status__in=[
+                Pregao.STATUS_NAO_INICIADO,
+                Pregao.STATUS_EM_ANDAMENTO,
+            ]
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
     return render(
         request,

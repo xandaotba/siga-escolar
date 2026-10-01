@@ -136,6 +136,13 @@
         gap: 10px;
     }
 
+    .acoes-item-encerrado {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+    }
+
     .historico-telao table th {
         font-size: 13px;
     }
@@ -238,6 +245,7 @@
         .telao-grid,
         .telao-metricas,
         .acoes-item-telao,
+        .acoes-item-encerrado,
         .participantes-grid {
             grid-template-columns: 1fr;
         }
@@ -1013,11 +1021,26 @@
     {% else %}
     <p><strong>Este item já foi encerrado.</strong></p>
 
-    {% if resultado %}
-    <a class="btn btn-primary btn-telao" href="{% url 'execucao:proximo_item' pregao.id %}">
-        Próximo Item
-    </a>
-    {% endif %}
+    <div class="acoes-item-encerrado">
+        {% if item_atual.status == "encerrado" %}
+        <form method="post"
+              action="{% url 'execucao:alterar_item_conferencia' pregao.id item_atual.id %}"
+              style="margin:0;">
+            {% csrf_token %}
+            <button class="btn btn-warning btn-telao"
+                    type="submit"
+                    onclick="return confirm('Deseja reabrir este item? Os lances e as propostas já registrados serão mantidos, e o resultado atual será removido para ser recalculado quando o item for finalizado novamente.');">
+                Reabrir Item
+            </button>
+        </form>
+        {% endif %}
+
+        {% if resultado %}
+        <a class="btn btn-primary btn-telao" href="{% url 'execucao:proximo_item' pregao.id %}">
+            Próximo Item
+        </a>
+        {% endif %}
+    </div>
     {% endif %}
 </div>
 
