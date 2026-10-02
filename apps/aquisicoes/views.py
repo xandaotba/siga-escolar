@@ -1,12 +1,16 @@
+import base64
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
+from difflib import SequenceMatcher
+from pathlib import Path
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.files.storage import default_storage
-from django.db import models
+from django.core import signing
+from django.core.files.base import ContentFile
+from django.db import models, transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.http import JsonResponse
@@ -18,6 +22,7 @@ from apps.pregoes.models import Pregao
 
 from .forms import AquisicaoNotaFiscalForm
 from .models import AquisicaoNotaFiscal, AquisicaoNotaFiscalItem
+from .consulta_danfe import ConsultaDanfeErro, consultar_xml_consultadanfe
 
 
 def usuario_eh_consulta_escola(request):
@@ -134,11 +139,16 @@ def notas_fiscais(request):
 
     totais = {
         "total": notas.count(),
-        "rascunho": notas.filter(status=AquisicaoNotaFiscal.STATUS_RASCUNHO).count(),
-        "conferencia": notas.filter(status=AquisicaoNotaFiscal.STATUS_EM_CONFERENCIA).count(),
         "confirmada": notas.filter(status=AquisicaoNotaFiscal.STATUS_CONFIRMADA).count(),
+        "editada": notas.filter(status=AquisicaoNotaFiscal.STATUS_EDITADA).count(),
         "cancelada": notas.filter(status=AquisicaoNotaFiscal.STATUS_CANCELADA).count(),
     }
+
+    status_choices = [
+        (AquisicaoNotaFiscal.STATUS_CONFIRMADA, "Confirmada"),
+        (AquisicaoNotaFiscal.STATUS_EDITADA, "Editada"),
+        (AquisicaoNotaFiscal.STATUS_CANCELADA, "Cancelada"),
+    ]
 
     return render(
         request,
@@ -148,7 +158,7 @@ def notas_fiscais(request):
             "certames": certames,
             "escolas": escolas,
             "fornecedores": fornecedores,
-            "status_choices": AquisicaoNotaFiscal.STATUS_CHOICES,
+            "status_choices": status_choices,
             "filtros": filtros,
             "totais": totais,
             "restrito_escola": usuario_eh_consulta_escola(request),
@@ -214,36 +224,98 @@ def nota_fiscal_nova(request):
 def nota_fiscal_editar(request, nota_id):
     nota = get_object_or_404(aquisicoes_permitidas(request), id=nota_id)
 
-    if nota.status == AquisicaoNotaFiscal.STATUS_CONFIRMADA:
-        messages.warning(request, "Notas confirmadas não podem ser editadas.")
-        return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
-
     if nota.status == AquisicaoNotaFiscal.STATUS_CANCELADA:
         messages.warning(request, "Notas canceladas não podem ser editadas.")
         return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
 
-    if request.method == "POST":
-        nota.numero_nota = (request.POST.get("numero_nota") or "").strip()
-        nota.data_emissao = request.POST.get("data_emissao") or None
-        nota.data_recebimento = request.POST.get("data_recebimento") or nota.data_recebimento
-        nota.observacoes = request.POST.get("observacoes") or ""
+    metodos_editaveis = [
+        AquisicaoNotaFiscal.METODO_MANUAL,
+        AquisicaoNotaFiscal.METODO_XML,
+        AquisicaoNotaFiscal.METODO_CHAVE_ACESSO,
+    ]
 
-        if not nota.numero_nota:
+    if nota.metodo_entrada not in metodos_editaveis:
+        messages.warning(
+            request,
+            "A edição completa nesta tela está disponível para notas lançadas manualmente, importadas por XML ou consultadas pela chave de acesso.",
+        )
+        return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
+
+    escola_vinculada = escola_vinculada_usuario(request) if usuario_eh_consulta_escola(request) else None
+
+    if usuario_eh_consulta_escola(request) and not escola_vinculada:
+        messages.error(request, "Seu usuário não possui escola vinculada. Solicite o vínculo ao administrador.")
+        return redirect("aquisicoes:notas_fiscais")
+
+    contratos_base = contratos_permitidos(request)
+
+    if request.method == "POST":
+        contrato_id = request.POST.get("contrato")
+        numero_nota = (request.POST.get("numero_nota") or "").strip()
+        observacoes = request.POST.get("observacoes") or ""
+
+        if not numero_nota:
             messages.error(request, "Informe o número da NF-e.")
             return redirect("aquisicoes:nota_fiscal_editar", nota_id=nota.id)
 
-        nota.save(update_fields=[
-            "numero_nota",
-            "data_emissao",
-            "data_recebimento",
-            "observacoes",
-            "atualizado_em",
-        ])
+        if not contrato_id:
+            messages.error(request, "Selecione o contrato.")
+            return redirect("aquisicoes:nota_fiscal_editar", nota_id=nota.id)
 
-        messages.success(request, "Dados da nota fiscal atualizados com sucesso.")
-        return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
+        contrato = get_object_or_404(contratos_base, id=contrato_id)
+        itens_validos, erro = extrair_itens_aquisicao_manual(request, contrato)
 
-    return render(request, "aquisicoes/nota_fiscal_editar.html", {"nota": nota})
+        if erro:
+            messages.error(request, erro)
+            return redirect("aquisicoes:nota_fiscal_editar", nota_id=nota.id)
+
+        total_nota = sum(
+            (item["valor_total"] for item in itens_validos),
+            Decimal("0"),
+        )
+
+        with transaction.atomic():
+            nota.pregao = contrato.pregao
+            nota.escola = contrato.escola
+            nota.fornecedor = contrato.fornecedor
+            nota.contrato = contrato
+            nota.numero_nota = numero_nota
+            nota.observacoes = observacoes
+            nota.valor_total = total_nota
+            nota.status = AquisicaoNotaFiscal.STATUS_EDITADA
+
+            if not nota.confirmado_por_id:
+                nota.confirmado_por = request.user
+
+            if not nota.confirmado_em:
+                nota.confirmado_em = timezone.now()
+
+            nota.save(update_fields=[
+                "pregao",
+                "escola",
+                "fornecedor",
+                "contrato",
+                "numero_nota",
+                "observacoes",
+                "valor_total",
+                "status",
+                "confirmado_por",
+                "confirmado_em",
+                "atualizado_em",
+            ])
+
+            nota.itens.all().delete()
+            criar_itens_aquisicao_manual(nota, itens_validos)
+
+        messages.success(
+            request,
+            f"NF-e {nota.numero_nota} atualizada com sucesso. Status alterado para Editada.",
+        )
+        return redirect("aquisicoes:notas_fiscais")
+
+    contexto = montar_contexto_aquisicao_manual(request, nota=nota)
+    return render(request, "aquisicoes/aquisicao_manual_form.html", contexto)
+
 
 @login_required
 def nota_fiscal_detalhe(request, nota_id):
@@ -263,17 +335,18 @@ def nota_fiscal_detalhe(request, nota_id):
 def nota_fiscal_cancelar(request, nota_id):
     nota = get_object_or_404(aquisicoes_permitidas(request), id=nota_id)
 
-    if nota.status == AquisicaoNotaFiscal.STATUS_CONFIRMADA:
-        messages.error(request, "Notas confirmadas somente poderão ser canceladas pela rotina de estorno que será criada depois.")
-        return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
+    if nota.status == AquisicaoNotaFiscal.STATUS_CANCELADA:
+        messages.info(request, "Esta nota fiscal já está cancelada.")
+        return redirect("aquisicoes:notas_fiscais")
 
     if request.method == "POST":
         nota.status = AquisicaoNotaFiscal.STATUS_CANCELADA
         nota.save(update_fields=["status", "atualizado_em"])
-        messages.success(request, "Nota fiscal cancelada com sucesso.")
+        messages.success(request, f"NF-e {nota.numero_nota or nota.id} cancelada com sucesso.")
         return redirect("aquisicoes:notas_fiscais")
 
     return render(request, "aquisicoes/nota_fiscal_cancelar.html", {"nota": nota})
+
 
 @login_required
 def nota_fiscal_confirmar(request, nota_id):
@@ -345,6 +418,149 @@ def contratos_json_permitidos(request):
     ]
 
 
+def extrair_itens_aquisicao_manual(request, contrato):
+    contrato_item_ids = request.POST.getlist("contrato_item[]")
+    descricoes = request.POST.getlist("descricao_produto[]")
+    quantidades = request.POST.getlist("quantidade[]")
+    valores_unitarios = request.POST.getlist("valor_unitario[]")
+    valores_totais = request.POST.getlist("valor_total[]")
+
+    itens_validos = []
+
+    for indice, contrato_item_id in enumerate(contrato_item_ids):
+        contrato_item_id = (contrato_item_id or "").strip()
+        descricao = descricoes[indice].strip() if indice < len(descricoes) else ""
+        quantidade = decimal_br_para_decimal(
+            quantidades[indice] if indice < len(quantidades) else ""
+        )
+        valor_unitario = decimal_br_para_decimal(
+            valores_unitarios[indice] if indice < len(valores_unitarios) else ""
+        )
+        valor_total = decimal_br_para_decimal(
+            valores_totais[indice] if indice < len(valores_totais) else ""
+        )
+
+        if not contrato_item_id and quantidade == 0 and valor_unitario == 0 and valor_total == 0:
+            continue
+
+        if not contrato_item_id:
+            return None, f"Selecione o item do contrato na linha {indice + 1}."
+
+        contrato_item = get_object_or_404(
+            ContratoItemGerado.objects.select_related("contrato", "item"),
+            id=contrato_item_id,
+            contrato=contrato,
+        )
+
+        if quantidade <= 0:
+            return None, f"Informe uma quantidade maior que zero na linha {indice + 1}."
+
+        if valor_unitario <= 0:
+            valor_unitario = contrato_item.valor_unitario or Decimal("0")
+
+        valor_calculado = (quantidade * valor_unitario).quantize(Decimal("0.01"))
+
+        if valor_total <= 0:
+            valor_total = valor_calculado
+
+        if abs(valor_total - valor_calculado) > Decimal("0.05"):
+            return None, (
+                f"O valor total da linha {indice + 1} está diferente de "
+                "quantidade x valor unitário."
+            )
+
+        itens_validos.append({
+            "contrato_item": contrato_item,
+            "descricao": descricao or contrato_item.item.nome_item,
+            "unidade": contrato_item.unidade or "",
+            "quantidade": quantidade,
+            "valor_unitario": valor_unitario,
+            "valor_total": valor_total,
+        })
+
+    if not itens_validos:
+        return None, "Adicione pelo menos um item da nota fiscal."
+
+    return itens_validos, None
+
+
+def criar_itens_aquisicao_manual(nota, itens_validos):
+    for dados in itens_validos:
+        AquisicaoNotaFiscalItem.objects.create(
+            nota=nota,
+            contrato_item=dados["contrato_item"],
+            item=dados["contrato_item"].item,
+            descricao_produto=dados["descricao"],
+            unidade=dados["unidade"],
+            quantidade=dados["quantidade"],
+            valor_unitario=dados["valor_unitario"],
+            valor_total=dados["valor_total"],
+            status=AquisicaoNotaFiscalItem.STATUS_VINCULADO,
+            conferido=True,
+        )
+
+
+def montar_contexto_aquisicao_manual(request, nota=None):
+    escola_vinculada = escola_vinculada_usuario(request) if usuario_eh_consulta_escola(request) else None
+    contratos_base = contratos_permitidos(request)
+
+    certames = (
+        Pregao.objects.filter(contratos_gerados__in=contratos_base)
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
+    escolas = Escola.objects.filter(
+        contratos_gerados__in=contratos_base
+    ).distinct().order_by("nome_escola")
+    fornecedores = Fornecedor.objects.filter(
+        contratos_gerados__in=contratos_base
+    ).distinct().order_by("razao_social")
+    contratos = contratos_base.order_by(
+        "-pregao__ano",
+        "pregao__numero",
+        "escola__nome_escola",
+        "fornecedor__razao_social",
+    )
+
+    itens_iniciais = []
+
+    if nota:
+        for item_nota in nota.itens.select_related(
+            "contrato_item",
+            "contrato_item__item",
+        ).order_by("descricao_produto"):
+            if not item_nota.contrato_item:
+                continue
+
+            contrato_item = item_nota.contrato_item
+            itens_iniciais.append({
+                "contrato_item_id": contrato_item.id,
+                "texto": (
+                    f"{contrato_item.item.nome_item} | "
+                    f"{contrato_item.unidade or '-'} | "
+                    f"R$ {item_nota.valor_unitario}"
+                ),
+                "unidade": item_nota.unidade or contrato_item.unidade or "",
+                "quantidade": format(item_nota.quantidade, "f"),
+                "valor_unitario": format(item_nota.valor_unitario, "f"),
+                "valor_total": format(item_nota.valor_total, "f"),
+            })
+
+    return {
+        "certames": certames,
+        "escolas": escolas,
+        "fornecedores": fornecedores,
+        "contratos": contratos,
+        "contratos_json": contratos_json_permitidos(request),
+        "restrito_escola": usuario_eh_consulta_escola(request),
+        "escola_vinculada": escola_vinculada,
+        "modo_edicao": bool(nota),
+        "nota": nota,
+        "itens_iniciais": itens_iniciais,
+    }
+
+
 @login_required
 def aquisicao_manual_nova(request):
     escola_vinculada = escola_vinculada_usuario(request) if usuario_eh_consulta_escola(request) else None
@@ -354,145 +570,60 @@ def aquisicao_manual_nova(request):
         return redirect("aquisicoes:notas_fiscais")
 
     contratos_base = contratos_permitidos(request)
-    certames = (
-        Pregao.objects.filter(contratos_gerados__in=contratos_base)
-        .distinct()
-        .prefetch_related("municipios")
-        .order_by("-ano", "-numero")
-    )
-    escolas = Escola.objects.filter(contratos_gerados__in=contratos_base).distinct().order_by("nome_escola")
-    fornecedores = Fornecedor.objects.filter(contratos_gerados__in=contratos_base).distinct().order_by("razao_social")
-    contratos = contratos_base.order_by("-pregao__ano", "pregao__numero", "escola__nome_escola", "fornecedor__razao_social")
 
     if request.method == "POST":
         contrato_id = request.POST.get("contrato")
         numero_nota = (request.POST.get("numero_nota") or "").strip()
-        serie = ""
-        chave_acesso = ""
-        data_emissao = request.POST.get("data_emissao") or None
-        data_recebimento = request.POST.get("data_recebimento") or None
         observacoes = request.POST.get("observacoes") or ""
+
+        if not numero_nota:
+            messages.error(request, "Informe o número da NF-e.")
+            return redirect("aquisicoes:aquisicao_manual_nova")
 
         if not contrato_id:
             messages.error(request, "Selecione o contrato para registrar a aquisição.")
             return redirect("aquisicoes:aquisicao_manual_nova")
 
         contrato = get_object_or_404(contratos_base, id=contrato_id)
-        pregao = contrato.pregao
-        escola = contrato.escola
-        fornecedor = contrato.fornecedor
+        itens_validos, erro = extrair_itens_aquisicao_manual(request, contrato)
 
-        if chave_acesso and len(chave_acesso) != 44:
-            messages.error(request, "A chave de acesso deve conter exatamente 44 dígitos.")
+        if erro:
+            messages.error(request, erro)
             return redirect("aquisicoes:aquisicao_manual_nova")
 
-        if chave_acesso and AquisicaoNotaFiscal.objects.filter(chave_acesso=chave_acesso).exists():
-            messages.error(request, "Já existe uma nota fiscal registrada com esta chave de acesso.")
-            return redirect("aquisicoes:aquisicao_manual_nova")
-
-        contrato_item_ids = request.POST.getlist("contrato_item[]")
-        descricoes = request.POST.getlist("descricao_produto[]")
-        quantidades = request.POST.getlist("quantidade[]")
-        valores_unitarios = request.POST.getlist("valor_unitario[]")
-        valores_totais = request.POST.getlist("valor_total[]")
-
-        itens_validos = []
-
-        for indice, contrato_item_id in enumerate(contrato_item_ids):
-            contrato_item_id = (contrato_item_id or "").strip()
-            descricao = descricoes[indice].strip() if indice < len(descricoes) else ""
-            quantidade = decimal_br_para_decimal(quantidades[indice] if indice < len(quantidades) else "")
-            valor_unitario = decimal_br_para_decimal(valores_unitarios[indice] if indice < len(valores_unitarios) else "")
-            valor_total = decimal_br_para_decimal(valores_totais[indice] if indice < len(valores_totais) else "")
-
-            if not contrato_item_id and not descricao and quantidade == 0 and valor_unitario == 0 and valor_total == 0:
-                continue
-
-            if not contrato_item_id:
-                messages.error(request, f"Selecione o item do contrato na linha {indice + 1}.")
-                return redirect("aquisicoes:aquisicao_manual_nova")
-
-            contrato_item = get_object_or_404(
-                ContratoItemGerado.objects.select_related("contrato", "item"),
-                id=contrato_item_id,
-                contrato=contrato,
-            )
-
-            if quantidade <= 0:
-                messages.error(request, f"Informe uma quantidade maior que zero na linha {indice + 1}.")
-                return redirect("aquisicoes:aquisicao_manual_nova")
-
-            valor_calculado = (quantidade * valor_unitario).quantize(Decimal("0.01"))
-
-            if valor_total <= 0:
-                valor_total = valor_calculado
-
-            if abs(valor_total - valor_calculado) > Decimal("0.05"):
-                messages.error(request, f"O valor total da linha {indice + 1} está diferente de quantidade x valor unitário.")
-                return redirect("aquisicoes:aquisicao_manual_nova")
-
-            itens_validos.append({
-                "contrato_item": contrato_item,
-                "descricao": descricao or contrato_item.item.nome_item,
-                "unidade": contrato_item.unidade or "",
-                "quantidade": quantidade,
-                "valor_unitario": valor_unitario,
-                "valor_total": valor_total,
-            })
-
-        if not itens_validos:
-            messages.error(request, "Adicione pelo menos um item da nota fiscal.")
-            return redirect("aquisicoes:aquisicao_manual_nova")
-
-        nota = AquisicaoNotaFiscal.objects.create(
-            pregao=pregao,
-            escola=escola,
-            fornecedor=fornecedor,
-            contrato=contrato,
-            metodo_entrada=AquisicaoNotaFiscal.METODO_MANUAL,
-            chave_acesso=chave_acesso,
-            numero_nota=numero_nota,
-            serie=serie,
-            data_emissao=data_emissao,
-            data_recebimento=data_recebimento,
-            observacoes=observacoes,
-            status=AquisicaoNotaFiscal.STATUS_EM_CONFERENCIA,
-            criado_por=request.user,
-            valor_total=Decimal("0"),
+        total_nota = sum(
+            (item["valor_total"] for item in itens_validos),
+            Decimal("0"),
         )
 
-        total_nota = Decimal("0")
-
-        for dados in itens_validos:
-            AquisicaoNotaFiscalItem.objects.create(
-                nota=nota,
-                contrato_item=dados["contrato_item"],
-                item=dados["contrato_item"].item,
-                descricao_produto=dados["descricao"],
-                unidade=dados["unidade"],
-                quantidade=dados["quantidade"],
-                valor_unitario=dados["valor_unitario"],
-                valor_total=dados["valor_total"],
-                status=AquisicaoNotaFiscalItem.STATUS_VINCULADO,
-                conferido=True,
+        with transaction.atomic():
+            nota = AquisicaoNotaFiscal.objects.create(
+                pregao=contrato.pregao,
+                escola=contrato.escola,
+                fornecedor=contrato.fornecedor,
+                contrato=contrato,
+                metodo_entrada=AquisicaoNotaFiscal.METODO_MANUAL,
+                chave_acesso="",
+                numero_nota=numero_nota,
+                serie="",
+                observacoes=observacoes,
+                status=AquisicaoNotaFiscal.STATUS_CONFIRMADA,
+                criado_por=request.user,
+                confirmado_por=request.user,
+                confirmado_em=timezone.now(),
+                valor_total=total_nota,
             )
-            total_nota += dados["valor_total"]
 
-        nota.valor_total = total_nota
-        nota.save(update_fields=["valor_total", "atualizado_em"])
+            criar_itens_aquisicao_manual(nota, itens_validos)
 
-        messages.success(request, "Aquisição manual registrada com sucesso.")
-        return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
+        messages.success(
+            request,
+            f"NF-e {nota.numero_nota} registrada e confirmada com sucesso. Você já pode lançar a próxima nota.",
+        )
+        return redirect("aquisicoes:aquisicao_manual_nova")
 
-    return render(request, "aquisicoes/aquisicao_manual_form.html", {
-        "certames": certames,
-        "escolas": escolas,
-        "fornecedores": fornecedores,
-        "contratos": contratos,
-        "contratos_json": contratos_json_permitidos(request),
-        "restrito_escola": usuario_eh_consulta_escola(request),
-        "escola_vinculada": escola_vinculada,
-    })
+    contexto = montar_contexto_aquisicao_manual(request)
+    return render(request, "aquisicoes/aquisicao_manual_form.html", contexto)
 
 
 @login_required
@@ -642,7 +773,10 @@ def relatorio_saldo_aquisicoes(request):
         "fornecedor__razao_social",
     )
 
-    status_notas_validas = [AquisicaoNotaFiscal.STATUS_CONFIRMADA]
+    status_notas_validas = [
+        AquisicaoNotaFiscal.STATUS_CONFIRMADA,
+        AquisicaoNotaFiscal.STATUS_EDITADA,
+    ]
     linhas = []
 
     totais = {
@@ -1085,49 +1219,554 @@ def criar_nota_aquisicao_por_itens(request, contrato, metodo_entrada, dados_nota
     return nota
 
 
-@login_required
-def upload_xml_nfe(request):
-    escola_vinculada = escola_vinculada_usuario(request) if usuario_eh_consulta_escola(request) else None
 
-    if request.method == "POST":
-        contrato_id = request.POST.get("contrato")
-        arquivo = request.FILES.get("arquivo_xml")
-        data_recebimento = request.POST.get("data_recebimento") or timezone.localdate()
-        observacoes = request.POST.get("observacoes") or ""
+def somente_digitos_aquisicao(valor):
+    return re.sub(r"\D+", "", str(valor or ""))
 
-        if not contrato_id:
-            messages.error(request, "Selecione o contrato.")
-            return redirect("aquisicoes:upload_xml")
 
-        if not arquivo:
-            messages.error(request, "Selecione o arquivo XML da NF-e.")
-            return redirect("aquisicoes:upload_xml")
+def normalizar_unidade_aquisicao(valor):
+    unidade = normalizar_texto_aquisicao(valor)
 
-        contrato = get_object_or_404(contratos_permitidos(request), id=contrato_id)
+    aliases = {
+        "KG": "QUILOGRAMA",
+        "KGS": "QUILOGRAMA",
+        "KILO": "QUILOGRAMA",
+        "KILOGRAMA": "QUILOGRAMA",
+        "QUILO": "QUILOGRAMA",
+        "QUILOGRAMA": "QUILOGRAMA",
+        "G": "GRAMA",
+        "GR": "GRAMA",
+        "GRAMA": "GRAMA",
+        "L": "LITRO",
+        "LT": "LITRO",
+        "LTS": "LITRO",
+        "LITRO": "LITRO",
+        "ML": "MILILITRO",
+        "MILILITRO": "MILILITRO",
+        "UN": "UNIDADE",
+        "UND": "UNIDADE",
+        "UNID": "UNIDADE",
+        "UNIDADE": "UNIDADE",
+        "PCT": "PACOTE",
+        "PCTS": "PACOTE",
+        "PACOTE": "PACOTE",
+        "CX": "CAIXA",
+        "CXA": "CAIXA",
+        "CAIXA": "CAIXA",
+        "FD": "FARDO",
+        "FARDO": "FARDO",
+        "DZ": "DUZIA",
+        "DUZIA": "DUZIA",
+    }
 
-        try:
-            dados_xml = extrair_dados_xml_nfe(arquivo)
-            arquivo.seek(0)
+    return aliases.get(unidade, unidade)
 
-            dados_xml["data_recebimento"] = data_recebimento
-            dados_xml["observacoes"] = observacoes
 
-            nota = criar_nota_aquisicao_por_itens(
-                request=request,
-                contrato=contrato,
-                metodo_entrada=AquisicaoNotaFiscal.METODO_XML,
-                dados_nota=dados_xml,
-                itens_extraidos=dados_xml["itens"],
-                arquivo_xml=arquivo,
+def pontuacao_correspondencia_xml(descricao_xml, unidade_xml, contrato_item):
+    descricao_xml_norm = normalizar_texto_aquisicao(descricao_xml)
+    nome_sistema_norm = normalizar_texto_aquisicao(contrato_item.item.nome_item)
+
+    if not descricao_xml_norm or not nome_sistema_norm:
+        return Decimal("0")
+
+    if descricao_xml_norm == nome_sistema_norm:
+        pontuacao_texto = 1.0
+    else:
+        similaridade = SequenceMatcher(
+            None,
+            descricao_xml_norm,
+            nome_sistema_norm,
+        ).ratio()
+
+        palavras_xml = set(
+            palavra for palavra in descricao_xml_norm.split()
+            if len(palavra) >= 3
+        )
+        palavras_sistema = set(
+            palavra for palavra in nome_sistema_norm.split()
+            if len(palavra) >= 3
+        )
+
+        if palavras_xml and palavras_sistema:
+            intersecao = len(palavras_xml.intersection(palavras_sistema))
+            token_score = (
+                2 * intersecao
+                / (len(palavras_xml) + len(palavras_sistema))
+            )
+        else:
+            token_score = 0
+
+        contem = (
+            nome_sistema_norm in descricao_xml_norm
+            or descricao_xml_norm in nome_sistema_norm
+        )
+
+        pontuacao_texto = max(
+            similaridade,
+            token_score,
+            0.92 if contem else 0,
+        )
+
+    unidade_xml_norm = normalizar_unidade_aquisicao(unidade_xml)
+    unidade_sistema_norm = normalizar_unidade_aquisicao(contrato_item.unidade)
+
+    unidade_compativel = bool(
+        unidade_xml_norm
+        and unidade_sistema_norm
+        and unidade_xml_norm == unidade_sistema_norm
+    )
+
+    # A unidade ajuda a confirmar a sugestão, mas uma abreviação desconhecida
+    # não impede uma boa correspondência textual.
+    if unidade_compativel:
+        pontuacao_final = min(1.0, pontuacao_texto + 0.06)
+    else:
+        pontuacao_final = pontuacao_texto
+
+    return Decimal(str(round(pontuacao_final, 4)))
+
+
+def sugerir_contrato_item_xml(contrato, descricao_xml, unidade_xml):
+    itens_contrato = list(
+        contrato.itens.select_related("item").order_by("item__nome_item")
+    )
+
+    melhor_item = None
+    melhor_pontuacao = Decimal("0")
+
+    for contrato_item in itens_contrato:
+        pontuacao = pontuacao_correspondencia_xml(
+            descricao_xml,
+            unidade_xml,
+            contrato_item,
+        )
+
+        if pontuacao > melhor_pontuacao:
+            melhor_item = contrato_item
+            melhor_pontuacao = pontuacao
+
+    # Limiar conservador: se houver dúvida, o usuário escolhe manualmente.
+    if melhor_item and melhor_pontuacao >= Decimal("0.80"):
+        return melhor_item, melhor_pontuacao
+
+    return None, melhor_pontuacao
+
+
+def montar_linhas_revisao_xml(contrato, dados_xml, selecoes=None):
+    selecoes = selecoes or {}
+    linhas = []
+
+    for indice, item_xml in enumerate(dados_xml.get("itens") or []):
+        contrato_item = None
+        origem_vinculo = "nao_encontrado"
+        pontuacao = Decimal("0")
+
+        contrato_item_id = str(selecoes.get(indice) or "").strip()
+
+        if contrato_item_id:
+            contrato_item = (
+                contrato.itens.select_related("item")
+                .filter(id=contrato_item_id)
+                .first()
+            )
+            if contrato_item:
+                origem_vinculo = "manual"
+        else:
+            contrato_item, pontuacao = sugerir_contrato_item_xml(
+                contrato,
+                item_xml.get("descricao"),
+                item_xml.get("unidade"),
+            )
+            if contrato_item:
+                origem_vinculo = "automatico"
+
+        linhas.append({
+            "indice": indice,
+            "xml": item_xml,
+            "contrato_item": contrato_item,
+            "origem_vinculo": origem_vinculo,
+            "pontuacao": pontuacao,
+        })
+
+    return linhas
+
+
+def avisos_documentos_xml(contrato, dados_xml):
+    avisos = []
+
+    doc_emitente_xml = somente_digitos_aquisicao(
+        dados_xml.get("emitente", {}).get("cnpj")
+        or dados_xml.get("emitente", {}).get("cpf")
+    )
+    doc_fornecedor = somente_digitos_aquisicao(
+        getattr(contrato.fornecedor, "cnpj", "")
+        or getattr(contrato.fornecedor, "cpf", "")
+    )
+
+    if doc_emitente_xml and doc_fornecedor and doc_emitente_xml != doc_fornecedor:
+        avisos.append(
+            "O CNPJ/CPF do emitente do XML é diferente do fornecedor do contrato selecionado."
+        )
+
+    doc_destinatario_xml = somente_digitos_aquisicao(
+        dados_xml.get("destinatario", {}).get("cnpj")
+        or dados_xml.get("destinatario", {}).get("cpf")
+    )
+    doc_escola = somente_digitos_aquisicao(getattr(contrato.escola, "cnpj", ""))
+
+    if doc_destinatario_xml and doc_escola and doc_destinatario_xml != doc_escola:
+        avisos.append(
+            "O CNPJ/CPF do destinatário do XML é diferente do CNPJ da escola selecionada."
+        )
+
+    return avisos
+
+
+def criar_token_xml_temporario(
+    arquivo,
+    contrato_id,
+    observacoes,
+    metodo_entrada=None,
+    origem_revisao="upload_xml",
+):
+    """
+    Guarda o XML dentro de um token assinado e compactado.
+
+    Isso evita depender de um arquivo temporário no filesystem/storage entre
+    a tela de upload e a tela de revisão. É mais confiável tanto localmente
+    quanto no Railway.
+    """
+    conteudo = arquivo.read()
+
+    if not conteudo:
+        raise ValueError("O arquivo XML está vazio.")
+
+    nome_original = Path(arquivo.name or "nota_fiscal.xml").name
+
+    token = signing.dumps(
+        {
+            "xml_b64": base64.b64encode(conteudo).decode("ascii"),
+            "nome_original": nome_original,
+            "contrato_id": int(contrato_id),
+            "observacoes": observacoes or "",
+            "metodo_entrada": metodo_entrada or AquisicaoNotaFiscal.METODO_XML,
+            "origem_revisao": origem_revisao or "upload_xml",
+        },
+        salt="aquisicoes-upload-xml",
+        compress=True,
+    )
+
+    return token, conteudo
+
+
+def ler_token_xml_temporario(token):
+    try:
+        dados_token = signing.loads(
+            token,
+            salt="aquisicoes-upload-xml",
+            max_age=2 * 60 * 60,
+        )
+    except signing.SignatureExpired as erro:
+        raise ValueError(
+            "A revisão do XML expirou. Importe o arquivo novamente."
+        ) from erro
+    except signing.BadSignature as erro:
+        raise ValueError(
+            "Os dados temporários da importação do XML são inválidos."
+        ) from erro
+
+    xml_b64 = str(dados_token.get("xml_b64") or "")
+
+    if not xml_b64:
+        raise ValueError(
+            "O conteúdo do XML não foi encontrado. Importe o arquivo novamente."
+        )
+
+    try:
+        conteudo = base64.b64decode(xml_b64.encode("ascii"))
+    except Exception as erro:
+        raise ValueError(
+            "Não foi possível recuperar o XML da revisão. Importe novamente."
+        ) from erro
+
+    return dados_token, conteudo
+
+
+def renderizar_revisao_xml(
+    request,
+    contrato,
+    dados_xml,
+    token,
+    selecoes=None,
+    mensagem_erro="",
+):
+    itens_contrato = list(
+        contrato.itens.select_related("item").order_by("item__nome_item")
+    )
+
+    linhas = montar_linhas_revisao_xml(
+        contrato,
+        dados_xml,
+        selecoes=selecoes,
+    )
+
+    quantidade_erros = sum(
+        1 for linha in linhas if not linha["contrato_item"]
+    )
+
+    total_xml = sum(
+        (
+            item.get("valor_total") or Decimal("0")
+            for item in dados_xml.get("itens") or []
+        ),
+        Decimal("0"),
+    )
+
+    return render(
+        request,
+        "aquisicoes/revisao_xml.html",
+        {
+            "contrato": contrato,
+            "dados_xml": dados_xml,
+            "token_importacao": token,
+            "linhas": linhas,
+            "itens_contrato": itens_contrato,
+            "quantidade_erros": quantidade_erros,
+            "total_xml": total_xml,
+            "avisos_documentos": avisos_documentos_xml(
+                contrato,
+                dados_xml,
+            ),
+            "mensagem_erro": mensagem_erro,
+            "origem_revisao": (
+                "chave_acesso"
+                if (
+                    signing.loads(
+                        token,
+                        salt="aquisicoes-upload-xml",
+                        max_age=2 * 60 * 60,
+                    ).get("origem_revisao") == "chave_acesso"
+                )
+                else "upload_xml"
+            ),
+        },
+    )
+
+
+
+
+
+def confirmar_xml_revisado(
+    request,
+    token,
+    observacoes,
+    redirect_name,
+):
+    try:
+        dados_token, conteudo = ler_token_xml_temporario(token)
+
+        contrato = get_object_or_404(
+            contratos_permitidos(request),
+            id=dados_token["contrato_id"],
+        )
+
+        dados_xml = extrair_dados_xml_nfe(
+            ContentFile(conteudo)
+        )
+        dados_xml["observacoes"] = observacoes
+
+        contrato_item_ids = request.POST.getlist(
+            "contrato_item[]"
+        )
+
+        selecoes = {
+            indice: valor
+            for indice, valor in enumerate(contrato_item_ids)
+        }
+
+        if len(contrato_item_ids) != len(dados_xml["itens"]):
+            return renderizar_revisao_xml(
+                request,
+                contrato,
+                dados_xml,
+                token,
+                selecoes=selecoes,
+                mensagem_erro=(
+                    "Não foi possível validar todos os itens da NF-e. "
+                    "Revise os produtos antes de confirmar."
+                ),
             )
 
-            messages.success(request, "XML da NF-e importado com sucesso. Confira os itens antes de confirmar a aquisição.")
-            return redirect("aquisicoes:nota_fiscal_detalhe", nota_id=nota.id)
+        itens_confirmados = []
+        erros = []
 
-        except Exception as erro:
-            messages.error(request, f"Não foi possível importar o XML: {erro}")
-            return redirect("aquisicoes:upload_xml")
+        for indice, item_xml in enumerate(dados_xml["itens"]):
+            contrato_item_id = (
+                contrato_item_ids[indice] or ""
+            ).strip()
 
+            if not contrato_item_id:
+                erros.append(
+                    f"Item {indice + 1}: selecione o produto correspondente do contrato."
+                )
+                continue
+
+            contrato_item = (
+                contrato.itens.select_related("item")
+                .filter(id=contrato_item_id)
+                .first()
+            )
+
+            if not contrato_item:
+                erros.append(
+                    f"Item {indice + 1}: o produto selecionado não pertence ao contrato."
+                )
+                continue
+
+            quantidade = item_xml.get("quantidade") or Decimal("0")
+            valor_unitario = (
+                item_xml.get("valor_unitario")
+                or contrato_item.valor_unitario
+                or Decimal("0")
+            )
+            valor_total = item_xml.get("valor_total") or Decimal("0")
+
+            if quantidade <= 0:
+                erros.append(
+                    f"Item {indice + 1}: quantidade inválida."
+                )
+
+            if valor_total <= 0 and quantidade > 0 and valor_unitario > 0:
+                valor_total = (
+                    quantidade * valor_unitario
+                ).quantize(Decimal("0.01"))
+
+            if valor_total <= 0:
+                erros.append(
+                    f"Item {indice + 1}: valor total inválido."
+                )
+
+            itens_confirmados.append({
+                "xml": item_xml,
+                "contrato_item": contrato_item,
+                "quantidade": quantidade,
+                "valor_unitario": valor_unitario,
+                "valor_total": valor_total,
+            })
+
+        if erros:
+            return renderizar_revisao_xml(
+                request,
+                contrato,
+                dados_xml,
+                token,
+                selecoes=selecoes,
+                mensagem_erro=" ".join(erros),
+            )
+
+        chave_acesso = dados_xml.get("chave") or ""
+
+        if (
+            chave_acesso
+            and AquisicaoNotaFiscal.objects.filter(
+                chave_acesso=chave_acesso
+            ).exists()
+        ):
+            raise ValueError(
+                "Já existe uma nota fiscal cadastrada com esta chave de acesso."
+            )
+
+        total_nota = sum(
+            (
+                item["valor_total"]
+                for item in itens_confirmados
+            ),
+            Decimal("0"),
+        )
+
+        nome_original = (
+            dados_token.get("nome_original")
+            or "nota_fiscal.xml"
+        )
+
+        metodo_entrada = (
+            dados_token.get("metodo_entrada")
+            or AquisicaoNotaFiscal.METODO_XML
+        )
+
+        with transaction.atomic():
+            nota = AquisicaoNotaFiscal(
+                pregao=contrato.pregao,
+                escola=contrato.escola,
+                fornecedor=contrato.fornecedor,
+                contrato=contrato,
+                metodo_entrada=metodo_entrada,
+                chave_acesso=chave_acesso,
+                numero_nota=dados_xml.get("numero") or "",
+                serie=dados_xml.get("serie") or "",
+                data_emissao=dados_xml.get("data_emissao") or None,
+                valor_total=total_nota,
+                observacoes=observacoes,
+                status=AquisicaoNotaFiscal.STATUS_CONFIRMADA,
+                criado_por=request.user,
+                confirmado_por=request.user,
+                confirmado_em=timezone.now(),
+            )
+
+            nota.arquivo_xml.save(
+                Path(nome_original).name,
+                ContentFile(conteudo),
+                save=False,
+            )
+            nota.save()
+
+            for item in itens_confirmados:
+                contrato_item = item["contrato_item"]
+                item_xml = item["xml"]
+
+                AquisicaoNotaFiscalItem.objects.create(
+                    nota=nota,
+                    contrato_item=contrato_item,
+                    item=contrato_item.item,
+                    codigo_produto=item_xml.get("codigo") or "",
+                    descricao_produto=contrato_item.item.nome_item,
+                    unidade=contrato_item.unidade or "",
+                    quantidade=item["quantidade"],
+                    valor_unitario=item["valor_unitario"],
+                    valor_total=item["valor_total"],
+                    status=AquisicaoNotaFiscalItem.STATUS_VINCULADO,
+                    conferido=True,
+                )
+
+        origem_revisao = dados_token.get("origem_revisao") or "upload_xml"
+
+        if origem_revisao == "chave_acesso":
+            mensagem = (
+                f"NF-e {nota.numero_nota or nota.id} consultada pela chave, "
+                "conferida e confirmada com sucesso. "
+                "Você já pode consultar outra nota."
+            )
+        else:
+            mensagem = (
+                f"NF-e {nota.numero_nota or nota.id} importada, "
+                "conferida e confirmada com sucesso. "
+                "Você já pode importar outra nota."
+            )
+
+        messages.success(request, mensagem)
+        return redirect(redirect_name)
+
+    except Exception as erro:
+        messages.error(
+            request,
+            f"Não foi possível confirmar a nota fiscal: {erro}",
+        )
+        return redirect(redirect_name)
+
+
+
+def contexto_upload_xml(request, selecionados=None, observacoes="", erro_importacao=""):
+    selecionados = selecionados or {}
     contratos_base = contratos_permitidos(request)
 
     certames = (
@@ -1139,14 +1778,396 @@ def upload_xml_nfe(request):
         .order_by("-ano", "-numero")
     )
 
+    return {
+        "certames": certames,
+        "restrito_escola": usuario_eh_consulta_escola(request),
+        "escola_vinculada": escola_vinculada_usuario(request),
+        "selecionados": selecionados,
+        "observacoes_iniciais": observacoes or "",
+        "erro_importacao": erro_importacao or "",
+    }
+
+
+
+
+def validar_chave_acesso_nfe(chave):
+    chave = "".join(
+        caractere
+        for caractere in str(chave or "")
+        if caractere.isdigit()
+    )
+
+    if len(chave) != 44:
+        return False, chave, "A Chave de Acesso deve conter exatamente 44 dígitos."
+
+    # Validação do dígito verificador da chave NF-e (módulo 11).
+    corpo = chave[:43]
+    digito_informado = int(chave[43])
+
+    peso = 2
+    soma = 0
+
+    for caractere in reversed(corpo):
+        soma += int(caractere) * peso
+        peso += 1
+        if peso > 9:
+            peso = 2
+
+    resto = soma % 11
+    digito_calculado = 11 - resto
+
+    if digito_calculado in (10, 11):
+        digito_calculado = 0
+
+    if digito_calculado != digito_informado:
+        return False, chave, "A Chave de Acesso informada possui dígito verificador inválido."
+
+    return True, chave, ""
+
+
+def contexto_chave_acesso(
+    request,
+    selecionados=None,
+    chave="",
+    observacoes="",
+    erro_consulta="",
+):
+    selecionados = selecionados or {}
+    contratos_base = contratos_permitidos(request)
+
+    certames = (
+        Pregao.objects.filter(
+            contratos_gerados__in=contratos_base
+        )
+        .distinct()
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
+
+    return {
+        "certames": certames,
+        "restrito_escola": usuario_eh_consulta_escola(request),
+        "escola_vinculada": escola_vinculada_usuario(request),
+        "selecionados": selecionados,
+        "chave_inicial": chave or "",
+        "observacoes_iniciais": observacoes or "",
+        "erro_consulta": erro_consulta or "",
+    }
+
+
+@login_required
+def chave_acesso_nfe(request):
+    escola_vinculada = (
+        escola_vinculada_usuario(request)
+        if usuario_eh_consulta_escola(request)
+        else None
+    )
+
+    if usuario_eh_consulta_escola(request) and not escola_vinculada:
+        messages.error(
+            request,
+            "Seu usuário não possui escola vinculada. Solicite o vínculo ao administrador.",
+        )
+        return redirect("aquisicoes:notas_fiscais")
+
+    if request.method == "POST":
+        acao = request.POST.get("acao") or "consultar_chave"
+
+        if acao == "confirmar_xml":
+            return confirmar_xml_revisado(
+                request,
+                token=request.POST.get("token_importacao") or "",
+                observacoes=request.POST.get("observacoes") or "",
+                redirect_name="aquisicoes:chave_acesso",
+            )
+
+        if acao != "consultar_chave":
+            messages.error(request, "Ação de consulta inválida.")
+            return redirect("aquisicoes:chave_acesso")
+
+        contrato_id = request.POST.get("contrato")
+        chave_digitada = request.POST.get("chave_acesso") or ""
+        observacoes = request.POST.get("observacoes") or ""
+
+        selecionados = {
+            "pregao": request.POST.get("pregao") or "",
+            "escola": request.POST.get("escola") or "",
+            "fornecedor": request.POST.get("fornecedor") or "",
+            "contrato": contrato_id or "",
+        }
+
+        chave_valida, chave, erro_chave = validar_chave_acesso_nfe(
+            chave_digitada
+        )
+
+        if not chave_valida:
+            return render(
+                request,
+                "aquisicoes/chave_acesso.html",
+                contexto_chave_acesso(
+                    request,
+                    selecionados=selecionados,
+                    chave=chave,
+                    observacoes=observacoes,
+                    erro_consulta=erro_chave,
+                ),
+            )
+
+        if not contrato_id:
+            return render(
+                request,
+                "aquisicoes/chave_acesso.html",
+                contexto_chave_acesso(
+                    request,
+                    selecionados=selecionados,
+                    chave=chave,
+                    observacoes=observacoes,
+                    erro_consulta="Selecione o contrato.",
+                ),
+            )
+
+        if AquisicaoNotaFiscal.objects.filter(
+            chave_acesso=chave
+        ).exists():
+            return render(
+                request,
+                "aquisicoes/chave_acesso.html",
+                contexto_chave_acesso(
+                    request,
+                    selecionados=selecionados,
+                    chave=chave,
+                    observacoes=observacoes,
+                    erro_consulta=(
+                        "Já existe uma nota fiscal cadastrada com esta Chave de Acesso."
+                    ),
+                ),
+            )
+
+        contrato = get_object_or_404(
+            contratos_permitidos(request),
+            id=contrato_id,
+        )
+
+        try:
+            resultado_consulta = consultar_xml_consultadanfe(chave)
+            codigo_xml = resultado_consulta["codigo_xml"]
+
+            conteudo = codigo_xml.encode("utf-8")
+            dados_xml = extrair_dados_xml_nfe(
+                ContentFile(conteudo)
+            )
+
+            chave_xml = "".join(
+                caractere
+                for caractere in str(dados_xml.get("chave") or "")
+                if caractere.isdigit()
+            )
+
+            if chave_xml and chave_xml != chave:
+                raise ValueError(
+                    "A chave existente no XML retornado é diferente da chave consultada."
+                )
+
+            arquivo_token = ContentFile(
+                conteudo,
+                name=f"NFe_{chave}.xml",
+            )
+
+            token, _ = criar_token_xml_temporario(
+                arquivo_token,
+                contrato.id,
+                observacoes,
+                metodo_entrada=AquisicaoNotaFiscal.METODO_CHAVE_ACESSO,
+                origem_revisao="chave_acesso",
+            )
+
+            dados_xml["observacoes"] = observacoes
+
+        except ConsultaDanfeErro as erro:
+            return render(
+                request,
+                "aquisicoes/chave_acesso.html",
+                contexto_chave_acesso(
+                    request,
+                    selecionados=selecionados,
+                    chave=chave,
+                    observacoes=observacoes,
+                    erro_consulta=(
+                        f"Não foi possível consultar esta NF-e automaticamente: {erro}"
+                    ),
+                ),
+            )
+
+        except Exception as erro:
+            return render(
+                request,
+                "aquisicoes/chave_acesso.html",
+                contexto_chave_acesso(
+                    request,
+                    selecionados=selecionados,
+                    chave=chave,
+                    observacoes=observacoes,
+                    erro_consulta=(
+                        f"Não foi possível processar o XML retornado: {erro}"
+                    ),
+                ),
+            )
+
+        return renderizar_revisao_xml(
+            request,
+            contrato,
+            dados_xml,
+            token,
+        )
+
+    return render(
+        request,
+        "aquisicoes/chave_acesso.html",
+        contexto_chave_acesso(request),
+    )
+
+
+
+@login_required
+def upload_xml_nfe(request):
+    escola_vinculada = (
+        escola_vinculada_usuario(request)
+        if usuario_eh_consulta_escola(request)
+        else None
+    )
+
+    if usuario_eh_consulta_escola(request) and not escola_vinculada:
+        messages.error(
+            request,
+            "Seu usuário não possui escola vinculada. Solicite o vínculo ao administrador.",
+        )
+        return redirect("aquisicoes:notas_fiscais")
+
+    if request.method == "POST":
+        acao = request.POST.get("acao") or "importar"
+
+        # ----------------------------------------------------
+        # ETAPA 1: lê o XML e abre a tela de revisão.
+        # ----------------------------------------------------
+        if acao == "importar":
+            contrato_id = request.POST.get("contrato")
+            arquivo = request.FILES.get("arquivo_xml")
+            observacoes = request.POST.get("observacoes") or ""
+
+            selecionados = {
+                "pregao": request.POST.get("pregao") or "",
+                "escola": request.POST.get("escola") or "",
+                "fornecedor": request.POST.get("fornecedor") or "",
+                "contrato": contrato_id or "",
+            }
+
+            if not contrato_id:
+                return render(
+                    request,
+                    "aquisicoes/upload_xml.html",
+                    contexto_upload_xml(
+                        request,
+                        selecionados=selecionados,
+                        observacoes=observacoes,
+                        erro_importacao="Selecione o contrato.",
+                    ),
+                )
+
+            if not arquivo:
+                return render(
+                    request,
+                    "aquisicoes/upload_xml.html",
+                    contexto_upload_xml(
+                        request,
+                        selecionados=selecionados,
+                        observacoes=observacoes,
+                        erro_importacao="Selecione o arquivo XML da NF-e.",
+                    ),
+                )
+
+            contrato = get_object_or_404(
+                contratos_permitidos(request),
+                id=contrato_id,
+            )
+
+            try:
+                # Primeiro lê/valida o XML. Somente depois cria o token de revisão.
+                conteudo = arquivo.read()
+
+                if not conteudo:
+                    raise ValueError("O arquivo XML está vazio.")
+
+                dados_xml = extrair_dados_xml_nfe(
+                    ContentFile(conteudo)
+                )
+
+                if (
+                    dados_xml.get("chave")
+                    and AquisicaoNotaFiscal.objects.filter(
+                        chave_acesso=dados_xml["chave"]
+                    ).exists()
+                ):
+                    raise ValueError(
+                        "Já existe uma nota fiscal cadastrada com esta chave de acesso."
+                    )
+
+                # Recria um objeto simples com nome para gerar o token.
+                arquivo_token = ContentFile(
+                    conteudo,
+                    name=Path(arquivo.name or "nota_fiscal.xml").name,
+                )
+
+                token, _ = criar_token_xml_temporario(
+                    arquivo_token,
+                    contrato.id,
+                    observacoes,
+                    metodo_entrada=AquisicaoNotaFiscal.METODO_XML,
+                    origem_revisao="upload_xml",
+                )
+
+                # Mantém observações digitadas na tela anterior.
+                dados_xml["observacoes"] = observacoes
+
+            except Exception as erro:
+                return render(
+                    request,
+                    "aquisicoes/upload_xml.html",
+                    contexto_upload_xml(
+                        request,
+                        selecionados=selecionados,
+                        observacoes=observacoes,
+                        erro_importacao=f"Não foi possível importar o XML: {erro}",
+                    ),
+                )
+
+            # Importante: o render da próxima tela fica FORA do try.
+            # Assim, um eventual problema de template não é escondido por um redirect
+            # que apenas limpa a tela de upload.
+            return renderizar_revisao_xml(
+                request,
+                contrato,
+                dados_xml,
+                token,
+            )
+
+        # ----------------------------------------------------
+        # ETAPA 2: valida todos os vínculos e grava a nota.
+        # ----------------------------------------------------
+        if acao == "confirmar_xml":
+            return confirmar_xml_revisado(
+                request,
+                token=request.POST.get("token_importacao") or "",
+                observacoes=request.POST.get("observacoes") or "",
+                redirect_name="aquisicoes:upload_xml",
+            )
+
+        messages.error(request, "Ação de importação inválida.")
+        return redirect("aquisicoes:upload_xml")
+
     return render(
         request,
         "aquisicoes/upload_xml.html",
-        {
-            "certames": certames,
-            "restrito_escola": usuario_eh_consulta_escola(request),
-            "escola_vinculada": escola_vinculada,
-        },
+        contexto_upload_xml(request),
     )
 
 

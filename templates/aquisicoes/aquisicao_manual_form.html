@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% load pregoes_extras %}
 
-{% block title %}Adicionar Aquisição Manualmente | Sistema de Certames{% endblock %}
-{% block page_title %}Adicionar Aquisição Manualmente{% endblock %}
-{% block page_subtitle %}Registre a nota fiscal e lance os produtos em uma única tela{% endblock %}
+{% block title %}{% if modo_edicao %}Editar Nota Fiscal{% else %}Adicionar Aquisição Manualmente{% endif %} | Sistema de Certames{% endblock %}
+{% block page_title %}{% if modo_edicao %}Editar Nota Fiscal{% else %}Adicionar Aquisição Manualmente{% endif %}{% endblock %}
+{% block page_subtitle %}{% if modo_edicao %}Altere os dados e os itens da nota fiscal em uma única tela{% else %}Registre a nota fiscal e lance os produtos em uma única tela{% endif %}{% endblock %}
 
 {% block content %}
 
@@ -33,8 +33,15 @@
 </div>
 
 <div class="info-box">
-    Selecione o <strong>certame</strong>, depois a <strong>escola</strong>, o <strong>fornecedor</strong> e o <strong>contrato</strong>.
-    Os itens do contrato serão carregados automaticamente na tabela.
+    {% if modo_edicao %}
+        Altere os dados necessários. Ao salvar, a nota permanecerá válida para o saldo de aquisições e o status será <strong>Editada</strong>.
+        {% if nota.metodo_entrada == "xml" or nota.metodo_entrada == "chave_acesso" %}
+        O <strong>XML original continuará armazenado</strong> no registro para consulta e histórico.
+        {% endif %}
+    {% else %}
+        Selecione o <strong>certame</strong>, depois a <strong>escola</strong>, o <strong>fornecedor</strong> e o <strong>contrato</strong>.
+        Os itens do contrato serão carregados automaticamente na tabela.
+    {% endif %}
 </div>
 
 <form method="post" id="form-aquisicao-manual">
@@ -49,7 +56,7 @@
                 <select name="pregao" id="id_pregao" required>
                     <option value="">Selecione</option>
                     {% for certame in certames %}
-                    <option value="{{ certame.id }}">{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }} — {% for municipio in certame.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}</option>
+                    <option value="{{ certame.id }}" {% if nota and nota.pregao_id == certame.id %}selected{% endif %}>{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }} — {% for municipio in certame.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -58,7 +65,9 @@
                 <label>Escola</label>
                 <select name="escola" id="id_escola" {% if restrito_escola %}disabled{% endif %} required>
                     <option value="">Selecione o certame</option>
-                    {% if escola_vinculada %}
+                    {% if nota %}
+                    <option value="{{ nota.escola_id }}" selected>{{ nota.escola.nome_escola }}</option>
+                    {% elif escola_vinculada %}
                     <option value="{{ escola_vinculada.id }}" selected>{{ escola_vinculada.nome_escola }}</option>
                     {% endif %}
                 </select>
@@ -71,6 +80,9 @@
                 <label>Fornecedor</label>
                 <select name="fornecedor" id="id_fornecedor" required>
                     <option value="">Selecione a escola</option>
+                    {% if nota %}
+                    <option value="{{ nota.fornecedor_id }}" selected>{{ nota.fornecedor.razao_social }}</option>
+                    {% endif %}
                 </select>
             </div>
 
@@ -78,27 +90,20 @@
                 <label>Contrato</label>
                 <select name="contrato" id="id_contrato" required>
                     <option value="">Selecione o fornecedor</option>
+                    {% if nota and nota.contrato %}
+                    <option value="{{ nota.contrato_id }}" selected>{{ nota.contrato.numero_contrato }} - R$ {{ nota.contrato.valor_total }}</option>
+                    {% endif %}
                 </select>
             </div>
 
             <div class="form-group">
                 <label>Número da NF-e</label>
-                <input type="text" name="numero_nota" placeholder="Ex.: 45548" required>
-            </div>
-
-            <div class="form-group">
-                <label>Data de Emissão</label>
-                <input type="date" name="data_emissao">
-            </div>
-
-            <div class="form-group">
-                <label>Data de Recebimento</label>
-                <input type="date" name="data_recebimento">
+                <input type="text" name="numero_nota" value="{% if nota %}{{ nota.numero_nota }}{% endif %}" placeholder="Ex.: 45548" required>
             </div>
 
             <div class="form-group">
                 <label>Observações</label>
-                <input type="text" name="observacoes" placeholder="Opcional">
+                <input type="text" name="observacoes" value="{% if nota %}{{ nota.observacoes }}{% endif %}" placeholder="Opcional">
             </div>
         </div>
     </div>
@@ -124,6 +129,22 @@
                     </tr>
                 </thead>
                 <tbody id="itens-body">
+                    {% if itens_iniciais %}
+                        {% for item_inicial in itens_iniciais %}
+                        <tr class="item-row">
+                            <td>
+                                <select name="contrato_item[]" class="select-item" required>
+                                    <option value="{{ item_inicial.contrato_item_id }}" selected>{{ item_inicial.texto }}</option>
+                                </select>
+                            </td>
+                            <td><input type="text" name="unidade[]" class="unidade" value="{{ item_inicial.unidade }}" readonly tabindex="-1"></td>
+                            <td><input type="number" name="quantidade[]" class="qtd" min="0" step="0.001" value="{{ item_inicial.quantidade }}" required></td>
+                            <td><input type="number" name="valor_unitario[]" class="valor valor-unitario" min="0" step="0.0001" value="{{ item_inicial.valor_unitario }}" readonly tabindex="-1" required></td>
+                            <td><input type="number" name="valor_total[]" class="valor valor-total" min="0" step="0.01" value="{{ item_inicial.valor_total }}" readonly tabindex="-1"></td>
+                            <td><button type="button" class="btn-icon btn-remove" onclick="removerLinha(this)">Excluir</button></td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
                     <tr class="item-row">
                         <td>
                             <select name="contrato_item[]" class="select-item" required>
@@ -136,13 +157,14 @@
                         <td><input type="number" name="valor_total[]" class="valor valor-total" min="0" step="0.01" readonly tabindex="-1"></td>
                         <td><button type="button" class="btn-icon btn-remove" onclick="removerLinha(this)">Excluir</button></td>
                     </tr>
+                    {% endif %}
                 </tbody>
             </table>
         </div>
 
         <div class="actions" style="margin-top: 14px;">
             <button class="btn btn-secondary" type="button" onclick="adicionarLinha()">➕ Adicionar item</button>
-            <button class="btn btn-primary" type="submit">Finalizar e Registrar Nota</button>
+            <button class="btn btn-primary" type="submit">{% if modo_edicao %}Salvar Alterações{% else %}Finalizar e Registrar Nota{% endif %}</button>
         </div>
     </div>
 </form>
@@ -152,6 +174,12 @@ const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
 const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
 const urlContratosTemplate = "{% url 'aquisicoes:ajax_contratos_por_certame_escola_fornecedor' 0 0 0 %}";
 const urlItensContratoTemplate = "{% url 'aquisicoes:ajax_itens_contrato' 0 %}";
+
+const modoEdicao = {% if modo_edicao %}true{% else %}false{% endif %};
+const pregaoInicialId = "{% if nota %}{{ nota.pregao_id }}{% endif %}";
+const escolaInicialId = "{% if nota %}{{ nota.escola_id }}{% elif escola_vinculada %}{{ escola_vinculada.id }}{% endif %}";
+const fornecedorInicialId = "{% if nota %}{{ nota.fornecedor_id }}{% endif %}";
+const contratoInicialId = "{% if nota and nota.contrato %}{{ nota.contrato_id }}{% endif %}";
 const escolaRestritaId = "{% if escola_vinculada %}{{ escola_vinculada.id }}{% endif %}";
 
 let itensContrato = [];
@@ -181,7 +209,25 @@ function resetSelect(select, texto) {
     select.appendChild(option);
 }
 
-async function carregarEscolas() {
+function limparItensContrato(limparQuantidades = true) {
+    itensContrato = [];
+
+    document.querySelectorAll(".select-item").forEach(select => {
+        select.innerHTML = '<option value="">Selecione o contrato primeiro</option>';
+    });
+
+    document.querySelectorAll(".unidade").forEach(input => input.value = "");
+    document.querySelectorAll(".valor-unitario").forEach(input => input.value = "");
+    document.querySelectorAll(".valor-total").forEach(input => input.value = "");
+
+    if (limparQuantidades) {
+        document.querySelectorAll(".qtd").forEach(input => input.value = "");
+    }
+
+    calcularTotalNota();
+}
+
+async function carregarEscolas(selecionarId = "", preservarItens = false) {
     const pregaoId = document.getElementById("id_pregao").value;
     const escolaSelect = document.getElementById("id_escola");
     const fornecedorSelect = document.getElementById("id_fornecedor");
@@ -189,7 +235,10 @@ async function carregarEscolas() {
 
     resetSelect(fornecedorSelect, "Selecione a escola");
     resetSelect(contratoSelect, "Selecione o fornecedor");
-    limparItensContrato();
+
+    if (!preservarItens) {
+        limparItensContrato(true);
+    }
 
     if (!pregaoId) {
         resetSelect(escolaSelect, "Selecione o certame");
@@ -209,20 +258,22 @@ async function carregarEscolas() {
         escolaSelect.appendChild(option);
     });
 
-    if (escolaRestritaId) {
-        escolaSelect.value = escolaRestritaId;
-        carregarFornecedores();
+    if (selecionarId) {
+        escolaSelect.value = String(selecionarId);
     }
 }
 
-async function carregarFornecedores() {
+async function carregarFornecedores(selecionarId = "", preservarItens = false) {
     const pregaoId = document.getElementById("id_pregao").value;
     const escolaId = document.getElementById("id_escola").value;
     const fornecedorSelect = document.getElementById("id_fornecedor");
     const contratoSelect = document.getElementById("id_contrato");
 
     resetSelect(contratoSelect, "Selecione o fornecedor");
-    limparItensContrato();
+
+    if (!preservarItens) {
+        limparItensContrato(true);
+    }
 
     if (!pregaoId || !escolaId) {
         resetSelect(fornecedorSelect, "Selecione a escola");
@@ -241,15 +292,21 @@ async function carregarFornecedores() {
         option.textContent = fornecedor.nome;
         fornecedorSelect.appendChild(option);
     });
+
+    if (selecionarId) {
+        fornecedorSelect.value = String(selecionarId);
+    }
 }
 
-async function carregarContratos() {
+async function carregarContratos(selecionarId = "", preservarItens = false) {
     const pregaoId = document.getElementById("id_pregao").value;
     const escolaId = document.getElementById("id_escola").value;
     const fornecedorId = document.getElementById("id_fornecedor").value;
     const contratoSelect = document.getElementById("id_contrato");
 
-    limparItensContrato();
+    if (!preservarItens) {
+        limparItensContrato(true);
+    }
 
     if (!pregaoId || !escolaId || !fornecedorId) {
         resetSelect(contratoSelect, "Selecione o fornecedor");
@@ -269,28 +326,19 @@ async function carregarContratos() {
         contratoSelect.appendChild(option);
     });
 
-    if (data.contratos.length === 1) {
-        contratoSelect.value = data.contratos[0].id;
-        carregarItensContrato();
+    if (selecionarId) {
+        contratoSelect.value = String(selecionarId);
+    } else if (data.contratos.length === 1) {
+        contratoSelect.value = String(data.contratos[0].id);
+        await carregarItensContrato(false);
     }
 }
 
-function limparItensContrato() {
-    itensContrato = [];
-    document.querySelectorAll(".select-item").forEach(select => {
-        select.innerHTML = '<option value="">Selecione o contrato primeiro</option>';
-    });
-    document.querySelectorAll(".unidade").forEach(input => input.value = "");
-    document.querySelectorAll(".valor-unitario").forEach(input => input.value = "");
-    document.querySelectorAll(".valor-total").forEach(input => input.value = "");
-    calcularTotalNota();
-}
-
-async function carregarItensContrato() {
+async function carregarItensContrato(preservarValores = false) {
     const contratoId = document.getElementById("id_contrato").value;
 
     if (!contratoId) {
-        limparItensContrato();
+        limparItensContrato(true);
         return;
     }
 
@@ -299,12 +347,17 @@ async function carregarItensContrato() {
     const data = await response.json();
 
     itensContrato = data.itens || [];
-    atualizarSelectsItens();
+    atualizarSelectsItens(preservarValores);
 }
 
-function atualizarSelectsItens() {
+function atualizarSelectsItens(preservarValores = false) {
     document.querySelectorAll(".select-item").forEach(select => {
         const valorAtual = select.value;
+        const row = select.closest("tr");
+        const unidadeAtual = row.querySelector(".unidade").value;
+        const valorUnitarioAtual = row.querySelector(".valor-unitario").value;
+        const valorTotalAtual = row.querySelector(".valor-total").value;
+
         select.innerHTML = '<option value="">Selecione</option>';
 
         itensContrato.forEach(item => {
@@ -317,15 +370,33 @@ function atualizarSelectsItens() {
             select.appendChild(option);
         });
 
-        if (valorAtual) select.value = valorAtual;
+        if (valorAtual) {
+            select.value = String(valorAtual);
+        }
+
+        if (preservarValores && select.value) {
+            row.querySelector(".unidade").value = unidadeAtual;
+            row.querySelector(".valor-unitario").value = valorUnitarioAtual;
+            row.querySelector(".valor-total").value = valorTotalAtual;
+        } else if (select.value) {
+            preencherDadosItem(select);
+        }
     });
+
+    calcularTotalNota();
 }
 
 function preencherDadosItem(select) {
     const row = select.closest("tr");
     const option = select.options[select.selectedIndex];
 
-    if (!option || !option.value) return;
+    if (!option || !option.value) {
+        row.querySelector(".unidade").value = "";
+        row.querySelector(".valor-unitario").value = "";
+        row.querySelector(".valor-total").value = "";
+        calcularTotalNota();
+        return;
+    }
 
     row.querySelector(".unidade").value = option.dataset.unidade || "";
     row.querySelector(".valor-unitario").value = option.dataset.valorUnitario || "";
@@ -343,9 +414,11 @@ function calcularLinha(row) {
 
 function calcularTotalNota() {
     let total = 0;
+
     document.querySelectorAll(".valor-total").forEach(input => {
         total += numero(input.value);
     });
+
     document.getElementById("total-nota").textContent = moedaBR(total);
 }
 
@@ -358,7 +431,7 @@ function adicionarLinha() {
     nova.querySelectorAll("select").forEach(select => select.value = "");
 
     body.appendChild(nova);
-    atualizarSelectsItens();
+    atualizarSelectsItens(false);
 }
 
 function removerLinha(botao) {
@@ -368,6 +441,7 @@ function removerLinha(botao) {
     if (linhas.length <= 1) {
         linhas[0].querySelectorAll("input").forEach(input => input.value = "");
         linhas[0].querySelectorAll("select").forEach(select => select.value = "");
+        atualizarSelectsItens(false);
         calcularTotalNota();
         return;
     }
@@ -376,11 +450,33 @@ function removerLinha(botao) {
     calcularTotalNota();
 }
 
-document.addEventListener("DOMContentLoaded", function () {
-    document.getElementById("id_pregao").addEventListener("change", carregarEscolas);
-    document.getElementById("id_escola").addEventListener("change", carregarFornecedores);
-    document.getElementById("id_fornecedor").addEventListener("change", carregarContratos);
-    document.getElementById("id_contrato").addEventListener("change", carregarItensContrato);
+document.addEventListener("DOMContentLoaded", async function () {
+    const pregaoSelect = document.getElementById("id_pregao");
+    const escolaSelect = document.getElementById("id_escola");
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+    const form = document.getElementById("form-aquisicao-manual");
+
+    pregaoSelect.addEventListener("change", async function () {
+        const escolaPadrao = escolaRestritaId || "";
+        await carregarEscolas(escolaPadrao, false);
+
+        if (escolaPadrao) {
+            await carregarFornecedores("", false);
+        }
+    });
+
+    escolaSelect.addEventListener("change", async function () {
+        await carregarFornecedores("", false);
+    });
+
+    fornecedorSelect.addEventListener("change", async function () {
+        await carregarContratos("", false);
+    });
+
+    contratoSelect.addEventListener("change", async function () {
+        await carregarItensContrato(false);
+    });
 
     document.addEventListener("change", function (event) {
         if (event.target.classList.contains("select-item")) {
@@ -391,6 +487,26 @@ document.addEventListener("DOMContentLoaded", function () {
     document.addEventListener("input", function (event) {
         if (event.target.classList.contains("qtd")) {
             calcularLinha(event.target.closest("tr"));
+        }
+    });
+
+    if (modoEdicao && pregaoInicialId) {
+        pregaoSelect.value = pregaoInicialId;
+        await carregarEscolas(escolaInicialId, true);
+        await carregarFornecedores(fornecedorInicialId, true);
+        await carregarContratos(contratoInicialId, true);
+        await carregarItensContrato(true);
+    } else {
+        calcularTotalNota();
+    }
+
+    form.addEventListener("submit", function (event) {
+        const mensagem = modoEdicao
+            ? "Deseja realmente salvar as alterações desta nota fiscal?"
+            : "Deseja realmente confirmar o lançamento desta nota fiscal?";
+
+        if (!window.confirm(mensagem)) {
+            event.preventDefault();
         }
     });
 });

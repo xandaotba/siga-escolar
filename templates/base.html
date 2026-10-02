@@ -704,6 +704,11 @@
                             <span>Upload XML da NF-e</span>
                         </a>
 
+                        <a class="sidebar-link {% if namespace == 'aquisicoes' and url_name == 'chave_acesso' %}active{% endif %}" href="{% url 'aquisicoes:chave_acesso' %}">
+                            <span class="sidebar-icon">🔑</span>
+                            <span>Chave de Acesso</span>
+                        </a>
+
                         <a class="sidebar-link {% if namespace == 'aquisicoes' and url_name == 'colar_tabela' %}active{% endif %}" href="{% url 'aquisicoes:colar_tabela' %}">
                             <span class="sidebar-icon">📋</span>
                             <span>Colar Tabela Copiada</span>

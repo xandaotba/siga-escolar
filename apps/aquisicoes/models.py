@@ -33,6 +33,10 @@ class AquisicaoNotaFiscal(models.Model):
     METODO_XML = "xml"
     METODO_TABELA_COLADA = "tabela_colada"
     METODO_MANUAL = "manual"
+    # Mantido fora de METODO_CHOICES para não exigir alteração de banco/migration.
+    # A aplicação grava este valor diretamente e usa metodo_entrada_exibicao
+    # para apresentar o rótulo amigável.
+    METODO_CHAVE_ACESSO = "chave_acesso"
 
     METODO_CHOICES = [
         (METODO_XML, "Upload do XML da NF-e"),
@@ -43,6 +47,7 @@ class AquisicaoNotaFiscal(models.Model):
     STATUS_RASCUNHO = "rascunho"
     STATUS_EM_CONFERENCIA = "em_conferencia"
     STATUS_CONFIRMADA = "confirmada"
+    STATUS_EDITADA = "editada"
     STATUS_CANCELADA = "cancelada"
 
     STATUS_CHOICES = [
@@ -207,8 +212,20 @@ class AquisicaoNotaFiscal(models.Model):
         return self.itens.count()
 
     @property
+    def status_exibicao(self):
+        if self.status == self.STATUS_EDITADA:
+            return "Editada"
+        return self.get_status_display()
+
+    @property
+    def metodo_entrada_exibicao(self):
+        if self.metodo_entrada == self.METODO_CHAVE_ACESSO:
+            return "Consulta pela Chave de Acesso"
+        return self.get_metodo_entrada_display()
+
+    @property
     def pode_editar(self):
-        return self.status in [self.STATUS_RASCUNHO, self.STATUS_EM_CONFERENCIA]
+        return self.status != self.STATUS_CANCELADA
 
     @property
     def pode_confirmar(self):

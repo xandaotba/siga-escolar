@@ -7,6 +7,7 @@ app_name = "aquisicoes"
 urlpatterns = [
     path("adicionar-manualmente/", views.aquisicao_manual_nova, name="aquisicao_manual_nova"),
     path("upload-xml/", views.upload_xml_nfe, name="upload_xml"),
+    path("chave-acesso/", views.chave_acesso_nfe, name="chave_acesso"),
     path("colar-tabela/", views.colar_tabela_nfe, name="colar_tabela"),
     path("relatorios/saldo-aquisicoes/", views.relatorio_saldo_aquisicoes, name="relatorio_saldo_aquisicoes"),
     path("ajax/contratos/<int:contrato_id>/itens/", views.ajax_itens_contrato, name="ajax_itens_contrato"),

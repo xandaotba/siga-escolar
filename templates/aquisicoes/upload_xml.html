@@ -27,8 +27,16 @@
 </div>
 
 <div class="warning-box">
-    Após importar, a nota ficará <strong>Em conferência</strong>. Abra o detalhe da NF-e para conferir e confirmar a aquisição.
+    Após importar, o sistema abrirá uma tela de <strong>revisão dos itens</strong>.
+    Produtos não identificados automaticamente deverão ser vinculados a um item do contrato antes da confirmação.
 </div>
+
+{% if erro_importacao %}
+<div class="warning-box" style="border-color:#fecaca;background:#fef2f2;color:#b91c1c;">
+    <strong>Não foi possível continuar:</strong> {{ erro_importacao }}
+    <div style="margin-top:6px;">Os dados selecionados foram mantidos. Selecione novamente apenas o arquivo XML e tente outra vez.</div>
+</div>
+{% endif %}
 
 <div class="card">
     <h2>Dados para Importação</h2>
@@ -43,7 +51,7 @@
         <select name="pregao" id="id_pregao" required>
             <option value="">Selecione</option>
             {% for certame in certames %}
-            <option value="{{ certame.id }}">{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }} — {% for municipio in certame.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}</option>
+            <option value="{{ certame.id }}" {% if selecionados.pregao == certame.id|stringformat:"s" %}selected{% endif %}>{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }} — {% for municipio in certame.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}</option>
             {% endfor %}
         </select>
     </div>
@@ -80,25 +88,18 @@
 </div>
 
 
-        <div class="grid grid-3" style="margin-top: 14px;">
-            <div class="form-group">
-                <label>Data de Recebimento</label>
-                <input type="date" name="data_recebimento">
-            </div>
-
-            <div class="form-group" style="grid-column: span 2;">
-                <label>Arquivo XML da NF-e</label>
-                <input type="file" name="arquivo_xml" accept=".xml,text/xml,application/xml" required>
-            </div>
+        <div class="form-group" style="margin-top: 14px;">
+            <label>Arquivo XML da NF-e</label>
+            <input type="file" name="arquivo_xml" accept=".xml,text/xml,application/xml" required>
         </div>
 
         <div class="form-group">
             <label>Observações</label>
-            <textarea name="observacoes" rows="3" placeholder="Opcional"></textarea>
+            <textarea name="observacoes" rows="3" placeholder="Opcional">{{ observacoes_iniciais }}</textarea>
         </div>
 
         <div class="actions">
-            <button class="btn btn-primary" type="submit">Importar XML</button>
+            <button class="btn btn-primary" type="submit" name="acao" value="importar">Importar XML</button>
             <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">Cancelar</a>
         </div>
     </form>
@@ -110,6 +111,10 @@ const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
 const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
 const urlContratosTemplate = "{% url 'aquisicoes:ajax_contratos_por_certame_escola_fornecedor' 0 0 0 %}";
 const escolaRestritaId = "{% if escola_vinculada %}{{ escola_vinculada.id }}{% endif %}";
+const pregaoInicialId = "{{ selecionados.pregao|default:'' }}";
+const escolaInicialId = "{{ selecionados.escola|default:'' }}";
+const fornecedorInicialId = "{{ selecionados.fornecedor|default:'' }}";
+const contratoInicialId = "{{ selecionados.contrato|default:'' }}";
 
 function trocarIds(url, ids) {
     let finalUrl = url;
@@ -236,10 +241,35 @@ async function carregarContratos() {
     }
 }
 
-document.addEventListener("DOMContentLoaded", function () {
-    document.getElementById("id_pregao").addEventListener("change", carregarEscolas);
-    document.getElementById("id_escola").addEventListener("change", carregarFornecedores);
-    document.getElementById("id_fornecedor").addEventListener("change", carregarContratos);
+document.addEventListener("DOMContentLoaded", async function () {
+    const pregaoSelect = document.getElementById("id_pregao");
+    const escolaSelect = document.getElementById("id_escola");
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    pregaoSelect.addEventListener("change", carregarEscolas);
+    escolaSelect.addEventListener("change", carregarFornecedores);
+    fornecedorSelect.addEventListener("change", carregarContratos);
+
+    if (pregaoInicialId) {
+        pregaoSelect.value = pregaoInicialId;
+
+        await carregarEscolas();
+
+        if (escolaInicialId) {
+            escolaSelect.value = escolaInicialId;
+            await carregarFornecedores();
+        }
+
+        if (fornecedorInicialId) {
+            fornecedorSelect.value = fornecedorInicialId;
+            await carregarContratos();
+        }
+
+        if (contratoInicialId) {
+            contratoSelect.value = contratoInicialId;
+        }
+    }
 });
 </script>
 

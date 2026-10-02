@@ -9,8 +9,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libreoffice \
         libreoffice-writer \
-        chromium \
-        chromium-driver \
         fonts-dejavu-core \
         fonts-liberation \
     && apt-get clean \

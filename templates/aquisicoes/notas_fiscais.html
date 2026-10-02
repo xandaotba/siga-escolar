@@ -9,7 +9,7 @@
 
 <style>
     .page-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
-    .resumo-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .resumo-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
     .resumo-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; }
     .resumo-label { color: #64748b; font-size: 12px; font-weight: 700; margin-bottom: 4px; }
     .resumo-value { color: #0f2f57; font-size: 21px; font-weight: 900; }
@@ -17,7 +17,10 @@
     .badge-rascunho { background: #f1f5f9; color: #334155; }
     .badge-em_conferencia { background: #fff7ed; color: #c2410c; }
     .badge-confirmada { background: #ecfdf5; color: #047857; }
+    .badge-editada { background: #eff6ff; color: #1d4ed8; }
     .badge-cancelada { background: #fef2f2; color: #b91c1c; }
+    .mini-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .mini-actions form { margin: 0; }
     .muted-text { color: #64748b; font-size: 13px; }
     .texto-direita { text-align: right; }
     .loading-text { color: #64748b; font-size: 12px; margin-top: 4px; display: none; }
@@ -31,9 +34,8 @@
 
 <div class="resumo-grid">
     <div class="resumo-card"><div class="resumo-label">Total</div><div class="resumo-value">{{ totais.total }}</div></div>
-    <div class="resumo-card"><div class="resumo-label">Rascunho</div><div class="resumo-value">{{ totais.rascunho }}</div></div>
-    <div class="resumo-card"><div class="resumo-label">Em conferência</div><div class="resumo-value">{{ totais.conferencia }}</div></div>
     <div class="resumo-card"><div class="resumo-label">Confirmadas</div><div class="resumo-value">{{ totais.confirmada }}</div></div>
+    <div class="resumo-card"><div class="resumo-label">Editadas</div><div class="resumo-value">{{ totais.editada }}</div></div>
     <div class="resumo-card"><div class="resumo-label">Canceladas</div><div class="resumo-value">{{ totais.cancelada }}</div></div>
 </div>
 
@@ -123,7 +125,7 @@
         <table>
             <thead>
                 <tr>
-                    <th>Data Recebimento</th>
+                    <th>Data Lançamento</th>
                     <th>Certame</th>
                     <th>Escola</th>
                     <th>Fornecedor</th>
@@ -131,21 +133,40 @@
                     <th>Forma de Entrada</th>
                     <th>Valor</th>
                     <th>Status</th>
-                    <th style="width: 120px;">Ações</th>
+                    <th style="width: 285px;">Ações</th>
                 </tr>
             </thead>
             <tbody>
                 {% for nota in notas %}
                 <tr>
-                    <td>{{ nota.data_recebimento|date:"d/m/Y" }}</td>
+                    <td>{{ nota.criado_em|date:"d/m/Y H:i" }}</td>
                     <td>{{ nota.pregao.numero }}/{{ nota.pregao.ano }}</td>
                     <td>{{ nota.escola.nome_escola }}</td>
                     <td>{{ nota.fornecedor.razao_social }}</td>
                     <td>{% if nota.numero_nota %}<strong>{{ nota.numero_nota }}</strong>{% else %}<span class="muted-text">Sem número</span>{% endif %}</td>
-                    <td>{{ nota.get_metodo_entrada_display }}</td>
+                    <td>{{ nota.metodo_entrada_exibicao }}</td>
                     <td class="texto-direita">{{ nota.valor_total|moeda_br }}</td>
-                    <td><span class="badge-status badge-{{ nota.status }}">{{ nota.get_status_display }}</span></td>
-                    <td><a class="btn btn-sm btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Abrir</a></td>
+                    <td><span class="badge-status badge-{{ nota.status }}">{{ nota.status_exibicao }}</span></td>
+                    <td>
+                        <div class="mini-actions">
+                            <a class="btn btn-sm btn-secondary" href="{% url 'aquisicoes:nota_fiscal_detalhe' nota.id %}">Visualizar</a>
+
+                            {% if nota.status != "cancelada" %}
+                                {% if nota.metodo_entrada == "manual" or nota.metodo_entrada == "xml" or nota.metodo_entrada == "chave_acesso" %}
+                                <a class="btn btn-sm btn-primary" href="{% url 'aquisicoes:nota_fiscal_editar' nota.id %}">Editar</a>
+                                {% endif %}
+                            {% endif %}
+
+                            {% if nota.status != "cancelada" %}
+                            <form method="post"
+                                  action="{% url 'aquisicoes:nota_fiscal_cancelar' nota.id %}"
+                                  onsubmit="return confirm('Deseja realmente cancelar esta nota fiscal?');">
+                                {% csrf_token %}
+                                <button class="btn btn-sm btn-danger" type="submit">Cancelar</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
                 </tr>
                 {% empty %}
                 <tr><td colspan="9">Nenhuma nota fiscal cadastrada.</td></tr>

@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Revisar XML da NF-e | Sistema de Certames{% endblock %}
+{% block page_title %}Revisar Itens Importados do XML{% endblock %}
+{% block page_subtitle %}Confirme os vínculos dos produtos antes de registrar a aquisição{% endblock %}
+
+{% block content %}
+
+<style>
+    .page-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+
+    .info-box,
+    .warning-box,
+    .error-box {
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 16px;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    .info-box {
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #1e3a8a;
+    }
+
+    .warning-box {
+        border: 1px solid #fed7aa;
+        background: #fff7ed;
+        color: #9a3412;
+    }
+
+    .error-box {
+        border: 1px solid #fecaca;
+        background: #fef2f2;
+        color: #b91c1c;
+        font-weight: 700;
+    }
+
+    .card-header-flex {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+
+    .total-box {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 14px;
+        background: #ecfdf5;
+        color: #047857;
+        font-weight: 900;
+    }
+
+    .table-wrapper {
+        overflow-x: auto;
+    }
+
+    .xml-table {
+        min-width: 1450px;
+    }
+
+    .xml-produto {
+        min-width: 270px;
+    }
+
+    .select-sistema {
+        min-width: 360px;
+    }
+
+    .unidade-sistema {
+        min-width: 125px;
+        background: #f8fafc;
+    }
+
+    .badge-mapeamento {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .badge-ok {
+        background: #ecfdf5;
+        color: #047857;
+    }
+
+    .badge-manual {
+        background: #eff6ff;
+        color: #1d4ed8;
+    }
+
+    .badge-erro {
+        background: #fef2f2;
+        color: #b91c1c;
+    }
+
+    .xml-original {
+        color: #64748b;
+        font-size: 12px;
+        margin-top: 4px;
+    }
+
+    .resumo-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .resumo-item {
+        padding: 10px 0;
+    }
+
+    @media (max-width: 1100px) {
+        .resumo-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+</style>
+
+<div class="page-actions">
+    {% if origem_revisao == "chave_acesso" %}
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:chave_acesso' %}">← Nova consulta por chave</a>
+    {% else %}
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:upload_xml' %}">← Importar outro XML</a>
+    {% endif %}
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">Notas Fiscais Cadastradas</a>
+</div>
+
+<div class="info-box">
+    O sistema tentou relacionar automaticamente cada produto do XML aos itens do contrato.
+    O registro utilizará sempre o <strong>nome do produto e a unidade de medida cadastrados no sistema</strong>.
+    Quando não houver correspondência segura, selecione manualmente o item correto do contrato.
+</div>
+
+{% if avisos_documentos %}
+<div class="warning-box">
+    <strong>Atenção:</strong>
+    {% for aviso in avisos_documentos %}
+        <div>{{ aviso }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if mensagem_erro %}
+<div class="error-box">{{ mensagem_erro }}</div>
+{% endif %}
+
+<div id="erro-itens" class="error-box" {% if quantidade_erros == 0 %}style="display:none;"{% endif %}>
+    Existem produtos sem vínculo com o contrato. A confirmação ficará bloqueada até que todos sejam corrigidos.
+</div>
+
+<div class="card">
+    <h2>Dados da NF-e</h2>
+
+    <div class="resumo-grid">
+        <div class="resumo-item">
+            <strong>Certame</strong><br>
+            {{ contrato.pregao.get_tipo_certame_display }} {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Escola</strong><br>
+            {{ contrato.escola.nome_escola }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Fornecedor</strong><br>
+            {{ contrato.fornecedor.razao_social }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Contrato</strong><br>
+            {{ contrato.numero_contrato }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Número da NF-e</strong><br>
+            {{ dados_xml.numero|default:"-" }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Série</strong><br>
+            {{ dados_xml.serie|default:"-" }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Data de Emissão do XML</strong><br>
+            {{ dados_xml.data_emissao|default:"-" }}
+        </div>
+
+        <div class="resumo-item">
+            <strong>Emitente do XML</strong><br>
+            {{ dados_xml.emitente.nome|default:"-" }}
+        </div>
+    </div>
+</div>
+
+<form method="post" id="form-confirmar-xml">
+    {% csrf_token %}
+    <input type="hidden" name="acao" value="confirmar_xml">
+    <input type="hidden" name="token_importacao" value="{{ token_importacao }}">
+
+    <div class="card">
+        <div class="card-header-flex">
+            <h2>Itens da Nota Fiscal</h2>
+            <div class="total-box">
+                Total do XML: {{ total_xml|moeda_br }}
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table class="xml-table">
+                <thead>
+                    <tr>
+                        <th>Produto no XML</th>
+                        <th>Unid. XML</th>
+                        <th>Qtd.</th>
+                        <th>Valor Unit.</th>
+                        <th>Valor Total</th>
+                        <th>Produto do Sistema / Contrato</th>
+                        <th>Unid. Sistema</th>
+                        <th>Situação</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for linha in linhas %}
+                    <tr class="linha-xml">
+                        <td class="xml-produto">
+                            <strong>{{ linha.xml.descricao }}</strong>
+                            {% if linha.xml.codigo %}
+                            <div class="xml-original">Código XML: {{ linha.xml.codigo }}</div>
+                            {% endif %}
+                        </td>
+
+                        <td>{{ linha.xml.unidade|default:"-" }}</td>
+                        <td>{{ linha.xml.quantidade|quantidade_br }}</td>
+                        <td>{{ linha.xml.valor_unitario|moeda_br }}</td>
+                        <td>{{ linha.xml.valor_total|moeda_br }}</td>
+
+                        <td>
+                            <select name="contrato_item[]"
+                                    class="select-sistema"
+                                    required>
+                                <option value="">Selecione o produto do contrato</option>
+
+                                {% for item_contrato in itens_contrato %}
+                                <option
+                                    value="{{ item_contrato.id }}"
+                                    data-unidade="{{ item_contrato.unidade }}"
+                                    {% if linha.contrato_item and linha.contrato_item.id == item_contrato.id %}selected{% endif %}
+                                >
+                                    {{ item_contrato.item.nome_item }} | {{ item_contrato.unidade|default:"-" }} | {{ item_contrato.valor_unitario|moeda_br }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+
+                        <td>
+                            <input
+                                type="text"
+                                class="unidade-sistema"
+                                value="{% if linha.contrato_item %}{{ linha.contrato_item.unidade }}{% endif %}"
+                                readonly
+                                tabindex="-1"
+                            >
+                        </td>
+
+                        <td>
+                            <span
+                                class="badge-mapeamento {% if not linha.contrato_item %}badge-erro{% elif linha.origem_vinculo == 'manual' %}badge-manual{% else %}badge-ok{% endif %}"
+                            >
+                                {% if not linha.contrato_item %}
+                                    Não encontrado
+                                {% elif linha.origem_vinculo == "manual" %}
+                                    Selecionado
+                                {% else %}
+                                    Correspondência automática
+                                {% endif %}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="form-group" style="margin-top: 16px;">
+            <label>Observações</label>
+            <textarea name="observacoes" rows="3" placeholder="Opcional">{{ dados_xml.observacoes|default:"" }}</textarea>
+        </div>
+
+        <div class="actions">
+            <button
+                class="btn btn-success"
+                id="btn-confirmar-xml"
+                type="submit"
+                {% if quantidade_erros > 0 %}disabled{% endif %}
+            >
+                Confirmar e Registrar Nota
+            </button>
+
+            {% if origem_revisao == "chave_acesso" %}
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:chave_acesso' %}">
+                Cancelar
+            </a>
+            {% else %}
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:upload_xml' %}">
+                Cancelar
+            </a>
+            {% endif %}
+        </div>
+    </div>
+</form>
+
+<script>
+function revisarMapeamentos() {
+    const linhas = document.querySelectorAll(".linha-xml");
+    let pendentes = 0;
+
+    linhas.forEach(linha => {
+        const select = linha.querySelector(".select-sistema");
+        const unidade = linha.querySelector(".unidade-sistema");
+        const badge = linha.querySelector(".badge-mapeamento");
+        const option = select.options[select.selectedIndex];
+
+        if (!select.value) {
+            pendentes += 1;
+            unidade.value = "";
+            badge.className = "badge-mapeamento badge-erro";
+            badge.textContent = "Não encontrado";
+            return;
+        }
+
+        unidade.value = option.dataset.unidade || "";
+        badge.className = "badge-mapeamento badge-manual";
+        badge.textContent = "Vinculado";
+    });
+
+    const erro = document.getElementById("erro-itens");
+    const botao = document.getElementById("btn-confirmar-xml");
+
+    if (pendentes > 0) {
+        erro.style.display = "block";
+        erro.textContent =
+            pendentes === 1
+                ? "Existe 1 produto sem vínculo com o contrato. Selecione o produto correto para liberar a confirmação."
+                : `Existem ${pendentes} produtos sem vínculo com o contrato. Selecione todos os produtos corretos para liberar a confirmação.`;
+        botao.disabled = true;
+    } else {
+        erro.style.display = "none";
+        botao.disabled = false;
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll(".select-sistema").forEach(select => {
+        select.addEventListener("change", revisarMapeamentos);
+    });
+
+    revisarMapeamentos();
+
+    document.getElementById("form-confirmar-xml").addEventListener("submit", function (event) {
+        revisarMapeamentos();
+
+        if (document.getElementById("btn-confirmar-xml").disabled) {
+            event.preventDefault();
+            return;
+        }
+
+        if (!window.confirm("Deseja realmente confirmar e registrar esta nota fiscal importada do XML?")) {
+            event.preventDefault();
+        }
+    });
+});
+</script>
+
+{% endblock %}

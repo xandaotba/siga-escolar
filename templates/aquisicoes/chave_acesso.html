@@ -1,0 +1,430 @@
+{% extends "base.html" %}
+
+{% block title %}Chave de Acesso da NF-e | SIGA Escolar{% endblock %}
+{% block page_title %}Consultar NF-e pela Chave de Acesso{% endblock %}
+{% block page_subtitle %}Consulte a NF-e automaticamente e revise os itens antes de registrar a aquisição{% endblock %}
+
+{% block content %}
+
+<style>
+    .page-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+
+    .info-box,
+    .warning-box {
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 16px;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    .info-box {
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #1e3a8a;
+    }
+
+    .warning-box {
+        border: 1px solid #fecaca;
+        background: #fef2f2;
+        color: #b91c1c;
+    }
+
+    .loading-text {
+        color: #64748b;
+        font-size: 12px;
+        margin-top: 4px;
+        display: none;
+    }
+
+    .consulta-loading {
+        display: none;
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        color: #475569;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .chave-input {
+        font-family: Consolas, "Courier New", monospace;
+        letter-spacing: 0.04em;
+    }
+</style>
+
+<div class="page-actions">
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">
+        ← Notas Fiscais Cadastradas
+    </a>
+
+    <a class="btn btn-secondary" href="{% url 'aquisicoes:upload_xml' %}">
+        Upload XML
+    </a>
+</div>
+
+<div class="info-box">
+    Informe os dados do contrato e a <strong>Chave de Acesso de 44 dígitos</strong>.
+    O SIGA tentará consultar a NF-e no serviço público do Consulta DANFE.
+    Se a consulta for concluída, você será levado para a mesma tela de revisão utilizada no Upload XML.
+</div>
+
+{% if erro_consulta %}
+<div class="warning-box">
+    <strong>Não foi possível concluir a consulta:</strong><br>
+    {{ erro_consulta }}
+    <div style="margin-top:8px;">
+        Você pode tentar novamente ou utilizar a opção <strong>Upload XML</strong>.
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Dados para Consulta</h2>
+
+    <form method="post" id="form-chave-acesso">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="consultar_chave">
+
+        <div class="grid grid-4">
+            <div class="form-group">
+                <label>Certame</label>
+                <select name="pregao" id="id_pregao" required>
+                    <option value="">Selecione</option>
+
+                    {% for certame in certames %}
+                    <option
+                        value="{{ certame.id }}"
+                        {% if selecionados.pregao == certame.id|stringformat:"s" %}selected{% endif %}
+                    >
+                        {{ certame.get_tipo_certame_display }}
+                        {{ certame.numero }}/{{ certame.ano }}
+                        —
+                        {% for municipio in certame.municipios.all %}
+                            {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+                        {% empty %}
+                            Sem município vinculado
+                        {% endfor %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Escola</label>
+                <select
+                    name="escola"
+                    id="id_escola"
+                    {% if restrito_escola %}disabled{% endif %}
+                    required
+                >
+                    <option value="">Selecione o certame</option>
+
+                    {% if escola_vinculada %}
+                    <option value="{{ escola_vinculada.id }}" selected>
+                        {{ escola_vinculada.nome_escola }}
+                    </option>
+                    {% endif %}
+                </select>
+
+                {% if restrito_escola and escola_vinculada %}
+                <input type="hidden" name="escola" value="{{ escola_vinculada.id }}">
+                {% endif %}
+
+                <div class="loading-text" id="loading-escolas">Carregando escolas...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Fornecedor</label>
+                <select name="fornecedor" id="id_fornecedor" required>
+                    <option value="">Selecione a escola</option>
+                </select>
+                <div class="loading-text" id="loading-fornecedores">Carregando fornecedores...</div>
+            </div>
+
+            <div class="form-group">
+                <label>Contrato</label>
+                <select name="contrato" id="id_contrato" required>
+                    <option value="">Selecione o fornecedor</option>
+                </select>
+                <div class="loading-text" id="loading-contratos">Carregando contratos...</div>
+            </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-top:14px;">
+            <div class="form-group">
+                <label>Chave de Acesso da NF-e</label>
+                <input
+                    class="chave-input"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    name="chave_acesso"
+                    id="id_chave_acesso"
+                    maxlength="44"
+                    value="{{ chave_inicial }}"
+                    placeholder="Digite ou cole os 44 dígitos"
+                    required
+                >
+                <div class="loading-text" id="contador-chave" style="display:block;">
+                    0/44 dígitos
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Observações</label>
+                <input
+                    type="text"
+                    name="observacoes"
+                    value="{{ observacoes_iniciais }}"
+                    placeholder="Opcional"
+                >
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit" id="btn-consultar">
+                🔎 Consultar NF-e
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'aquisicoes:notas_fiscais' %}">
+                Cancelar
+            </a>
+        </div>
+
+        <div class="consulta-loading" id="consulta-loading">
+            Consultando a NF-e no Consulta DANFE. Aguarde alguns segundos...
+        </div>
+    </form>
+</div>
+
+<script>
+const urlEscolasTemplate = "{% url 'aquisicoes:ajax_escolas_por_certame' 0 %}";
+const urlFornecedoresTemplate = "{% url 'aquisicoes:ajax_fornecedores_por_certame_escola' 0 0 %}";
+const urlContratosTemplate = "{% url 'aquisicoes:ajax_contratos_por_certame_escola_fornecedor' 0 0 0 %}";
+
+const escolaRestritaId = "{% if escola_vinculada %}{{ escola_vinculada.id }}{% endif %}";
+const pregaoInicialId = "{{ selecionados.pregao|default:'' }}";
+const escolaInicialId = "{{ selecionados.escola|default:'' }}";
+const fornecedorInicialId = "{{ selecionados.fornecedor|default:'' }}";
+const contratoInicialId = "{{ selecionados.contrato|default:'' }}";
+
+function trocarIds(url, ids) {
+    let finalUrl = url;
+
+    ids.forEach(id => {
+        finalUrl = finalUrl.replace("/0/", `/${id}/`);
+    });
+
+    return finalUrl;
+}
+
+function resetSelect(select, texto) {
+    select.innerHTML = "";
+
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = texto;
+    select.appendChild(option);
+}
+
+function setLoading(id, visivel) {
+    const el = document.getElementById(id);
+
+    if (el) {
+        el.style.display = visivel ? "block" : "none";
+    }
+}
+
+async function carregarEscolas() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaSelect = document.getElementById("id_escola");
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    resetSelect(fornecedorSelect, "Selecione a escola");
+    resetSelect(contratoSelect, "Selecione o fornecedor");
+
+    if (!pregaoId) {
+        resetSelect(escolaSelect, "Selecione o certame");
+        return;
+    }
+
+    setLoading("loading-escolas", true);
+
+    try {
+        const response = await fetch(
+            trocarIds(urlEscolasTemplate, [pregaoId])
+        );
+
+        const data = await response.json();
+
+        resetSelect(escolaSelect, "Selecione");
+
+        data.escolas.forEach(escola => {
+            const option = document.createElement("option");
+            option.value = escola.id;
+            option.textContent = escola.municipio
+                ? `${escola.nome} - ${escola.municipio}`
+                : escola.nome;
+            escolaSelect.appendChild(option);
+        });
+
+        if (escolaRestritaId) {
+            escolaSelect.value = escolaRestritaId;
+            await carregarFornecedores();
+        }
+    } finally {
+        setLoading("loading-escolas", false);
+    }
+}
+
+async function carregarFornecedores() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaId = document.getElementById("id_escola").value;
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+
+    resetSelect(contratoSelect, "Selecione o fornecedor");
+
+    if (!pregaoId || !escolaId) {
+        resetSelect(fornecedorSelect, "Selecione a escola");
+        return;
+    }
+
+    setLoading("loading-fornecedores", true);
+
+    try {
+        const response = await fetch(
+            trocarIds(
+                urlFornecedoresTemplate,
+                [pregaoId, escolaId]
+            )
+        );
+
+        const data = await response.json();
+
+        resetSelect(fornecedorSelect, "Selecione");
+
+        data.fornecedores.forEach(fornecedor => {
+            const option = document.createElement("option");
+            option.value = fornecedor.id;
+            option.textContent = fornecedor.nome;
+            fornecedorSelect.appendChild(option);
+        });
+    } finally {
+        setLoading("loading-fornecedores", false);
+    }
+}
+
+async function carregarContratos() {
+    const pregaoId = document.getElementById("id_pregao").value;
+    const escolaId = document.getElementById("id_escola").value;
+    const fornecedorId = document.getElementById("id_fornecedor").value;
+    const contratoSelect = document.getElementById("id_contrato");
+
+    if (!pregaoId || !escolaId || !fornecedorId) {
+        resetSelect(contratoSelect, "Selecione o fornecedor");
+        return;
+    }
+
+    setLoading("loading-contratos", true);
+
+    try {
+        const response = await fetch(
+            trocarIds(
+                urlContratosTemplate,
+                [pregaoId, escolaId, fornecedorId]
+            )
+        );
+
+        const data = await response.json();
+
+        resetSelect(contratoSelect, "Selecione");
+
+        data.contratos.forEach(contrato => {
+            const option = document.createElement("option");
+            option.value = contrato.id;
+            option.textContent = contrato.texto;
+            contratoSelect.appendChild(option);
+        });
+
+        if (data.contratos.length === 1) {
+            contratoSelect.value = String(data.contratos[0].id);
+        }
+    } finally {
+        setLoading("loading-contratos", false);
+    }
+}
+
+function atualizarChave() {
+    const input = document.getElementById("id_chave_acesso");
+    const contador = document.getElementById("contador-chave");
+
+    const somenteDigitos = input.value.replace(/\D/g, "").slice(0, 44);
+    input.value = somenteDigitos;
+    contador.textContent = `${somenteDigitos.length}/44 dígitos`;
+}
+
+document.addEventListener("DOMContentLoaded", async function () {
+    const pregaoSelect = document.getElementById("id_pregao");
+    const escolaSelect = document.getElementById("id_escola");
+    const fornecedorSelect = document.getElementById("id_fornecedor");
+    const contratoSelect = document.getElementById("id_contrato");
+    const chaveInput = document.getElementById("id_chave_acesso");
+    const form = document.getElementById("form-chave-acesso");
+    const botao = document.getElementById("btn-consultar");
+    const loadingConsulta = document.getElementById("consulta-loading");
+
+    pregaoSelect.addEventListener("change", carregarEscolas);
+    escolaSelect.addEventListener("change", carregarFornecedores);
+    fornecedorSelect.addEventListener("change", carregarContratos);
+    chaveInput.addEventListener("input", atualizarChave);
+
+    atualizarChave();
+
+    if (pregaoInicialId) {
+        pregaoSelect.value = pregaoInicialId;
+
+        await carregarEscolas();
+
+        if (escolaInicialId) {
+            escolaSelect.value = escolaInicialId;
+            await carregarFornecedores();
+        }
+
+        if (fornecedorInicialId) {
+            fornecedorSelect.value = fornecedorInicialId;
+            await carregarContratos();
+        }
+
+        if (contratoInicialId) {
+            contratoSelect.value = contratoInicialId;
+        }
+    }
+
+    form.addEventListener("submit", function (event) {
+        atualizarChave();
+
+        if (chaveInput.value.length !== 44) {
+            event.preventDefault();
+            window.alert("Informe os 44 dígitos da Chave de Acesso.");
+            chaveInput.focus();
+            return;
+        }
+
+        botao.disabled = true;
+        botao.textContent = "Consultando...";
+        loadingConsulta.style.display = "block";
+    });
+});
+</script>
+
+{% endblock %}
