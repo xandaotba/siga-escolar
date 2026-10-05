@@ -43,19 +43,72 @@
                 </a>
                 {% endif %}
 
-                <a class="btn btn-primary" href="{% url 'documentos:gerar_resultado_chamada_publica_word' pregao.id %}">
-                    Resultado Final Word
-                </a>
-
-                <a class="btn btn-secondary" href="{% url 'documentos:gerar_resultado_chamada_publica_pdf' pregao.id %}">
-                    Resultado Final PDF
-                </a>
             {% endif %}
         </div>
     </form>
 </div>
 
 {% if pregao %}
+<div class="card">
+    <h2>Documentos da Chamada Pública</h2>
+    <p style="margin-top:-4px; color:#64748b;">
+        Baixe os documentos do resultado em Word ou PDF. O Extrato de Contrato é gerado separadamente para cada município da Chamada Pública.
+    </p>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Documento</th>
+                    <th style="width:120px;">Word</th>
+                    <th style="width:120px;">PDF</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Resultado Final da Chamada Pública</strong></td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_resultado_chamada_publica_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_resultado_chamada_publica_pdf' pregao.id %}">PDF</a></td>
+                </tr>
+                <tr>
+                    <td><strong>Certidão de Regularidade da Chamada Pública</strong></td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_certidao_regularidade_chamada_publica_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_certidao_regularidade_chamada_publica_pdf' pregao.id %}">PDF</a></td>
+                </tr>
+                <tr>
+                    <td><strong>Despacho de Homologação</strong></td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_despacho_homologacao_chamada_publica_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_despacho_homologacao_chamada_publica_pdf' pregao.id %}">PDF</a></td>
+                </tr>
+                <tr>
+                    <td><strong>Extrato de Homologação</strong></td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_homologacao_chamada_publica_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_homologacao_chamada_publica_pdf' pregao.id %}">PDF</a></td>
+                </tr>
+
+                {% for municipio in municipios_documentos %}
+                <tr>
+                    <td>
+                        <strong>Extrato de Contrato</strong><br>
+                        <small>{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}</small>
+                    </td>
+                    <td>
+                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_word' pregao.id municipio.id %}">Word</a>
+                    </td>
+                    <td>
+                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_pdf' pregao.id municipio.id %}">PDF</a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="3">Nenhum município vinculado à Chamada Pública.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <div class="card">
     <h2>Resumo por Item</h2>
 

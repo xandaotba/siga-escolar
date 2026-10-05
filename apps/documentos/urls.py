@@ -105,6 +105,46 @@ urlpatterns = [
         name="gerar_resultado_chamada_publica_pdf",
     ),
     path(
+        "chamada-publica/resultado/<int:pregao_id>/certidao-regularidade/word/",
+        views.gerar_certidao_regularidade_chamada_publica_word,
+        name="gerar_certidao_regularidade_chamada_publica_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/certidao-regularidade/pdf/",
+        views.gerar_certidao_regularidade_chamada_publica_pdf,
+        name="gerar_certidao_regularidade_chamada_publica_pdf",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/despacho-homologacao/word/",
+        views.gerar_despacho_homologacao_chamada_publica_word,
+        name="gerar_despacho_homologacao_chamada_publica_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/despacho-homologacao/pdf/",
+        views.gerar_despacho_homologacao_chamada_publica_pdf,
+        name="gerar_despacho_homologacao_chamada_publica_pdf",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/extrato-homologacao/word/",
+        views.gerar_extrato_homologacao_chamada_publica_word,
+        name="gerar_extrato_homologacao_chamada_publica_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/extrato-homologacao/pdf/",
+        views.gerar_extrato_homologacao_chamada_publica_pdf,
+        name="gerar_extrato_homologacao_chamada_publica_pdf",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/<int:municipio_id>/word/",
+        views.gerar_extrato_contrato_chamada_publica_word,
+        name="gerar_extrato_contrato_chamada_publica_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/<int:municipio_id>/pdf/",
+        views.gerar_extrato_contrato_chamada_publica_pdf,
+        name="gerar_extrato_contrato_chamada_publica_pdf",
+    ),
+    path(
         "chamada-publica/adjudicacao/",
         views.adjudicacao_chamada_publica,
         name="adjudicacao_chamada_publica",

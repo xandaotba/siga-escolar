@@ -50,7 +50,7 @@ from docx.text.paragraph import Paragraph
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.section import WD_ORIENT
-from docx.shared import Pt, Cm, Inches
+from docx.shared import Pt, Cm, Inches, RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from num2words import num2words
@@ -8344,12 +8344,79 @@ def garantir_itens_chamada_publica(pregao):
         ordem += 1
 
 
+def calcular_status_chamada_publica(pregao):
+    """
+    Calcula a situação da Chamada Pública exclusivamente a partir da adjudicação.
+
+    Regras:
+    - Nenhum fornecedor participante possui item adjudicado: Não iniciado.
+    - Ao menos um, mas não todos, possuem item adjudicado: Em andamento.
+    - Todos os fornecedores participantes possuem ao menos um item adjudicado: Finalizado.
+
+    IMPORTANTE:
+    O status é calculado apenas para exibição nas telas da Chamada Pública e
+    NÃO é gravado no campo Pregao.status. Assim, o fluxo/status do Pregão
+    Presencial permanece completamente inalterado e evitamos efeitos colaterais
+    em telas que usam o status persistido do certame.
+    """
+    if pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA:
+        return pregao.status
+
+    fornecedores_participantes = set(
+        pregao.fornecedores.filter(
+            tipo_fornecedor_chamada__in=[
+                Fornecedor.TIPO_INDIVIDUAL,
+                Fornecedor.TIPO_GRUPO_FORMAL,
+            ],
+        ).values_list("id", flat=True)
+    )
+
+    if not fornecedores_participantes:
+        return Pregao.STATUS_NAO_INICIADO
+
+    fornecedores_adjudicados = set(
+        ResultadoChamadaPublicaItem.objects.filter(
+            pregao=pregao,
+            status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+            fornecedor_id__in=fornecedores_participantes,
+        )
+        .values_list("fornecedor_id", flat=True)
+        .distinct()
+    )
+
+    if not fornecedores_adjudicados:
+        return Pregao.STATUS_NAO_INICIADO
+
+    if fornecedores_participantes.issubset(fornecedores_adjudicados):
+        return Pregao.STATUS_FINALIZADO
+
+    return Pregao.STATUS_EM_ANDAMENTO
+
+
+def aplicar_status_calculado_chamada_publica(pregao):
+    """
+    Ajusta apenas a instância em memória para que os templates existentes
+    continuem usando {{ chamada.get_status_display }} / {{ pregao.get_status_display }}.
+
+    Nenhum save() é executado.
+    """
+    if pregao and pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA:
+        pregao.status = calcular_status_chamada_publica(pregao)
+
+    return pregao
+
+
 def obter_chamadas_publicas_projetos():
-    return (
+    chamadas = list(
         Pregao.objects.filter(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
         .prefetch_related("municipios", "fornecedores")
         .order_by("-ano", "-numero")
     )
+
+    for chamada in chamadas:
+        aplicar_status_calculado_chamada_publica(chamada)
+
+    return chamadas
 
 
 def fornecedores_validos_chamada_publica(pregao):
@@ -8411,6 +8478,7 @@ def projetos_venda(request):
 
     if pregao_id:
         pregao = get_object_or_404(Pregao, id=pregao_id, tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+        aplicar_status_calculado_chamada_publica(pregao)
         projetos = projetos.filter(pregao=pregao)
 
     return render(
@@ -8560,6 +8628,7 @@ def registrar_projeto_venda(request, pregao_id):
     mas o fluxo agora é de adjudicação direta, sem etapa separada de Projeto de Venda.
     """
     pregao = get_object_or_404(Pregao, id=pregao_id, tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+    aplicar_status_calculado_chamada_publica(pregao)
 
     fornecedores, linhas_itens = montar_contexto_registro_projeto_venda(pregao)
 
@@ -8705,6 +8774,10 @@ def editar_projeto_venda(request, projeto_id):
     )
 
     pregao = projeto.pregao
+    aplicar_status_calculado_chamada_publica(pregao)
+
+    # A situação "Finalizado" da Chamada Pública é apenas informativa.
+    # A edição da adjudicação permanece permitida independentemente da situação.
     fornecedores, linhas_itens = montar_contexto_registro_projeto_venda(pregao, projeto=projeto)
 
     if projeto.status == ProjetoVenda.STATUS_CANCELADO:
@@ -8881,9 +8954,12 @@ def resultado_chamada_publica(request):
     pregao = None
     resultados = ResultadoChamadaPublicaItem.objects.none()
     resumo_itens = []
+    municipios_documentos = []
 
     if pregao_id:
         pregao = get_object_or_404(Pregao, id=pregao_id, tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+        aplicar_status_calculado_chamada_publica(pregao)
+        municipios_documentos = list(pregao.municipios.all().order_by("nome"))
 
         resultados = (
             ResultadoChamadaPublicaItem.objects.filter(
@@ -8931,6 +9007,7 @@ def resultado_chamada_publica(request):
             "pregao": pregao,
             "resultados": resultados,
             "resumo_itens": resumo_itens,
+            "municipios_documentos": municipios_documentos,
         },
     )
 
@@ -9458,6 +9535,843 @@ def gerar_resultado_chamada_publica_pdf(request, pregao_id):
 
     return response
 
+
+
+# ============================================================
+# CHAMADA PÚBLICA - DOCUMENTOS COMPLEMENTARES DO RESULTADO
+# Certidão de Regularidade, Despacho de Homologação,
+# Extrato de Homologação e Extrato de Contrato por Município.
+# ============================================================
+
+
+def _chamada_caminho_modelo(nome_arquivo):
+    return Path(settings.BASE_DIR) / "templates" / "documentos" / nome_arquivo
+
+
+def _chamada_texto_municipios(pregao):
+    municipios = list(pregao.municipios.all().order_by("nome"))
+
+    if not municipios:
+        raise ValueError("Esta Chamada Pública não possui municípios vinculados.")
+
+    nomes = [
+        f"{municipio.nome}/{municipio.uf}" if municipio.uf else municipio.nome
+        for municipio in municipios
+    ]
+
+    if len(nomes) == 1:
+        return nomes[0]
+
+    if len(nomes) == 2:
+        return f"{nomes[0]} e {nomes[1]}"
+
+    return ", ".join(nomes[:-1]) + f" e {nomes[-1]}"
+
+
+def _chamada_substituir_documento_preservando_runs(documento, substituicoes):
+    """
+    Substitui textos inclusive quando o Word dividiu o marcador entre vários
+    runs, reaproveitando a função já usada nos documentos de homologação.
+    """
+    def processar_paragrafo(paragrafo):
+        for chave, valor in substituicoes.items():
+            valor_texto = str(valor or "")
+
+            # Evita loop quando o valor final é exatamente igual ao texto-base
+            # (por exemplo, SINOP/MT/2026 em uma Chamada do próprio ano 2026).
+            if valor_texto == chave:
+                continue
+
+            while chave in paragrafo.text:
+                if not _homologacao_substituir_preservando_runs(
+                    paragrafo,
+                    chave,
+                    valor_texto,
+                ):
+                    break
+
+    for paragrafo in documento.paragraphs:
+        processar_paragrafo(paragrafo)
+
+    for tabela in documento.tables:
+        for linha in tabela.rows:
+            for celula in linha.cells:
+                for paragrafo in celula.paragraphs:
+                    processar_paragrafo(paragrafo)
+
+    for secao in documento.sections:
+        for paragrafo in secao.header.paragraphs:
+            processar_paragrafo(paragrafo)
+        for paragrafo in secao.footer.paragraphs:
+            processar_paragrafo(paragrafo)
+
+
+def _chamada_definir_texto_paragrafo_preservando_primeiro_run(paragrafo, texto):
+    texto = str(texto or "")
+
+    if paragrafo.runs:
+        paragrafo.runs[0].text = texto
+        for run in paragrafo.runs[1:]:
+            run.text = ""
+    else:
+        paragrafo.add_run(texto)
+
+
+def _chamada_normalizar_cor_preta(documento):
+    """Remove a cor vermelha usada nos marcadores dos modelos oficiais."""
+    def normalizar_paragrafo(paragrafo):
+        for run in paragrafo.runs:
+            run.font.color.rgb = RGBColor(0, 0, 0)
+            run.font.highlight_color = None
+
+    for paragrafo in documento.paragraphs:
+        normalizar_paragrafo(paragrafo)
+
+    for tabela in documento.tables:
+        for linha in tabela.rows:
+            for celula in linha.cells:
+                for paragrafo in celula.paragraphs:
+                    normalizar_paragrafo(paragrafo)
+
+    for secao in documento.sections:
+        for paragrafo in secao.header.paragraphs:
+            normalizar_paragrafo(paragrafo)
+        for paragrafo in secao.footer.paragraphs:
+            normalizar_paragrafo(paragrafo)
+
+
+def _chamada_encontrar_campos_pendentes(documento):
+    padroes = [
+        re.compile(r"\[[^\[\]]+\]"),
+        re.compile(r"\{\{[^{}]+\}\}"),
+    ]
+    pendentes = set()
+
+    def verificar(texto):
+        for padrao in padroes:
+            for item in padrao.findall(texto or ""):
+                pendentes.add(item)
+
+    for paragrafo in documento.paragraphs:
+        verificar(paragrafo.text)
+
+    for tabela in documento.tables:
+        for linha in tabela.rows:
+            for celula in linha.cells:
+                for paragrafo in celula.paragraphs:
+                    verificar(paragrafo.text)
+
+    for secao in documento.sections:
+        for paragrafo in secao.header.paragraphs:
+            verificar(paragrafo.text)
+        for paragrafo in secao.footer.paragraphs:
+            verificar(paragrafo.text)
+
+    return sorted(pendentes)
+
+
+def _chamada_validar_modelo_sem_campos(documento, nome_documento):
+    pendentes = _chamada_encontrar_campos_pendentes(documento)
+
+    if pendentes:
+        raise ValueError(
+            f"O {nome_documento} ainda possui campos não preenchidos: "
+            + ", ".join(pendentes)
+            + "."
+        )
+
+
+def _chamada_redirect_resultado(pregao):
+    return f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+
+
+def _chamada_get_certame_documento(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return None
+
+    return pregao
+
+
+# ------------------------------------------------------------
+# CERTIDÃO DE REGULARIDADE DA CHAMADA PÚBLICA
+# ------------------------------------------------------------
+
+
+def montar_certidao_regularidade_chamada_publica_word(pregao):
+    caminho_modelo = _chamada_caminho_modelo(
+        "modelo_certidao_regularidade_chamada_publica.docx"
+    )
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo da Certidão de Regularidade da Chamada Pública não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    nome_pregoeiro = (pregao.nome_pregoeiro or "").strip()
+    cpf_pregoeiro = (pregao.cpf_pregoeiro or "").strip()
+
+    if not nome_pregoeiro or not cpf_pregoeiro:
+        raise ValueError(
+            "Cadastre Nome e CPF do Pregoeiro neste certame antes de gerar "
+            "a Certidão de Regularidade."
+        )
+
+    municipios = list(pregao.municipios.all().order_by("nome"))
+    texto_municipios = _chamada_texto_municipios(pregao)
+    documento = Document(caminho_modelo)
+
+    for paragrafo in documento.paragraphs:
+        if "[Nº DA CHAMADA]" in paragrafo.text:
+            if len(municipios) == 1:
+                texto_titulo = (
+                    f"CERTIDÃO DE REGULARIDADE {pregao.numero}/{pregao.ano} "
+                    f"DO MUNICÍPIO DE {texto_municipios}"
+                )
+            else:
+                texto_titulo = (
+                    f"CERTIDÃO DE REGULARIDADE {pregao.numero}/{pregao.ano} "
+                    f"DOS MUNICÍPIOS DE {texto_municipios}"
+                )
+
+            _chamada_definir_texto_paragrafo_preservando_primeiro_run(
+                paragrafo,
+                texto_titulo,
+            )
+            break
+
+    # A Certidão é emitida pela Câmara de Negócios de Sinop; por isso a linha
+    # de local/data usa Sinop/MT, independentemente da quantidade de municípios.
+    data_emissao = timezone.localdate()
+
+    substituicoes = {
+        "[MUNICÍPIO CHAMADA]/MT – [DATA POR EXTENSO].":
+            f"Sinop/MT – {data_por_extenso(data_emissao)}.",
+        "[MUNICÍPIO CHAMADA] /MT": texto_municipios,
+        "[MUNICÍPIO CHAMADA]/MT": texto_municipios,
+        "[MUNICÍPIO CHAMADA]": texto_municipios,
+        "[NOME DO PREGOEIRO]": nome_pregoeiro,
+        "[CPF DO PREGOEIRO]": cpf_pregoeiro,
+    }
+
+    _chamada_substituir_documento_preservando_runs(
+        documento,
+        substituicoes,
+    )
+    _chamada_normalizar_cor_preta(documento)
+    _chamada_validar_modelo_sem_campos(
+        documento,
+        "Certidão de Regularidade da Chamada Pública",
+    )
+    return documento
+
+
+def _chamada_nome_certidao_regularidade(pregao):
+    return f"Certidao_Regularidade_Chamada_Publica_{pregao.numero}_{pregao.ano}"
+
+
+def gerar_certidao_regularidade_chamada_publica_word(request, pregao_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_certidao_regularidade_chamada_publica_word(pregao)
+        return resposta_download_docx(
+            documento,
+            _chamada_nome_certidao_regularidade(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Certidão de Regularidade da Chamada Pública - %s",
+            pregao_id,
+        )
+        messages.error(request, f"Não foi possível gerar a Certidão de Regularidade: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+def gerar_certidao_regularidade_chamada_publica_pdf(request, pregao_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_certidao_regularidade_chamada_publica_word(pregao)
+        return resposta_download_pdf(
+            documento,
+            _chamada_nome_certidao_regularidade(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Certidão de Regularidade PDF da Chamada Pública - %s",
+            pregao_id,
+        )
+        messages.error(request, f"Não foi possível gerar a Certidão de Regularidade em PDF: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+# ------------------------------------------------------------
+# DESPACHO DE HOMOLOGAÇÃO DA CHAMADA PÚBLICA
+# ------------------------------------------------------------
+
+
+def montar_despacho_homologacao_chamada_publica_word(pregao):
+    caminho_modelo = _chamada_caminho_modelo(
+        "modelo_despacho_homologacao_chamada_publica.docx"
+    )
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo do Despacho de Homologação da Chamada Pública não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
+    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
+
+    if not nome_ordenador or not cpf_ordenador:
+        raise ValueError(
+            "Cadastre Nome e CPF do Ordenador de Despesas neste certame antes "
+            "de gerar o Despacho de Homologação."
+        )
+
+    municipios = list(pregao.municipios.all().order_by("nome"))
+    texto_municipios = _chamada_texto_municipios(pregao)
+
+    trecho_atendimento = (
+        f"ao município de {texto_municipios}"
+        if len(municipios) == 1
+        else f"aos municípios de {texto_municipios}"
+    )
+
+    documento = Document(caminho_modelo)
+
+    substituicoes = {
+        "[N° DA CHAMADA]": str(pregao.numero or ""),
+        "[N° da Chamada]": str(pregao.numero or ""),
+        "[ANO DA CHAMADA]": str(pregao.ano or ""),
+        "ao município de [Municípios da Chamada]/MT": trecho_atendimento,
+        "[Municípios da Chamada]/MT": texto_municipios,
+        "[Municípios da Chamada]": texto_municipios,
+        "[Nome do Ordenador de Despesas]": nome_ordenador,
+        "[CPF DO ORDENADOR DE DESPESAS]": cpf_ordenador,
+    }
+
+    _chamada_substituir_documento_preservando_runs(documento, substituicoes)
+
+    # O número do Parecer Jurídico 2543/2026 permanece exatamente como está
+    # no modelo oficial, conforme solicitado.
+    _chamada_normalizar_cor_preta(documento)
+    _chamada_validar_modelo_sem_campos(
+        documento,
+        "Despacho de Homologação da Chamada Pública",
+    )
+    return documento
+
+
+def _chamada_nome_despacho_homologacao(pregao):
+    return f"Despacho_Homologacao_Chamada_Publica_{pregao.numero}_{pregao.ano}"
+
+
+def gerar_despacho_homologacao_chamada_publica_word(request, pregao_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_despacho_homologacao_chamada_publica_word(pregao)
+        return resposta_download_docx(
+            documento,
+            _chamada_nome_despacho_homologacao(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Despacho de Homologação da Chamada Pública - %s",
+            pregao_id,
+        )
+        messages.error(request, f"Não foi possível gerar o Despacho de Homologação: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+def gerar_despacho_homologacao_chamada_publica_pdf(request, pregao_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_despacho_homologacao_chamada_publica_word(pregao)
+        return resposta_download_pdf(
+            documento,
+            _chamada_nome_despacho_homologacao(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Despacho de Homologação PDF da Chamada Pública - %s",
+            pregao_id,
+        )
+        messages.error(request, f"Não foi possível gerar o Despacho de Homologação em PDF: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+# ------------------------------------------------------------
+# EXTRATO DE HOMOLOGAÇÃO DA CHAMADA PÚBLICA
+# ------------------------------------------------------------
+
+
+def _chamada_dados_homologacao(pregao):
+    resultados = (
+        ResultadoChamadaPublicaItem.objects.filter(
+            pregao=pregao,
+            status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+        )
+        .select_related("fornecedor")
+        .order_by("fornecedor__razao_social", "id")
+    )
+
+    fornecedores = {}
+    valor_total = Decimal("0.00")
+
+    for resultado in resultados:
+        if not resultado.fornecedor:
+            continue
+
+        valor = resultado.valor_total or Decimal("0.00")
+        fornecedor = resultado.fornecedor
+        valor_total += valor
+
+        if fornecedor.id not in fornecedores:
+            fornecedores[fornecedor.id] = {
+                "fornecedor": fornecedor,
+                "valor_total": Decimal("0.00"),
+            }
+
+        fornecedores[fornecedor.id]["valor_total"] += valor
+
+    lista = sorted(
+        fornecedores.values(),
+        key=lambda item: (item["fornecedor"].razao_social or "").casefold(),
+    )
+
+    if not lista:
+        raise ValueError(
+            "Não existem fornecedores adjudicados registrados nesta Chamada Pública."
+        )
+
+    return {
+        "fornecedores": lista,
+        "valor_total": valor_total,
+    }
+
+
+def _chamada_lista_fornecedores_homologacao(fornecedores):
+    partes = []
+
+    for indice, item in enumerate(fornecedores):
+        fornecedor = item["fornecedor"]
+        valor_total = item["valor_total"]
+        partes.append(
+            f"{_extrato_rotulo_lista(indice)}) "
+            f"{fornecedor.razao_social}, {formatar_moeda_br(valor_total)}"
+        )
+
+    return "; ".join(partes) + ";"
+
+
+def montar_extrato_homologacao_chamada_publica_word(pregao):
+    caminho_modelo = _chamada_caminho_modelo(
+        "modelo_extrato_homologacao_chamada_publica.docx"
+    )
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo do Extrato de Homologação da Chamada Pública não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
+    rg_ordenador = (pregao.rg_ordenador_despesas or "").strip()
+    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
+
+    if not nome_ordenador or not rg_ordenador or not cpf_ordenador:
+        raise ValueError(
+            "Cadastre Nome, RG e CPF do Ordenador de Despesas neste certame "
+            "antes de gerar o Extrato de Homologação."
+        )
+
+    dados = _chamada_dados_homologacao(pregao)
+    municipios = list(pregao.municipios.all().order_by("nome"))
+    texto_municipios = _chamada_texto_municipios(pregao)
+
+    trecho_atendimento = (
+        f"ao município de {texto_municipios}"
+        if len(municipios) == 1
+        else f"aos municípios de {texto_municipios}"
+    )
+
+    documento = Document(caminho_modelo)
+
+    substituicoes = {
+        "[N° DA CHAMADA]": str(pregao.numero or ""),
+        "[ANO DA CHAMADA]": str(pregao.ano or ""),
+        "para atender o município de [Municípios da Chamada]/MT":
+            f"para atender {trecho_atendimento}",
+        "[Municípios da Chamada]/MT": texto_municipios,
+        "[Municípios da Chamada]": texto_municipios,
+        "a) [NOME DO FORNECEDOR], R$ [VALOR TOTAL ADJUDICADO];":
+            _chamada_lista_fornecedores_homologacao(dados["fornecedores"]),
+        "[NOME ORDENADOR DESPESAS]": nome_ordenador,
+        "[VALOR TOTAL FORNECEDORES]": _extrato_valor_sem_cifrao(dados["valor_total"]),
+        "[VALOR TOTAL POR EXTENDO]": valor_por_extenso(dados["valor_total"]).upper(),
+        "[RG ORDENADOR DESPESAS]": rg_ordenador,
+        "[CPF ORDENADOR DESPESAS]": cpf_ordenador,
+        "[Data da Chamada por Extenso]":
+            data_por_extenso(pregao.data_pregao) if pregao.data_pregao else "",
+        "SINOP/MT/2026": f"SINOP/MT/{pregao.ano}",
+    }
+
+    _chamada_substituir_documento_preservando_runs(documento, substituicoes)
+    _chamada_normalizar_cor_preta(documento)
+    _chamada_validar_modelo_sem_campos(
+        documento,
+        "Extrato de Homologação da Chamada Pública",
+    )
+    return documento
+
+
+def _chamada_nome_extrato_homologacao(pregao):
+    return f"Extrato_Homologacao_Chamada_Publica_{pregao.numero}_{pregao.ano}"
+
+
+def gerar_extrato_homologacao_chamada_publica_word(request, pregao_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_extrato_homologacao_chamada_publica_word(pregao)
+        return resposta_download_docx(
+            documento,
+            _chamada_nome_extrato_homologacao(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Homologação da Chamada Pública - %s",
+            pregao_id,
+        )
+        messages.error(request, f"Não foi possível gerar o Extrato de Homologação: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+def gerar_extrato_homologacao_chamada_publica_pdf(request, pregao_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_extrato_homologacao_chamada_publica_word(pregao)
+        return resposta_download_pdf(
+            documento,
+            _chamada_nome_extrato_homologacao(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Homologação PDF da Chamada Pública - %s",
+            pregao_id,
+        )
+        messages.error(request, f"Não foi possível gerar o Extrato de Homologação em PDF: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+# ------------------------------------------------------------
+# EXTRATO DE CONTRATO DA CHAMADA PÚBLICA - POR MUNICÍPIO
+# ------------------------------------------------------------
+
+
+def _chamada_fornecedor_documento_rotulo(fornecedor):
+    cnpj = (getattr(fornecedor, "cnpj", "") or "").strip()
+    cpf = (
+        getattr(fornecedor, "cpf_fornecedor_individual", "")
+        or getattr(fornecedor, "cpf", "")
+        or ""
+    ).strip()
+
+    if cnpj:
+        return "CNPJ", cnpj
+
+    return "CPF", cpf
+
+
+def _chamada_extrato_inserir_blocos_escolas(documento, escolas):
+    paragrafo_contratante = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: "[NOME DA ESCOLA]" in texto,
+    )
+    paragrafo_contratadas = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: texto.strip().startswith("Contratadas"),
+    )
+    paragrafo_fornecedor = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: (
+            "[NOME DO FORNECEDOR]" in texto
+            and "[VALOR TOTAL CONTRATOS]" in texto
+        ),
+    )
+
+    if not paragrafo_contratante or not paragrafo_contratadas or not paragrafo_fornecedor:
+        raise ValueError(
+            "O modelo do Extrato de Contrato da Chamada Pública não possui "
+            "o bloco Contratante/Contratadas esperado."
+        )
+
+    paragrafos = documento.paragraphs
+    indice_fornecedor = next(
+        indice
+        for indice, paragrafo in enumerate(paragrafos)
+        if paragrafo._p is paragrafo_fornecedor._p
+    )
+    paragrafo_espaco = (
+        paragrafos[indice_fornecedor + 1]
+        if indice_fornecedor + 1 < len(paragrafos)
+        else None
+    )
+
+    modelo_contratante = deepcopy(paragrafo_contratante._p)
+    modelo_contratadas = deepcopy(paragrafo_contratadas._p)
+    modelo_fornecedor = deepcopy(paragrafo_fornecedor._p)
+    modelo_espaco = deepcopy(paragrafo_espaco._p) if paragrafo_espaco else None
+    ancora = paragrafo_contratante._p
+
+    for grupo in escolas:
+        escola = grupo["escola"]
+
+        elemento = deepcopy(modelo_contratante)
+        ancora.addprevious(elemento)
+        paragrafo = Paragraph(elemento, paragrafo_contratante._parent)
+        _homologacao_substituir_preservando_runs(
+            paragrafo,
+            "[NOME DA ESCOLA]",
+            escola.nome_escola or "",
+        )
+
+        elemento = deepcopy(modelo_contratadas)
+        ancora.addprevious(elemento)
+
+        for indice, item_fornecedor in enumerate(grupo["fornecedores"]):
+            fornecedor = item_fornecedor["fornecedor"]
+            valor_total = item_fornecedor["valor_total"]
+
+            elemento = deepcopy(modelo_fornecedor)
+            ancora.addprevious(elemento)
+            paragrafo = Paragraph(elemento, paragrafo_fornecedor._parent)
+            _extrato_remover_numeracao_paragrafo(paragrafo)
+
+            texto = (
+                f"{_extrato_rotulo_lista(indice)}) "
+                f"{fornecedor.razao_social}, {formatar_moeda_br(valor_total)};"
+            )
+            _chamada_definir_texto_paragrafo_preservando_primeiro_run(
+                paragrafo,
+                texto,
+            )
+
+        if modelo_espaco is not None:
+            ancora.addprevious(deepcopy(modelo_espaco))
+
+    _extrato_remover_paragrafo(paragrafo_contratante)
+    _extrato_remover_paragrafo(paragrafo_contratadas)
+    _extrato_remover_paragrafo(paragrafo_fornecedor)
+
+    if paragrafo_espaco is not None:
+        _extrato_remover_paragrafo(paragrafo_espaco)
+
+
+def _chamada_extrato_inserir_fornecedores_consolidados(documento, fornecedores):
+    paragrafo_modelo = _extrato_encontrar_paragrafo(
+        documento,
+        lambda texto: "[VALOR TOTAL DO FORNECEDOR]" in texto,
+    )
+
+    if not paragrafo_modelo:
+        raise ValueError(
+            "O modelo do Extrato de Contrato da Chamada Pública não possui "
+            "a linha consolidada de fornecedores esperada."
+        )
+
+    modelo_xml = deepcopy(paragrafo_modelo._p)
+    ancora = paragrafo_modelo._p
+
+    for indice, item_fornecedor in enumerate(fornecedores):
+        fornecedor = item_fornecedor["fornecedor"]
+        valor_total = item_fornecedor["valor_total"]
+        rotulo_documento, numero_documento = _chamada_fornecedor_documento_rotulo(
+            fornecedor
+        )
+
+        elemento = deepcopy(modelo_xml)
+        ancora.addprevious(elemento)
+        paragrafo = Paragraph(elemento, paragrafo_modelo._parent)
+        _extrato_remover_numeracao_paragrafo(paragrafo)
+
+        # Mantém o mesmo padrão visual utilizado no Extrato do Pregão Presencial:
+        # rótulo em negrito, dados do fornecedor normais e valor em negrito.
+        for run in paragrafo.runs:
+            run.text = ""
+
+        if not paragrafo.runs:
+            paragrafo.add_run()
+
+        run = paragrafo.runs[0]
+        run.text = f"{_extrato_rotulo_lista(indice)}) Fornecedor – "
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+        run.bold = True
+
+        run = paragrafo.add_run(
+            f"{fornecedor.razao_social}, {rotulo_documento}: {numero_documento}, "
+            f"Valor Total "
+        )
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+
+        run = paragrafo.add_run(formatar_moeda_br(valor_total))
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+        run.bold = True
+
+        run = paragrafo.add_run(
+            f" ({valor_por_extenso(valor_total)})."
+        )
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+
+    _extrato_remover_paragrafo(paragrafo_modelo)
+
+
+def montar_extrato_contrato_chamada_publica_word(pregao, municipio):
+    caminho_modelo = _chamada_caminho_modelo(
+        "modelo_extrato_contrato_chamada_publica.docx"
+    )
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo do Extrato de Contrato da Chamada Pública não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    if not pregao.municipios.filter(id=municipio.id).exists():
+        raise ValueError("O município informado não pertence a esta Chamada Pública.")
+
+    nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
+    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
+
+    if not nome_ordenador or not cpf_ordenador:
+        raise ValueError(
+            "Cadastre Nome e CPF do Ordenador de Despesas neste certame antes "
+            "de gerar o Extrato de Contrato."
+        )
+
+    dados = _extrato_agrupar_dados(pregao, municipio)
+    documento = Document(caminho_modelo)
+
+    _chamada_extrato_inserir_blocos_escolas(
+        documento,
+        dados["escolas"],
+    )
+    _chamada_extrato_inserir_fornecedores_consolidados(
+        documento,
+        dados["fornecedores"],
+    )
+
+    numero_processo = (pregao.numero_processo or "").strip()
+    texto_processo = (
+        f"Processo administrativo nº {numero_processo}"
+        if numero_processo
+        else ""
+    )
+
+    substituicoes = {
+        "[N° DA CHAMADA]": str(pregao.numero or ""),
+        "[ANO DA CHAMADA]": str(pregao.ano or ""),
+        "[Município da Chamada]": municipio.nome or "",
+        "[N° DO PROCESSO]": texto_processo,
+        "[Nome do Município]": municipio.nome or "",
+        "[Estado do Município]": municipio.uf or "MT",
+        "[VALOR TOTAL CONTRATOS]": _extrato_valor_sem_cifrao(
+            dados["valor_total_geral"]
+        ),
+        "[Nome do Ordenador de Despesas]": nome_ordenador,
+        "[CPF DO ORDENADOR DE DESPESAS]": cpf_ordenador,
+        "[Data do Certame por extenso]":
+            data_por_extenso(pregao.data_pregao) if pregao.data_pregao else "",
+    }
+
+    _chamada_substituir_documento_preservando_runs(documento, substituicoes)
+    _chamada_normalizar_cor_preta(documento)
+    _chamada_validar_modelo_sem_campos(
+        documento,
+        "Extrato de Contrato da Chamada Pública",
+    )
+    return documento
+
+
+def _chamada_nome_extrato_contrato(pregao, municipio):
+    return (
+        f"Extrato_Contrato_Chamada_Publica_{pregao.numero}_{pregao.ano}_"
+        f"{municipio.nome}_{municipio.uf}"
+    )
+
+
+def gerar_extrato_contrato_chamada_publica_word(request, pregao_id, municipio_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    municipio = get_object_or_404(pregao.municipios.all(), id=municipio_id)
+
+    try:
+        documento = montar_extrato_contrato_chamada_publica_word(pregao, municipio)
+        return resposta_download_docx(
+            documento,
+            _chamada_nome_extrato_contrato(pregao, municipio),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Contrato da Chamada Pública - certame %s, município %s",
+            pregao_id,
+            municipio_id,
+        )
+        messages.error(request, f"Não foi possível gerar o Extrato de Contrato: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
+
+
+def gerar_extrato_contrato_chamada_publica_pdf(request, pregao_id, municipio_id):
+    pregao = _chamada_get_certame_documento(request, pregao_id)
+    if pregao is None:
+        return redirect("documentos:resultado_chamada_publica")
+
+    municipio = get_object_or_404(pregao.municipios.all(), id=municipio_id)
+
+    try:
+        documento = montar_extrato_contrato_chamada_publica_word(pregao, municipio)
+        return resposta_download_pdf(
+            documento,
+            _chamada_nome_extrato_contrato(pregao, municipio),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Extrato de Contrato PDF da Chamada Pública - certame %s, município %s",
+            pregao_id,
+            municipio_id,
+        )
+        messages.error(request, f"Não foi possível gerar o Extrato de Contrato em PDF: {erro}")
+        return redirect(_chamada_redirect_resultado(pregao))
 
 
 # ============================================================
