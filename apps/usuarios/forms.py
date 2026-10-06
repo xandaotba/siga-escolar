@@ -169,3 +169,111 @@ class AlterarSenhaUsuarioForm(forms.Form):
         self.usuario.set_password(self.cleaned_data["password1"])
         self.usuario.save()
         return self.usuario
+
+
+
+class MinhaContaForm(forms.Form):
+    """
+    Formulário usado pelo próprio usuário.
+
+    Não contém Perfil, Escola vinculada nem status ativo. Dessa forma,
+    usuários não administradores não conseguem alterar esses campos nem
+    mesmo manipulando manualmente o POST.
+    """
+    first_name = forms.CharField(
+        label="Nome",
+        max_length=150,
+        required=True,
+    )
+    last_name = forms.CharField(
+        label="Sobrenome",
+        max_length=150,
+        required=False,
+    )
+    username = forms.CharField(
+        label="Usuário",
+        max_length=150,
+        required=True,
+    )
+    email = forms.EmailField(
+        label="E-mail",
+        required=False,
+    )
+    password1 = forms.CharField(
+        label="Nova senha",
+        widget=forms.PasswordInput,
+        required=False,
+        help_text="Preencha somente se quiser alterar sua senha.",
+    )
+    password2 = forms.CharField(
+        label="Confirmar nova senha",
+        widget=forms.PasswordInput,
+        required=False,
+    )
+
+    def __init__(self, *args, instance=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.instance = instance
+
+        if instance:
+            self.fields["first_name"].initial = instance.first_name
+            self.fields["last_name"].initial = instance.last_name
+            self.fields["username"].initial = instance.username
+            self.fields["email"].initial = instance.email
+
+    def clean_username(self):
+        username = self.cleaned_data["username"].strip()
+
+        qs = User.objects.filter(username__iexact=username)
+
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+
+        if qs.exists():
+            raise forms.ValidationError(
+                "Já existe um usuário com este nome de usuário."
+            )
+
+        return username
+
+    def clean(self):
+        cleaned = super().clean()
+        password1 = cleaned.get("password1")
+        password2 = cleaned.get("password2")
+
+        if password1 or password2:
+            if password1 != password2:
+                raise forms.ValidationError(
+                    "As senhas informadas não conferem."
+                )
+
+            validate_password(password1, self.instance)
+
+        return cleaned
+
+    def save(self):
+        if not self.instance:
+            raise ValueError(
+                "MinhaContaForm só pode ser usado para editar um usuário existente."
+            )
+
+        user = self.instance
+
+        user.first_name = self.cleaned_data["first_name"]
+        user.last_name = self.cleaned_data["last_name"]
+        user.username = self.cleaned_data["username"]
+        user.email = self.cleaned_data["email"]
+
+        password = self.cleaned_data.get("password1")
+
+        if password:
+            user.set_password(password)
+
+        # Deliberadamente não altera:
+        # - user.is_active
+        # - PerfilUsuario.perfil
+        # - PerfilUsuario.escola
+        # - user.is_staff / user.is_superuser
+        user.save()
+
+        return user

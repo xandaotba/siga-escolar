@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+
+{% block title %}Minha Conta | SIGA Escolar{% endblock %}
+{% block page_title %}Minha Conta{% endblock %}
+{% block page_subtitle %}Atualize seus dados de acesso e sua senha{% endblock %}
+
+{% block content %}
+
+<style>
+    .conta-aviso {
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #1e3a8a;
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-bottom: 18px;
+        line-height: 1.5;
+    }
+
+    .conta-restrito {
+        border: 1px solid #e2e8f0;
+        background: #f8fafc;
+        border-radius: 14px;
+        padding: 14px;
+    }
+
+    .conta-restrito-label {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 5px;
+    }
+
+    .conta-restrito-valor {
+        color: #0f2f57;
+        font-size: 15px;
+        font-weight: 800;
+    }
+
+    .erro-form {
+        background: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fecaca;
+        border-radius: 12px;
+        padding: 12px;
+        margin-bottom: 14px;
+        font-weight: 700;
+    }
+
+    .secao-titulo {
+        margin: 22px 0 12px;
+        color: #0f2f57;
+        font-size: 17px;
+    }
+</style>
+
+{% if pode_editar_perfil %}
+<div class="conta-aviso">
+    Como administrador, você pode alterar seus dados de acesso, Perfil,
+    Escola vinculada e status do usuário.
+</div>
+{% else %}
+<div class="conta-aviso">
+    Você pode alterar seus próprios dados de acesso, nome de usuário e senha.
+    <strong>Perfil e Escola vinculada são definidos pelo administrador e não podem ser alterados nesta tela.</strong>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Dados da Conta</h2>
+
+    {% if form.non_field_errors %}
+    <div class="erro-form">
+        {% for erro in form.non_field_errors %}
+            {{ erro }}<br>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.first_name.label }}</label>
+                {{ form.first_name }}
+                {{ form.first_name.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.last_name.label }}</label>
+                {{ form.last_name }}
+                {{ form.last_name.errors }}
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.username.label }}</label>
+                {{ form.username }}
+                {{ form.username.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.email.label }}</label>
+                {{ form.email }}
+                {{ form.email.errors }}
+            </div>
+        </div>
+
+        <h3 class="secao-titulo">Perfil de Acesso</h3>
+
+        {% if pode_editar_perfil %}
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.perfil.label }}</label>
+                {{ form.perfil }}
+                {{ form.perfil.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.escola.label }}</label>
+                {{ form.escola }}
+                {% if form.escola.help_text %}
+                    <small style="color:#64748b;">{{ form.escola.help_text }}</small>
+                {% endif %}
+                {{ form.escola.errors }}
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label style="display:flex; align-items:center; gap:8px;">
+                {{ form.is_active }}
+                {{ form.is_active.label }}
+            </label>
+            {{ form.is_active.errors }}
+        </div>
+        {% else %}
+        <div class="grid grid-2">
+            <div class="conta-restrito">
+                <div class="conta-restrito-label">Perfil</div>
+                <div class="conta-restrito-valor">
+                    {% if perfil_atual %}
+                        {{ perfil_atual.get_perfil_display }}
+                    {% else %}
+                        Não definido
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="conta-restrito">
+                <div class="conta-restrito-label">Escola vinculada</div>
+                <div class="conta-restrito-valor">
+                    {% if perfil_atual and perfil_atual.escola %}
+                        {{ perfil_atual.escola.nome_escola }}
+                    {% else %}
+                        Nenhuma escola vinculada
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <h3 class="secao-titulo">Alterar Senha</h3>
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>{{ form.password1.label }}</label>
+                {{ form.password1 }}
+                {% if form.password1.help_text %}
+                    <small style="color:#64748b;">{{ form.password1.help_text }}</small>
+                {% endif %}
+                {{ form.password1.errors }}
+            </div>
+
+            <div class="form-group">
+                <label>{{ form.password2.label }}</label>
+                {{ form.password2 }}
+                {{ form.password2.errors }}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">
+                Salvar Alterações
+            </button>
+
+            <a class="btn btn-secondary" href="{% url 'dashboard' %}">
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

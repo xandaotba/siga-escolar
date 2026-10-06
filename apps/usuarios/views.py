@@ -1,9 +1,10 @@
 from django.contrib import messages
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import User
 from django.shortcuts import get_object_or_404, redirect, render
 
-from .forms import AlterarSenhaUsuarioForm, UsuarioForm
+from .forms import AlterarSenhaUsuarioForm, MinhaContaForm, UsuarioForm
 from .models import PerfilUsuario
 
 
@@ -20,6 +21,72 @@ def usuario_tem_acesso_usuarios(user):
         perfil
         and perfil.perfil == PerfilUsuario.PERFIL_ADMINISTRADOR
         and user.is_active
+    )
+
+
+
+@login_required
+def minha_conta(request):
+    """
+    Permite que qualquer usuário autenticado altere os próprios dados.
+
+    Administrador:
+    - usa o formulário administrativo completo;
+    - pode alterar Perfil, Escola vinculada e status.
+
+    Demais perfis:
+    - podem alterar somente os próprios dados básicos, login e senha;
+    - Perfil, Escola vinculada e status não fazem parte do formulário POST.
+    """
+    usuario = request.user
+    pode_editar_perfil = usuario_tem_acesso_usuarios(usuario)
+    perfil_atual = getattr(usuario, "perfil_acesso", None)
+
+    if pode_editar_perfil:
+        FormClass = UsuarioForm
+    else:
+        FormClass = MinhaContaForm
+
+    if request.method == "POST":
+        form = FormClass(
+            request.POST,
+            instance=usuario,
+        )
+
+        if form.is_valid():
+            senha_alterada = bool(
+                form.cleaned_data.get("password1")
+            )
+
+            usuario_salvo = form.save()
+
+            # Quando o próprio usuário troca a senha, mantém a sessão atual
+            # autenticada usando o novo hash de autenticação.
+            if senha_alterada:
+                update_session_auth_hash(
+                    request,
+                    usuario_salvo,
+                )
+
+            messages.success(
+                request,
+                "Seus dados foram atualizados com sucesso.",
+            )
+            return redirect("usuarios:minha_conta")
+    else:
+        form = FormClass(instance=usuario)
+
+    return render(
+        request,
+        "usuarios/minha_conta.html",
+        {
+            "form": form,
+            "usuario_editado": usuario,
+            "perfil_atual": perfil_atual,
+            "pode_editar_perfil": pode_editar_perfil,
+            "titulo": "Minha Conta",
+            "botao": "Salvar Alterações",
+        },
     )
 
 
