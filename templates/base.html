@@ -649,11 +649,11 @@
                 {% endif %}
 
                 <details class="sidebar-group" {% if namespace == "documentos" and url_name != "adjudicacao_chamada_publica" %}open{% endif %}>
-                    <summary><span class="group-title">📄 Contratos</span></summary>
+                    <summary><span class="group-title">📄 Documentos</span></summary>
                     <div class="sidebar-links">
                         <a class="sidebar-link {% if namespace == 'documentos' and url_name == 'pregoes_finalizados' %}active{% endif %}" href="{% url 'documentos:pregoes_finalizados' %}">
                             <span class="sidebar-icon">✅</span>
-                            <span>Pregões Finalizados</span>
+                            <span>Resultado do Pregão</span>
                         </a>
 
                         <a class="sidebar-link {% if namespace == 'documentos' and url_name == 'resultado_chamada_publica' %}active{% endif %}" href="{% url 'documentos:resultado_chamada_publica' %}">
@@ -662,9 +662,14 @@
                         </a>
 
                         {% if request.user.is_superuser or perfil == "administrador" or perfil == "pregoeiro" %}
+                        <a class="sidebar-link {% if namespace == 'documentos' and url_name == 'contratos_pregao_selecao' or namespace == 'documentos' and url_name == 'contratos_pregao' or namespace == 'documentos' and url_name == 'contratos_lote' %}active{% endif %}" href="{% url 'documentos:contratos_pregao_selecao' %}">
+                            <span class="sidebar-icon">🧾</span>
+                            <span>Gerar Contratos (Pregão)</span>
+                        </a>
+
                         <a class="sidebar-link {% if namespace == 'documentos' and url_name == 'contratos_chamada_publica' or namespace == 'documentos' and url_name == 'contratos_chamada_publica_pregao' %}active{% endif %}" href="{% url 'documentos:contratos_chamada_publica' %}">
                             <span class="sidebar-icon">🌾</span>
-                            <span>Contratos da Chamada</span>
+                            <span>Gerar Contratos (Chamada)</span>
                         </a>
                         {% endif %}
 

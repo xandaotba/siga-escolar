@@ -381,6 +381,29 @@
 </style>
 
 <div class="card">
+    <h2>Selecionar Pregão Presencial</h2>
+
+    <form method="get" action="{% url 'documentos:contratos_pregao_selecao' %}">
+        <div class="form-group">
+            <label>Pregão Presencial</label>
+            <select name="pregao" required>
+                <option value="">Selecione</option>
+                {% for preg in pregoes_disponiveis %}
+                    <option value="{{ preg.id }}" {% if pregao and pregao.id == preg.id %}selected{% endif %}>
+                        Pregão Presencial {{ preg.numero }}/{{ preg.ano }} — {% for municipio in preg.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar</button>
+        </div>
+    </form>
+</div>
+
+{% if pregao %}
+<div class="card">
     <h2>Dados do Pregão</h2>
 
     <p>
@@ -723,8 +746,16 @@
 </div>
 
 <a class="btn btn-secondary" href="{% url 'documentos:pregoes_finalizados' %}">
-    Voltar para Pregões Finalizados
+    Voltar para Resultado do Pregão
 </a>
+{% else %}
+<div class="card">
+    <p style="margin:0; color:#64748b;">
+        Selecione um Pregão Presencial finalizado acima para carregar a Base para Geração de Contratos.
+    </p>
+</div>
+{% endif %}
+
 <script>
     function enviarContratosLoteSelecionados() {
         const form = document.getElementById("formContratosLoteSelecionados");

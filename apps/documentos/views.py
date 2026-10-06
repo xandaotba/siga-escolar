@@ -3584,8 +3584,70 @@ def obter_opcoes_fornecedores_para_contrato(resultado, quantitativo_escola):
 
     return opcoes
 
+def obter_pregoes_para_geracao_contratos():
+    """
+    Lista os Pregões Presenciais finalizados disponíveis para geração de contratos.
+    """
+    return (
+        Pregao.objects.filter(
+            tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+            status=Pregao.STATUS_FINALIZADO,
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
+
+
+def contratos_pregao_selecao(request):
+    """
+    Tela de entrada da geração de contratos do Pregão Presencial.
+
+    Mantém o mesmo padrão da Chamada Pública: o usuário escolhe o pregão e
+    é direcionado para a Base para Geração de Contratos daquele certame.
+    """
+    if usuario_eh_consulta_escola(request):
+        messages.error(
+            request,
+            "Seu perfil permite apenas consultar contratos e documentos. "
+            "A geração de contratos do Pregão não está disponível para usuários Consulta/Escola.",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+    pregoes_disponiveis = obter_pregoes_para_geracao_contratos()
+    pregao_id = request.GET.get("pregao")
+
+    if pregao_id:
+        pregao = get_object_or_404(
+            pregoes_disponiveis,
+            id=pregao_id,
+        )
+        return redirect(
+            "documentos:contratos_pregao",
+            pregao_id=pregao.id,
+        )
+
+    return render(
+        request,
+        "documentos/contratos_pregao.html",
+        {
+            "pregoes_disponiveis": pregoes_disponiveis,
+            "pregao": None,
+            "municipios": [],
+            "escolas_contratos": [],
+            "total_contratos": 0,
+            "total_itens_disponiveis": 0,
+            "valor_total_geral": Decimal("0"),
+            "contratos_gerados": [],
+        },
+    )
+
+
 def contratos_pregao(request, pregao_id):
-    pregao = get_object_or_404(Pregao, id=pregao_id)
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
 
     if usuario_eh_consulta_escola(request):
         if not usuario_pode_acessar_pregao_documentos(request, pregao):
@@ -3783,6 +3845,7 @@ def contratos_pregao(request, pregao_id):
         "documentos/contratos_pregao.html",
         {
             "pregao": pregao,
+            "pregoes_disponiveis": obter_pregoes_para_geracao_contratos(),
             "municipios": municipios,
             "escolas_contratos": escolas_contratos,
             "total_contratos": total_contratos,

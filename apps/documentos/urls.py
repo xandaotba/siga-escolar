@@ -235,6 +235,11 @@ urlpatterns = [
         name="extrato_homologacao_pdf",
     ),
     path(
+        "pregao/contratos/",
+        views.contratos_pregao_selecao,
+        name="contratos_pregao_selecao",
+    ),
+    path(
         "pregoes-finalizados/<int:pregao_id>/contratos/",
         views.contratos_pregao,
         name="contratos_pregao",
