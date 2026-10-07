@@ -1,0 +1,43 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Recuperar acesso | SIGA Escolar{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/favicon_siga_32.png' %}">
+    <link rel="icon" type="image/png" sizes="64x64" href="{% static 'img/favicon_siga_64.png' %}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static 'img/favicon_siga_180.png' %}">
+    <style>
+        body { min-height:100vh; margin:0; background:radial-gradient(circle at top left,rgba(34,197,94,.30),transparent 32%),radial-gradient(circle at bottom right,rgba(37,99,235,.22),transparent 35%),linear-gradient(135deg,#0f2f57 0%,#123a68 45%,#0b172a 100%); display:flex; align-items:center; justify-content:center; padding:24px; font-family:Arial,sans-serif; }
+        .recovery-card { width:min(520px,100%); background:rgba(255,255,255,.99); border-radius:26px; padding:34px; box-sizing:border-box; box-shadow:0 30px 90px rgba(0,0,0,.34); }
+        .logo-card { background:#fff; border:1px solid #e2e8f0; border-radius:18px; padding:14px; margin-bottom:22px; text-align:center; }
+        .logo-card img { width:min(330px,100%); height:auto; }
+        .system-name-mini { display:inline-flex; align-items:center; margin-bottom:14px; padding:7px 11px; border-radius:999px; background:#ecfdf5; color:#047857; font-weight:900; font-size:12px; }
+        h1 { color:#0f2f57; font-size:25px; margin:0 0 10px; }
+        .subtitle { color:#64748b; line-height:1.55; margin:0 0 22px; font-size:14px; }
+        .form-group { margin-bottom:16px; }
+        label { display:block; margin-bottom:7px; color:#334155; font-weight:800; font-size:13px; }
+        input { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:13px; padding:13px 14px; font-size:15px; outline:none; }
+        input:focus { border-color:#198754; box-shadow:0 0 0 4px rgba(25,135,84,.14); }
+        .primary-btn { width:100%; border:none; border-radius:14px; padding:14px 18px; background:linear-gradient(135deg,#198754,#0d6efd); color:#fff; font-weight:900; font-size:15px; cursor:pointer; }
+        .secondary-link { display:block; margin-top:16px; text-align:center; color:#0d6efd; font-weight:800; font-size:14px; text-decoration:none; }
+        .secondary-link:hover { text-decoration:underline; }
+        .info-box { border:1px solid #bfdbfe; background:#eff6ff; color:#1e3a8a; border-radius:14px; padding:13px 14px; line-height:1.5; margin-bottom:18px; font-size:14px; }
+        .success-box { border:1px solid #bbf7d0; background:#f0fdf4; color:#166534; border-radius:14px; padding:13px 14px; line-height:1.55; margin-bottom:18px; font-size:14px; }
+        .error-box, ul.errorlist { background:#fee2e2; color:#991b1b; border:1px solid #fecaca; border-radius:12px; padding:11px 13px; margin:8px 0 14px; font-size:13px; list-style-position:inside; }
+        .helptext, .helptext ul { color:#64748b; font-size:12px; line-height:1.5; margin-top:6px; }
+        @media (max-width:600px) { .recovery-card { padding:24px; } }
+    </style>
+</head>
+<body>
+    <main class="recovery-card">
+        <div class="logo-card">
+            <img src="{% static 'img/logo_siga_escolar_login.png' %}" alt="SIGA Escolar - Sistema Integrado de Gestão da Alimentação Escolar">
+        </div>
+        <div class="system-name-mini">SIGA Escolar</div>
+        {% block recovery_content %}{% endblock %}
+    </main>
+</body>
+</html>

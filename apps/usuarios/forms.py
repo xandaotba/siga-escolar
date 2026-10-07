@@ -90,6 +90,23 @@ class UsuarioForm(forms.Form):
 
         return username
 
+    def clean_email(self):
+        email = (self.cleaned_data.get("email") or "").strip()
+
+        if not email:
+            return ""
+
+        qs = User.objects.filter(email__iexact=email)
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+
+        if qs.exists():
+            raise forms.ValidationError(
+                "Este e-mail já está cadastrado para outro usuário."
+            )
+
+        return email
+
     def clean(self):
         cleaned = super().clean()
         password1 = cleaned.get("password1")
@@ -235,6 +252,23 @@ class MinhaContaForm(forms.Form):
             )
 
         return username
+
+    def clean_email(self):
+        email = (self.cleaned_data.get("email") or "").strip()
+
+        if not email:
+            return ""
+
+        qs = User.objects.filter(email__iexact=email)
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+
+        if qs.exists():
+            raise forms.ValidationError(
+                "Este e-mail já está cadastrado para outro usuário."
+            )
+
+        return email
 
     def clean(self):
         cleaned = super().clean()

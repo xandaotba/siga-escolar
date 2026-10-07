@@ -52,6 +52,8 @@ def usuario_pode_acessar_caminho(user, request):
     caminhos_gerais = [
         reverse("dashboard"),
         reverse("logout"),
+        # Todo usuário autenticado pode editar a própria conta.
+        reverse("usuarios:minha_conta"),
     ]
 
     if any(caminho == item or caminho.startswith(item) for item in caminhos_gerais):
@@ -156,6 +158,10 @@ class LoginRequiredMiddleware:
         caminhos_livres = [
             reverse("login"),
             reverse("logout"),
+            reverse("password_reset"),
+            reverse("password_reset_done"),
+            # A confirmação contém uid/token dinâmicos; liberamos o prefixo.
+            "/redefinir-senha/",
             "/admin/",
             settings.STATIC_URL,
         ]

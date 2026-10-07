@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "anymail",
 
     "apps.core",
     "apps.cadastros",
@@ -153,3 +154,37 @@ SESSION_SAVE_EVERY_REQUEST = True
 
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+# ============================================================
+# E-MAIL / RECUPERAÇÃO DE ACESSO - RESEND VIA HTTPS API
+# ============================================================
+# Railway Hobby bloqueia SMTP externo. Em produção, o SIGA usa a API HTTPS
+# do Resend através do django-anymail. Em desenvolvimento, sem RESEND_API_KEY,
+# os e-mails continuam sendo exibidos no terminal.
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+
+ANYMAIL = {
+    "RESEND_API_KEY": RESEND_API_KEY,
+}
+
+if RESEND_API_KEY:
+    EMAIL_BACKEND = "anymail.backends.resend.EmailBackend"
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# Remetente temporário para testes. Quando houver domínio próprio verificado
+# no Resend, basta trocar DEFAULT_FROM_EMAIL no Railway.
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL",
+    "SIGA Escolar <onboarding@resend.dev>",
+)
+
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+# Link de redefinição válido por 1 hora, salvo alteração por variável de ambiente.
+PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", "3600"))
+
+# Railway/reverse proxy informa ao Django que a requisição original usa HTTPS.
+# Isso garante que os links de redefinição sejam gerados com https:// em produção.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
