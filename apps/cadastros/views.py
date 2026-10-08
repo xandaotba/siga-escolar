@@ -1,11 +1,19 @@
+import json
+import re
 import unicodedata
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_GET
 
 from .forms import EscolaForm, FornecedorForm, ItemForm, MunicipioForm
-from .models import Escola, Fornecedor, Item, Municipio, UnidadeMedida
+from .models import Escola, Fornecedor, Item, Municipio, UnidadeMedida, validar_cnpj
 
 
 
@@ -218,6 +226,220 @@ def alternar_status_municipio(request, municipio_id):
         messages.success(request, "Município inativado com sucesso.")
 
     return redirect("cadastros:municipios")
+
+
+def _somente_digitos_cnpj(valor):
+    return re.sub(r"\D", "", str(valor or ""))
+
+
+def _formatar_cnpj(valor):
+    cnpj = _somente_digitos_cnpj(valor)
+    if len(cnpj) != 14:
+        return valor or ""
+
+    return (
+        f"{cnpj[0:2]}.{cnpj[2:5]}.{cnpj[5:8]}/"
+        f"{cnpj[8:12]}-{cnpj[12:14]}"
+    )
+
+
+def _formatar_cep(valor):
+    cep = re.sub(r"\D", "", str(valor or ""))
+    if len(cep) == 8:
+        return f"{cep[:5]}-{cep[5:]}"
+    return str(valor or "").strip()
+
+
+def _formatar_telefone_cnpj(valor):
+    telefone = re.sub(r"\D", "", str(valor or ""))
+
+    if len(telefone) == 11:
+        return f"({telefone[:2]}) {telefone[2:7]}-{telefone[7:]}"
+
+    if len(telefone) == 10:
+        return f"({telefone[:2]}) {telefone[2:6]}-{telefone[6:]}"
+
+    return str(valor or "").strip()
+
+
+def _texto_endereco_cnpj(dados):
+    tipo_logradouro = str(dados.get("descricao_tipo_de_logradouro") or "").strip()
+    logradouro = str(dados.get("logradouro") or "").strip()
+
+    if tipo_logradouro and logradouro:
+        if not logradouro.casefold().startswith(tipo_logradouro.casefold()):
+            logradouro = f"{tipo_logradouro} {logradouro}"
+    elif tipo_logradouro and not logradouro:
+        logradouro = tipo_logradouro
+
+    numero = str(dados.get("numero") or "").strip()
+    complemento = str(dados.get("complemento") or "").strip()
+    bairro = str(dados.get("bairro") or "").strip()
+    municipio = str(dados.get("municipio") or "").strip()
+    uf = str(dados.get("uf") or "").strip().upper()
+    cep = _formatar_cep(dados.get("cep"))
+
+    partes = []
+
+    if logradouro:
+        partes.append(logradouro)
+
+    if numero:
+        partes.append(numero)
+
+    if complemento:
+        partes.append(complemento)
+
+    if bairro:
+        partes.append(bairro)
+
+    if municipio and uf:
+        partes.append(f"{municipio} - {uf}")
+    elif municipio:
+        partes.append(municipio)
+    elif uf:
+        partes.append(uf)
+
+    if cep:
+        partes.append(cep)
+
+    return ", ".join(partes)[:255]
+
+
+def _formatar_data_iso_br(valor):
+    valor = str(valor or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", valor):
+        ano, mes, dia = valor.split("-")
+        return f"{dia}/{mes}/{ano}"
+    return valor
+
+
+@login_required
+@require_GET
+def consultar_cnpj_fornecedor(request):
+    """
+    Consulta cadastral de CNPJ via BrasilAPI.
+
+    A rota devolve somente os dados necessários à tela de fornecedores.
+    Se a API externa estiver indisponível, o cadastro manual continua funcionando.
+    """
+    cnpj = _somente_digitos_cnpj(request.GET.get("cnpj"))
+
+    if len(cnpj) != 14:
+        return JsonResponse(
+            {
+                "ok": False,
+                "mensagem": "Informe um CNPJ com 14 dígitos.",
+            },
+            status=400,
+        )
+
+    try:
+        validar_cnpj(cnpj)
+    except ValidationError:
+        return JsonResponse(
+            {
+                "ok": False,
+                "mensagem": "CNPJ inválido. Confira os números informados.",
+            },
+            status=400,
+        )
+
+    url = f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}"
+    requisicao = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "SIGA-Escolar/1.0",
+        },
+    )
+
+    try:
+        with urlopen(requisicao, timeout=8) as resposta:
+            dados = json.loads(resposta.read().decode("utf-8"))
+    except HTTPError as erro:
+        if erro.code == 404:
+            mensagem = "CNPJ não encontrado na base de consulta."
+            status = 404
+        elif erro.code == 429:
+            mensagem = (
+                "O serviço de consulta recebeu muitas solicitações. "
+                "Aguarde alguns instantes e tente novamente."
+            )
+            status = 429
+        else:
+            mensagem = "Não foi possível consultar o CNPJ neste momento."
+            status = 502
+
+        return JsonResponse({"ok": False, "mensagem": mensagem}, status=status)
+    except (URLError, TimeoutError, json.JSONDecodeError):
+        return JsonResponse(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Serviço de consulta de CNPJ temporariamente indisponível. "
+                    "Você pode preencher os dados manualmente."
+                ),
+            },
+            status=503,
+        )
+
+    telefone = (
+        dados.get("ddd_telefone_1")
+        or dados.get("ddd_telefone_2")
+        or ""
+    )
+
+    porte = str(
+        dados.get("porte")
+        or dados.get("descricao_porte")
+        or ""
+    ).strip()
+
+    porte_normalizado = unicodedata.normalize("NFKD", porte.upper())
+    porte_normalizado = "".join(
+        ch for ch in porte_normalizado
+        if not unicodedata.combining(ch)
+    )
+
+    eh_me_epp = porte_normalizado in {
+        "MICRO EMPRESA",
+        "EMPRESA DE PEQUENO PORTE",
+    }
+
+    situacao = str(
+        dados.get("descricao_situacao_cadastral") or ""
+    ).strip().upper()
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "dados": {
+                "cnpj": _formatar_cnpj(dados.get("cnpj") or cnpj),
+                "razao_social": str(dados.get("razao_social") or "").strip(),
+                "nome_fantasia": str(dados.get("nome_fantasia") or "").strip(),
+                "endereco": _texto_endereco_cnpj(dados),
+                "telefone": _formatar_telefone_cnpj(telefone),
+                "email": str(dados.get("email") or "").strip().lower(),
+                "situacao_cadastral": situacao,
+                "porte": porte,
+                "fornecedor_me_epp": eh_me_epp,
+                "natureza_juridica": str(
+                    dados.get("natureza_juridica") or ""
+                ).strip(),
+                "cnae_principal": str(
+                    dados.get("cnae_fiscal_descricao") or ""
+                ).strip(),
+                "data_abertura": _formatar_data_iso_br(
+                    dados.get("data_inicio_atividade")
+                ),
+                "matriz_filial": str(
+                    dados.get("descricao_identificador_matriz_filial") or ""
+                ).strip(),
+            },
+        }
+    )
+
 
 def fornecedores(request):
     if request.method == "POST":

@@ -40,6 +40,80 @@
         margin: 0 !important;
         flex: 0 0 auto;
     }
+
+    .cnpj-consulta-linha {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .cnpj-consulta-linha > input {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .cnpj-consulta-botao {
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }
+
+    .cnpj-consulta-status {
+        display: none;
+        margin-top: 8px;
+        border-radius: 10px;
+        padding: 9px 11px;
+        font-size: 12px;
+        line-height: 1.45;
+        border: 1px solid transparent;
+    }
+
+    .cnpj-consulta-status.sucesso {
+        display: block;
+        color: #166534;
+        background: #f0fdf4;
+        border-color: #bbf7d0;
+    }
+
+    .cnpj-consulta-status.aviso {
+        display: block;
+        color: #854d0e;
+        background: #fefce8;
+        border-color: #fde68a;
+    }
+
+    .cnpj-consulta-status.erro {
+        display: block;
+        color: #991b1b;
+        background: #fef2f2;
+        border-color: #fecaca;
+    }
+
+    .cnpj-detalhes {
+        display: none;
+        margin-top: 10px;
+        padding: 12px;
+        border: 1px solid #dbeafe;
+        background: #f8fbff;
+        border-radius: 12px;
+        font-size: 12px;
+        color: #334155;
+        line-height: 1.55;
+    }
+
+    .cnpj-detalhes strong {
+        color: #0f2f57;
+    }
+
+    @media (max-width: 650px) {
+        .cnpj-consulta-linha {
+            align-items: stretch;
+            flex-direction: column;
+        }
+
+        .cnpj-consulta-botao {
+            width: 100%;
+        }
+    }
 </style>
 
 
@@ -160,8 +234,34 @@
 
             <div class="form-group campo-tipo-fornecedor" id="campo_cnpj">
                 <label>CNPJ</label>
-                {{ form.cnpj }}
+
+                <div class="cnpj-consulta-linha">
+                    {{ form.cnpj }}
+                    <button
+                        class="btn btn-primary cnpj-consulta-botao"
+                        type="button"
+                        id="btn_consultar_cnpj"
+                    >
+                        🔍 Carregar informações
+                    </button>
+                </div>
+
                 {{ form.cnpj.errors }}
+
+                <div id="cnpj_consulta_status" class="cnpj-consulta-status"></div>
+
+                <div id="cnpj_detalhes" class="cnpj-detalhes">
+                    <div><strong>Nome fantasia:</strong> <span id="cnpj_nome_fantasia">-</span></div>
+                    <div><strong>Situação cadastral:</strong> <span id="cnpj_situacao">-</span></div>
+                    <div><strong>Porte:</strong> <span id="cnpj_porte">-</span></div>
+                    <div><strong>Natureza jurídica:</strong> <span id="cnpj_natureza">-</span></div>
+                    <div><strong>CNAE principal:</strong> <span id="cnpj_cnae">-</span></div>
+                    <div><strong>Data de abertura:</strong> <span id="cnpj_data_abertura">-</span></div>
+                    <div><strong>Tipo:</strong> <span id="cnpj_matriz_filial">-</span></div>
+                    <div class="texto-ajuda" style="margin-top:6px;">
+                        Dados cadastrais consultados automaticamente. Confira as informações antes de salvar.
+                    </div>
+                </div>
             </div>
 
             <div class="form-group">
@@ -520,10 +620,189 @@
         }
     }
 
+
+    function somenteDigitos(valor) {
+        return String(valor || "").replace(/\D/g, "");
+    }
+
+    function mostrarStatusConsultaCnpj(tipo, mensagem) {
+        const status = document.getElementById("cnpj_consulta_status");
+
+        if (!status) {
+            return;
+        }
+
+        status.className = "cnpj-consulta-status " + tipo;
+        status.textContent = mensagem;
+    }
+
+    function esconderDetalhesCnpj() {
+        const detalhes = document.getElementById("cnpj_detalhes");
+        if (detalhes) {
+            detalhes.style.display = "none";
+        }
+    }
+
+    function textoOuTraco(valor) {
+        const texto = String(valor || "").trim();
+        return texto || "-";
+    }
+
+    function preencherDetalhesCnpj(dados) {
+        const detalhes = document.getElementById("cnpj_detalhes");
+
+        const mapa = {
+            "cnpj_nome_fantasia": dados.nome_fantasia,
+            "cnpj_situacao": dados.situacao_cadastral,
+            "cnpj_porte": dados.porte,
+            "cnpj_natureza": dados.natureza_juridica,
+            "cnpj_cnae": dados.cnae_principal,
+            "cnpj_data_abertura": dados.data_abertura,
+            "cnpj_matriz_filial": dados.matriz_filial,
+        };
+
+        Object.entries(mapa).forEach(function ([id, valor]) {
+            const elemento = document.getElementById(id);
+            if (elemento) {
+                elemento.textContent = textoOuTraco(valor);
+            }
+        });
+
+        if (detalhes) {
+            detalhes.style.display = "block";
+        }
+    }
+
+    function preencherCampoSeHouver(nome, valor) {
+        const campo = document.querySelector('[name="' + nome + '"]');
+
+        if (!campo) {
+            return;
+        }
+
+        const texto = String(valor || "").trim();
+
+        // Se a fonte externa não possuir o dado, preserva o que já estiver digitado.
+        if (texto) {
+            campo.value = texto;
+            campo.dispatchEvent(new Event("input", { bubbles: true }));
+            campo.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+    }
+
+    async function consultarCnpjFornecedor() {
+        const inputCnpj = document.getElementById("id_cnpj") || document.querySelector('[name="cnpj"]');
+        const botao = document.getElementById("btn_consultar_cnpj");
+
+        if (!inputCnpj || !botao) {
+            return;
+        }
+
+        const cnpj = somenteDigitos(inputCnpj.value);
+
+        esconderDetalhesCnpj();
+
+        if (cnpj.length !== 14) {
+            mostrarStatusConsultaCnpj(
+                "erro",
+                "Informe um CNPJ com 14 dígitos antes de carregar as informações."
+            );
+            inputCnpj.focus();
+            return;
+        }
+
+        const textoOriginal = botao.innerHTML;
+        botao.disabled = true;
+        botao.innerHTML = "Consultando...";
+
+        mostrarStatusConsultaCnpj(
+            "aviso",
+            "Consultando os dados cadastrais do CNPJ..."
+        );
+
+        try {
+            const url = "{% url 'cadastros:consultar_cnpj_fornecedor' %}?cnpj=" + encodeURIComponent(cnpj);
+
+            const resposta = await fetch(url, {
+                method: "GET",
+                headers: {
+                    "Accept": "application/json",
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                credentials: "same-origin"
+            });
+
+            let retorno = {};
+
+            try {
+                retorno = await resposta.json();
+            } catch (erroJson) {
+                retorno = {};
+            }
+
+            if (!resposta.ok || !retorno.ok) {
+                throw new Error(
+                    retorno.mensagem ||
+                    "Não foi possível consultar o CNPJ neste momento."
+                );
+            }
+
+            const dados = retorno.dados || {};
+
+            preencherCampoSeHouver("cnpj", dados.cnpj);
+            preencherCampoSeHouver("razao_social", dados.razao_social);
+            preencherCampoSeHouver("endereco", dados.endereco);
+            preencherCampoSeHouver("telefone", dados.telefone);
+            preencherCampoSeHouver("email", dados.email);
+
+            const tipoFornecedor = document.getElementById("id_tipo_fornecedor_chamada")
+                || document.querySelector('[name="tipo_fornecedor_chamada"]');
+
+            const inputMeEpp = document.getElementById("id_fornecedor_me_epp")
+                || document.querySelector('[name="fornecedor_me_epp"]');
+
+            if (
+                inputMeEpp &&
+                (!tipoFornecedor || tipoFornecedor.value !== "individual")
+            ) {
+                inputMeEpp.checked = Boolean(dados.fornecedor_me_epp);
+            }
+
+            preencherDetalhesCnpj(dados);
+
+            const situacao = String(dados.situacao_cadastral || "").toUpperCase();
+
+            if (situacao && situacao !== "ATIVA") {
+                mostrarStatusConsultaCnpj(
+                    "aviso",
+                    "CNPJ localizado, mas a situação cadastral informada é " +
+                    situacao +
+                    ". Confira os dados antes de salvar."
+                );
+            } else {
+                mostrarStatusConsultaCnpj(
+                    "sucesso",
+                    "CNPJ consultado com sucesso. Os dados disponíveis foram carregados no formulário."
+                );
+            }
+        } catch (erro) {
+            mostrarStatusConsultaCnpj(
+                "erro",
+                erro.message ||
+                "Não foi possível consultar o CNPJ. Preencha os dados manualmente."
+            );
+        } finally {
+            botao.disabled = false;
+            botao.innerHTML = textoOriginal;
+        }
+    }
+
     document.addEventListener("DOMContentLoaded", function () {
         const tipo = document.getElementById("id_tipo_fornecedor_chamada") || document.querySelector('[name="tipo_fornecedor_chamada"]');
         const inputQtd = document.getElementById("id_quantidade_caf_dap") || document.querySelector('[name="quantidade_caf_dap"]');
         const inputCafDapJuridica = document.getElementById("id_caf_dap_juridica") || document.querySelector('[name="caf_dap_juridica"]');
+        const btnConsultarCnpj = document.getElementById("btn_consultar_cnpj");
+        const inputCnpjConsulta = document.getElementById("id_cnpj") || document.querySelector('[name="cnpj"]');
 
         if (tipo) {
             tipo.addEventListener("change", atualizarCamposAgriculturaFamiliar);
@@ -532,6 +811,28 @@
         if (inputQtd) {
             inputQtd.addEventListener("input", atualizarCamposAgriculturaFamiliar);
             inputQtd.addEventListener("change", atualizarCamposAgriculturaFamiliar);
+        }
+
+        if (btnConsultarCnpj) {
+            btnConsultarCnpj.addEventListener("click", consultarCnpjFornecedor);
+        }
+
+        if (inputCnpjConsulta) {
+            inputCnpjConsulta.addEventListener("keydown", function (event) {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    consultarCnpjFornecedor();
+                }
+            });
+
+            inputCnpjConsulta.addEventListener("input", function () {
+                const status = document.getElementById("cnpj_consulta_status");
+                if (status) {
+                    status.className = "cnpj-consulta-status";
+                    status.textContent = "";
+                }
+                esconderDetalhesCnpj();
+            });
         }
 
         atualizarCamposAgriculturaFamiliar();

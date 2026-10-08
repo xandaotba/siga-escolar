@@ -13,6 +13,7 @@ urlpatterns = [
     path("municipios/<int:municipio_id>/alternar-status/", views.alternar_status_municipio, name="alternar_status_municipio"),
 
     path("fornecedores/", views.fornecedores, name="fornecedores"),
+    path("fornecedores/consultar-cnpj/", views.consultar_cnpj_fornecedor, name="consultar_cnpj_fornecedor"),
     path("fornecedores/<int:fornecedor_id>/editar/", views.editar_fornecedor, name="editar_fornecedor"),
     path("fornecedores/<int:fornecedor_id>/alternar-status/", views.alternar_status_fornecedor, name="alternar_status_fornecedor"),
 
