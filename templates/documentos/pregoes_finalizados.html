@@ -488,31 +488,15 @@
 
                                         <div class="documentos-submenu-painel">
                                             <div class="documentos-submenu-caixa">
-                                                {% for municipio in pregao.municipios.all %}
-                                                <div class="documentos-municipio">
-                                                    <span class="documentos-municipio-nome">
-                                                        {{ municipio.nome }}/{{ municipio.uf }}
-                                                    </span>
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:extrato_contrato_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
 
-                                                    <div class="documentos-municipio-opcoes">
-                                                        <div class="documentos-submenu-caixa">
-                                                            <a class="documentos-item"
-                                                                href="{% url 'documentos:extrato_contrato_word' pregao.id municipio.id %}">
-                                                                Baixar em Word
-                                                            </a>
-
-                                                            <a class="documentos-item"
-                                                                href="{% url 'documentos:extrato_contrato_pdf' pregao.id municipio.id %}">
-                                                                Baixar em PDF
-                                                            </a>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                {% empty %}
-                                                <div class="documentos-vazio">
-                                                    Nenhum município vinculado.
-                                                </div>
-                                                {% endfor %}
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:extrato_contrato_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
                                             </div>
                                         </div>
                                     </div>

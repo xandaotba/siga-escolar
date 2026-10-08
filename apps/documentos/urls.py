@@ -135,14 +135,25 @@ urlpatterns = [
         name="gerar_extrato_homologacao_chamada_publica_pdf",
     ),
     path(
-        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/<int:municipio_id>/word/",
+        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/word/",
         views.gerar_extrato_contrato_chamada_publica_word,
         name="gerar_extrato_contrato_chamada_publica_word",
     ),
     path(
-        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/<int:municipio_id>/pdf/",
+        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/pdf/",
         views.gerar_extrato_contrato_chamada_publica_pdf,
         name="gerar_extrato_contrato_chamada_publica_pdf",
+    ),
+    # Compatibilidade com links antigos por município: agora geram o documento consolidado.
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/<int:municipio_id>/word/",
+        views.gerar_extrato_contrato_chamada_publica_word,
+        name="gerar_extrato_contrato_chamada_publica_word_legado",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/extrato-contrato/<int:municipio_id>/pdf/",
+        views.gerar_extrato_contrato_chamada_publica_pdf,
+        name="gerar_extrato_contrato_chamada_publica_pdf_legado",
     ),
     path(
         "chamada-publica/adjudicacao/",
@@ -215,14 +226,25 @@ urlpatterns = [
         name="ata_registro_precos_pdf",
     ),
     path(
-        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/<int:municipio_id>/word/",
+        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/word/",
         views.gerar_extrato_contrato_word,
         name="extrato_contrato_word",
     ),
     path(
-        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/<int:municipio_id>/pdf/",
+        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/pdf/",
         views.gerar_extrato_contrato_pdf,
         name="extrato_contrato_pdf",
+    ),
+    # Compatibilidade com links antigos por município: agora geram o documento consolidado.
+    path(
+        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/<int:municipio_id>/word/",
+        views.gerar_extrato_contrato_word,
+        name="extrato_contrato_word_legado",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/extrato-contrato/<int:municipio_id>/pdf/",
+        views.gerar_extrato_contrato_pdf,
+        name="extrato_contrato_pdf_legado",
     ),
     path(
         "pregoes-finalizados/<int:pregao_id>/extrato-homologacao/word/",

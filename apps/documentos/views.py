@@ -2450,7 +2450,7 @@ def gerar_ata_registro_precos_pdf(request, pregao_id):
 
 
 # ============================================================
-# EXTRATO DE CONTRATO - POR CERTAME E MUNICÍPIO
+# EXTRATO DE CONTRATO - UM DOCUMENTO POR CERTAME
 # ============================================================
 
 def caminho_modelo_extrato_contrato():
@@ -2526,18 +2526,56 @@ def _extrato_valor_sem_cifrao(valor):
     return texto
 
 
-def _extrato_contratos_municipio(pregao, municipio):
+def _extrato_municipios_certame(pregao):
+    municipios = list(pregao.municipios.all().order_by("nome", "uf"))
+
+    if not municipios:
+        raise ValueError("Este certame não possui municípios vinculados.")
+
+    return municipios
+
+
+def _extrato_texto_municipios_certame(pregao):
+    municipios = _extrato_municipios_certame(pregao)
+    nomes = [
+        f"{municipio.nome}/{municipio.uf}" if municipio.uf else municipio.nome
+        for municipio in municipios
+    ]
+
+    if len(nomes) == 1:
+        return nomes[0]
+
+    if len(nomes) == 2:
+        return f"{nomes[0]} e {nomes[1]}"
+
+    return ", ".join(nomes[:-1]) + f" e {nomes[-1]}"
+
+
+def _extrato_abrangencia_municipios_certame(pregao):
+    municipios = _extrato_municipios_certame(pregao)
+    texto_municipios = _extrato_texto_municipios_certame(pregao)
+
+    if len(municipios) == 1:
+        return f"do município de {texto_municipios}"
+
+    return f"dos municípios de {texto_municipios}"
+
+
+def _extrato_contratos_certame(pregao):
     """
-    Retorna somente contratos vigentes do pregão e município.
+    Retorna os contratos vigentes de todas as escolas dos municípios vinculados
+    ao certame, produzindo um único Extrato de Contrato por certame.
 
     Contratos cancelados e totalmente distratados não integram o extrato.
     Contratos parcialmente distratados continuam sendo contratos vigentes
     e, por isso, permanecem no documento com o valor registrado no contrato.
     """
+    municipios = _extrato_municipios_certame(pregao)
+
     return list(
         ContratoGerado.objects.filter(
             pregao=pregao,
-            escola__municipio=municipio,
+            escola__municipio__in=municipios,
             status__in=[
                 ContratoGerado.STATUS_GERADO,
                 ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
@@ -2549,6 +2587,7 @@ def _extrato_contratos_municipio(pregao, municipio):
             "fornecedor",
         )
         .order_by(
+            "escola__municipio__nome",
             "escola__nome_escola",
             "fornecedor__razao_social",
             "numero_sequencial",
@@ -2557,13 +2596,12 @@ def _extrato_contratos_municipio(pregao, municipio):
     )
 
 
-def _extrato_agrupar_dados(pregao, municipio):
-    contratos = _extrato_contratos_municipio(pregao, municipio)
+def _extrato_agrupar_dados(pregao):
+    contratos = _extrato_contratos_certame(pregao)
 
     if not contratos:
         raise ValueError(
-            f"Não existem contratos gerados para o município de {municipio.nome} "
-            f"neste certame."
+            "Não existem contratos gerados para as escolas deste certame."
         )
 
     escolas_dict = {}
@@ -2617,7 +2655,11 @@ def _extrato_agrupar_dados(pregao, municipio):
         )
 
     escolas.sort(
-        key=lambda item: (item["escola"].nome_escola or "").casefold()
+        key=lambda item: (
+            (item["escola"].municipio.nome or "").casefold()
+            if item["escola"].municipio else "",
+            (item["escola"].nome_escola or "").casefold(),
+        )
     )
 
     fornecedores = sorted(
@@ -2779,7 +2821,7 @@ def _extrato_inserir_fornecedores_consolidados(documento, fornecedores):
     _extrato_remover_paragrafo(paragrafo_modelo)
 
 
-def montar_extrato_contrato_word(pregao, municipio):
+def montar_extrato_contrato_word(pregao):
     caminho_modelo = caminho_modelo_extrato_contrato()
 
     if not caminho_modelo.exists():
@@ -2788,12 +2830,9 @@ def montar_extrato_contrato_word(pregao, municipio):
             f"Salve o arquivo em {caminho_modelo}."
         )
 
-    if not pregao.municipios.filter(id=municipio.id).exists():
-        raise ValueError(
-            "O município informado não pertence a este certame."
-        )
-
-    dados = _extrato_agrupar_dados(pregao, municipio)
+    # Também valida a existência de pelo menos um município vinculado.
+    _extrato_municipios_certame(pregao)
+    dados = _extrato_agrupar_dados(pregao)
 
     nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
     rg_ordenador = (pregao.rg_ordenador_despesas or "").strip()
@@ -2819,8 +2858,7 @@ def montar_extrato_contrato_word(pregao, municipio):
     substituicoes = {
         "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
         "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
-        "{{NOME DO MUNICÍPIO}}": municipio.nome or "",
-        "{{ESTADO DO MUNICÍPIO}}": municipio.uf or "",
+        "{{ABRANGÊNCIA MUNICÍPIOS}}": _extrato_abrangencia_municipios_certame(pregao),
         "{{VALOR TOTAL CONTRATOS}}": _extrato_valor_sem_cifrao(
             dados["valor_total_geral"]
         ),
@@ -2843,14 +2881,11 @@ def montar_extrato_contrato_word(pregao, municipio):
     return documento
 
 
-def _extrato_nome_base(pregao, municipio):
-    return (
-        f"Extrato_Contrato_Pregao_{pregao.numero}_{pregao.ano}_"
-        f"{municipio.nome}_{municipio.uf}"
-    )
+def _extrato_nome_base(pregao):
+    return f"Extrato_Contrato_Pregao_{pregao.numero}_{pregao.ano}"
 
 
-def gerar_extrato_contrato_word(request, pregao_id, municipio_id):
+def gerar_extrato_contrato_word(request, pregao_id, municipio_id=None):
     pregao = get_object_or_404(
         Pregao,
         id=pregao_id,
@@ -2861,22 +2896,16 @@ def gerar_extrato_contrato_word(request, pregao_id, municipio_id):
     if not usuario_pode_acessar_pregao_documentos(request, pregao):
         return redirect("documentos:pregoes_finalizados")
 
-    municipio = get_object_or_404(
-        pregao.municipios.all(),
-        id=municipio_id,
-    )
-
     try:
-        documento = montar_extrato_contrato_word(pregao, municipio)
+        documento = montar_extrato_contrato_word(pregao)
         return resposta_download_docx(
             documento,
-            _extrato_nome_base(pregao, municipio),
+            _extrato_nome_base(pregao),
         )
     except Exception as erro:
         logger.exception(
-            "Erro ao gerar Extrato de Contrato Word - pregão %s, município %s",
+            "Erro ao gerar Extrato de Contrato Word - pregão %s",
             pregao_id,
-            municipio_id,
         )
         messages.error(
             request,
@@ -2885,7 +2914,7 @@ def gerar_extrato_contrato_word(request, pregao_id, municipio_id):
         return redirect("documentos:pregoes_finalizados")
 
 
-def gerar_extrato_contrato_pdf(request, pregao_id, municipio_id):
+def gerar_extrato_contrato_pdf(request, pregao_id, municipio_id=None):
     pregao = get_object_or_404(
         Pregao,
         id=pregao_id,
@@ -2896,29 +2925,22 @@ def gerar_extrato_contrato_pdf(request, pregao_id, municipio_id):
     if not usuario_pode_acessar_pregao_documentos(request, pregao):
         return redirect("documentos:pregoes_finalizados")
 
-    municipio = get_object_or_404(
-        pregao.municipios.all(),
-        id=municipio_id,
-    )
-
     try:
-        documento = montar_extrato_contrato_word(pregao, municipio)
+        documento = montar_extrato_contrato_word(pregao)
         return resposta_download_pdf(
             documento,
-            _extrato_nome_base(pregao, municipio),
+            _extrato_nome_base(pregao),
         )
     except Exception as erro:
         logger.exception(
-            "Erro ao gerar Extrato de Contrato PDF - pregão %s, município %s",
+            "Erro ao gerar Extrato de Contrato PDF - pregão %s",
             pregao_id,
-            municipio_id,
         )
         messages.error(
             request,
             f"Não foi possível gerar o Extrato de Contrato em PDF: {erro}",
         )
         return redirect("documentos:pregoes_finalizados")
-
 
 
 # ============================================================
@@ -9017,12 +9039,10 @@ def resultado_chamada_publica(request):
     pregao = None
     resultados = ResultadoChamadaPublicaItem.objects.none()
     resumo_itens = []
-    municipios_documentos = []
 
     if pregao_id:
         pregao = get_object_or_404(Pregao, id=pregao_id, tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
         aplicar_status_calculado_chamada_publica(pregao)
-        municipios_documentos = list(pregao.municipios.all().order_by("nome"))
 
         resultados = (
             ResultadoChamadaPublicaItem.objects.filter(
@@ -9070,7 +9090,6 @@ def resultado_chamada_publica(request):
             "pregao": pregao,
             "resultados": resultados,
             "resumo_itens": resumo_itens,
-            "municipios_documentos": municipios_documentos,
         },
     )
 
@@ -9603,7 +9622,7 @@ def gerar_resultado_chamada_publica_pdf(request, pregao_id):
 # ============================================================
 # CHAMADA PÚBLICA - DOCUMENTOS COMPLEMENTARES DO RESULTADO
 # Certidão de Regularidade, Despacho de Homologação,
-# Extrato de Homologação e Extrato de Contrato por Município.
+# Extrato de Homologação e Extrato de Contrato consolidado por certame.
 # ============================================================
 
 
@@ -10152,7 +10171,7 @@ def gerar_extrato_homologacao_chamada_publica_pdf(request, pregao_id):
 
 
 # ------------------------------------------------------------
-# EXTRATO DE CONTRATO DA CHAMADA PÚBLICA - POR MUNICÍPIO
+# EXTRATO DE CONTRATO DA CHAMADA PÚBLICA - UM DOCUMENTO POR CERTAME
 # ------------------------------------------------------------
 
 
@@ -10317,7 +10336,7 @@ def _chamada_extrato_inserir_fornecedores_consolidados(documento, fornecedores):
     _extrato_remover_paragrafo(paragrafo_modelo)
 
 
-def montar_extrato_contrato_chamada_publica_word(pregao, municipio):
+def montar_extrato_contrato_chamada_publica_word(pregao):
     caminho_modelo = _chamada_caminho_modelo(
         "modelo_extrato_contrato_chamada_publica.docx"
     )
@@ -10328,8 +10347,8 @@ def montar_extrato_contrato_chamada_publica_word(pregao, municipio):
             f"Salve o arquivo em {caminho_modelo}."
         )
 
-    if not pregao.municipios.filter(id=municipio.id).exists():
-        raise ValueError("O município informado não pertence a esta Chamada Pública.")
+    # Também valida a existência de pelo menos um município vinculado.
+    _extrato_municipios_certame(pregao)
 
     nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
     cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
@@ -10340,7 +10359,7 @@ def montar_extrato_contrato_chamada_publica_word(pregao, municipio):
             "de gerar o Extrato de Contrato."
         )
 
-    dados = _extrato_agrupar_dados(pregao, municipio)
+    dados = _extrato_agrupar_dados(pregao)
     documento = Document(caminho_modelo)
 
     _chamada_extrato_inserir_blocos_escolas(
@@ -10362,10 +10381,8 @@ def montar_extrato_contrato_chamada_publica_word(pregao, municipio):
     substituicoes = {
         "[N° DA CHAMADA]": str(pregao.numero or ""),
         "[ANO DA CHAMADA]": str(pregao.ano or ""),
-        "[Município da Chamada]": municipio.nome or "",
+        "[ABRANGÊNCIA DA CHAMADA]": _extrato_abrangencia_municipios_certame(pregao),
         "[N° DO PROCESSO]": texto_processo,
-        "[Nome do Município]": municipio.nome or "",
-        "[Estado do Município]": municipio.uf or "MT",
         "[VALOR TOTAL CONTRATOS]": _extrato_valor_sem_cifrao(
             dados["valor_total_geral"]
         ),
@@ -10384,54 +10401,45 @@ def montar_extrato_contrato_chamada_publica_word(pregao, municipio):
     return documento
 
 
-def _chamada_nome_extrato_contrato(pregao, municipio):
-    return (
-        f"Extrato_Contrato_Chamada_Publica_{pregao.numero}_{pregao.ano}_"
-        f"{municipio.nome}_{municipio.uf}"
-    )
+def _chamada_nome_extrato_contrato(pregao):
+    return f"Extrato_Contrato_Chamada_Publica_{pregao.numero}_{pregao.ano}"
 
 
-def gerar_extrato_contrato_chamada_publica_word(request, pregao_id, municipio_id):
+def gerar_extrato_contrato_chamada_publica_word(request, pregao_id, municipio_id=None):
     pregao = _chamada_get_certame_documento(request, pregao_id)
     if pregao is None:
         return redirect("documentos:resultado_chamada_publica")
 
-    municipio = get_object_or_404(pregao.municipios.all(), id=municipio_id)
-
     try:
-        documento = montar_extrato_contrato_chamada_publica_word(pregao, municipio)
+        documento = montar_extrato_contrato_chamada_publica_word(pregao)
         return resposta_download_docx(
             documento,
-            _chamada_nome_extrato_contrato(pregao, municipio),
+            _chamada_nome_extrato_contrato(pregao),
         )
     except Exception as erro:
         logger.exception(
-            "Erro ao gerar Extrato de Contrato da Chamada Pública - certame %s, município %s",
+            "Erro ao gerar Extrato de Contrato da Chamada Pública - certame %s",
             pregao_id,
-            municipio_id,
         )
         messages.error(request, f"Não foi possível gerar o Extrato de Contrato: {erro}")
         return redirect(_chamada_redirect_resultado(pregao))
 
 
-def gerar_extrato_contrato_chamada_publica_pdf(request, pregao_id, municipio_id):
+def gerar_extrato_contrato_chamada_publica_pdf(request, pregao_id, municipio_id=None):
     pregao = _chamada_get_certame_documento(request, pregao_id)
     if pregao is None:
         return redirect("documentos:resultado_chamada_publica")
 
-    municipio = get_object_or_404(pregao.municipios.all(), id=municipio_id)
-
     try:
-        documento = montar_extrato_contrato_chamada_publica_word(pregao, municipio)
+        documento = montar_extrato_contrato_chamada_publica_word(pregao)
         return resposta_download_pdf(
             documento,
-            _chamada_nome_extrato_contrato(pregao, municipio),
+            _chamada_nome_extrato_contrato(pregao),
         )
     except Exception as erro:
         logger.exception(
-            "Erro ao gerar Extrato de Contrato PDF da Chamada Pública - certame %s, município %s",
+            "Erro ao gerar Extrato de Contrato PDF da Chamada Pública - certame %s",
             pregao_id,
-            municipio_id,
         )
         messages.error(request, f"Não foi possível gerar o Extrato de Contrato em PDF: {erro}")
         return redirect(_chamada_redirect_resultado(pregao))

@@ -52,7 +52,7 @@
 <div class="card">
     <h2>Documentos da Chamada Pública</h2>
     <p style="margin-top:-4px; color:#64748b;">
-        Baixe os documentos do resultado em Word ou PDF. O Extrato de Contrato é gerado separadamente para cada município da Chamada Pública.
+        Baixe os documentos do resultado em Word ou PDF. O Extrato de Contrato é único por Chamada Pública e reúne as escolas e fornecedores de todos os municípios vinculados ao certame.
     </p>
 
     <div class="table-wrapper">
@@ -86,24 +86,18 @@
                     <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_homologacao_chamada_publica_pdf' pregao.id %}">PDF</a></td>
                 </tr>
 
-                {% for municipio in municipios_documentos %}
                 <tr>
                     <td>
                         <strong>Extrato de Contrato</strong><br>
-                        <small>{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}</small>
+                        <small>Documento consolidado de todos os municípios do certame</small>
                     </td>
                     <td>
-                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_word' pregao.id municipio.id %}">Word</a>
+                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_word' pregao.id %}">Word</a>
                     </td>
                     <td>
-                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_pdf' pregao.id municipio.id %}">PDF</a>
+                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_pdf' pregao.id %}">PDF</a>
                     </td>
                 </tr>
-                {% empty %}
-                <tr>
-                    <td colspan="3">Nenhum município vinculado à Chamada Pública.</td>
-                </tr>
-                {% endfor %}
             </tbody>
         </table>
     </div>
