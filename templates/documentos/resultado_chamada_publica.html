@@ -49,6 +49,7 @@
 </div>
 
 {% if pregao %}
+{% if request.user.perfil_acesso.perfil != "consulta_escola" %}
 <div class="card">
     <h2>Documentos da Chamada Pública</h2>
     <p style="margin-top:-4px; color:#64748b;">
@@ -102,6 +103,7 @@
         </table>
     </div>
 </div>
+{% endif %}
 
 <div class="card">
     <h2>Resumo por Item</h2>

@@ -438,6 +438,8 @@
                                         Resultado Final
                                     </a>
 
+                                    {# Consulta/Escola não pode baixar documentos administrativos nem gerar contratos #}
+                                    {% if perfil != "consulta_escola" %}
                                     <div class="documentos-separador"></div>
 
                                     <div class="documentos-submenu">
@@ -508,6 +510,8 @@
                                         href="{% url 'documentos:contratos_pregao' pregao.id %}">
                                         Gerar Contratos
                                     </a>
+                                    {% endif %}
+                                    {# fim da restrição Consulta/Escola #}
 
                                 </div>
                             </div>

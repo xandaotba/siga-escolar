@@ -9033,7 +9033,25 @@ def adjudicacao_chamada_publica(request):
 
 
 def resultado_chamada_publica(request):
-    chamadas_publicas = obter_chamadas_publicas_projetos()
+    # Para usuários Consulta/Escola, a lista deve conter somente Chamadas
+    # Públicas que tenham quantitativo ou contrato da escola vinculada.
+    chamadas_queryset = (
+        Pregao.objects.filter(
+            tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA
+        )
+        .prefetch_related("municipios", "fornecedores")
+        .order_by("-ano", "-numero")
+    )
+
+    chamadas_queryset = aplicar_restricao_escola_pregoes(
+        request,
+        chamadas_queryset,
+    )
+
+    chamadas_publicas = list(chamadas_queryset)
+
+    for chamada in chamadas_publicas:
+        aplicar_status_calculado_chamada_publica(chamada)
 
     pregao_id = request.GET.get("pregao")
     pregao = None
@@ -9041,7 +9059,20 @@ def resultado_chamada_publica(request):
     resumo_itens = []
 
     if pregao_id:
-        pregao = get_object_or_404(Pregao, id=pregao_id, tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+        # A mesma restrição da lista é aplicada ao carregamento do certame.
+        # Assim, um usuário Consulta/Escola também não consegue acessar
+        # diretamente pela URL uma Chamada Pública de outra escola.
+        pregao_queryset = aplicar_restricao_escola_pregoes(
+            request,
+            Pregao.objects.filter(
+                tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA
+            ),
+        )
+
+        pregao = get_object_or_404(
+            pregao_queryset,
+            id=pregao_id,
+        )
         aplicar_status_calculado_chamada_publica(pregao)
 
         resultados = (
