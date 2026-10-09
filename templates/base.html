@@ -522,7 +522,42 @@
             padding: 4px 0;
         }
 
-    </style>
+    
+        /* ============================================================
+           RODAPÉ INSTITUCIONAL - SIGA ESCOLAR
+           ============================================================ */
+
+        .main {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        .content {
+            flex: 1 0 auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .siga-footer {
+            margin-top: auto;
+            padding: 18px 12px 4px;
+            border-top: 1px solid #e2e8f0;
+            color: #64748b;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+
+        @media (max-width: 760px) {
+            .siga-footer {
+                padding-top: 14px;
+                font-size: 11px;
+            }
+        }
+
+</style>
 
     <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/favicon_siga_32.png' %}">
     <link rel="icon" type="image/png" sizes="64x64" href="{% static 'img/favicon_siga_64.png' %}">
@@ -888,7 +923,10 @@
 
             <section class="content">
                 {% block content %}{% endblock %}
-                <div class="footer-space"></div>
+
+                <footer class="siga-footer">
+                    Sistema desenvolvido por Alexandre dos Santos - COADM/DRE Sinop. Direitos Reservados
+                </footer>
             </section>
         </main>
     </div>
