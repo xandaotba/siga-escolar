@@ -786,6 +786,24 @@ class PropostaDigital(models.Model):
     )
     importado_em = models.DateTimeField("Importado em", null=True, blank=True)
 
+    motivo_invalidacao = models.TextField(
+        "Motivo da invalidação",
+        blank=True,
+    )
+    invalidada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="propostas_digitais_invalidadas",
+        verbose_name="Invalidada por",
+    )
+    invalidada_em = models.DateTimeField(
+        "Invalidada em",
+        null=True,
+        blank=True,
+    )
+
     class Meta:
         verbose_name = "Proposta Digital"
         verbose_name_plural = "Propostas Digitais"
@@ -793,7 +811,10 @@ class PropostaDigital(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["pregao", "cnpj_hash"],
-                name="unique_proposta_digital_cnpj_pregao",
+                condition=models.Q(
+                    status__in=["finalizada", "importada"]
+                ),
+                name="unique_proposta_digital_ativa_cnpj_pregao",
             )
         ]
         indexes = [

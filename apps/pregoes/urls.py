@@ -52,6 +52,16 @@ urlpatterns = [
         name="localizar_proposta_digital",
     ),
     path(
+        "propostas-iniciais/controle-propostas-digitais/",
+        views.controle_propostas_digitais,
+        name="controle_propostas_digitais",
+    ),
+    path(
+        "propostas-iniciais/controle-propostas-digitais/<int:proposta_id>/invalidar/",
+        views.invalidar_proposta_digital,
+        name="invalidar_proposta_digital",
+    ),
+    path(
         "proposta-digital/<uuid:token>/",
         views.proposta_digital_publica,
         name="proposta_digital_publica",

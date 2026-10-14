@@ -1322,6 +1322,10 @@ def consultar_cnpj_proposta_digital(request, token):
     if PropostaDigital.objects.filter(
         pregao=link.pregao,
         cnpj_hash=cnpj_hash_consulta,
+        status__in=[
+            PropostaDigital.STATUS_FINALIZADA,
+            PropostaDigital.STATUS_IMPORTADA,
+        ],
     ).exists():
         return _json_no_store(
             {
@@ -1703,6 +1707,10 @@ def finalizar_proposta_digital(request, token):
     proposta_mesmo_cnpj = PropostaDigital.objects.filter(
         pregao=pregao,
         cnpj_hash=cnpj_hash,
+        status__in=[
+            PropostaDigital.STATUS_FINALIZADA,
+            PropostaDigital.STATUS_IMPORTADA,
+        ],
     ).first()
 
     if proposta_mesmo_cnpj:
@@ -1758,6 +1766,10 @@ def finalizar_proposta_digital(request, token):
         if PropostaDigital.objects.filter(
             pregao=pregao,
             cnpj_hash=cnpj_hash,
+            status__in=[
+                PropostaDigital.STATUS_FINALIZADA,
+                PropostaDigital.STATUS_IMPORTADA,
+            ],
         ).exists():
             mensagem = (
                 "Já existe uma proposta finalizada para este CNPJ neste pregão. "
@@ -2038,6 +2050,169 @@ def localizar_proposta_digital(request):
     )
 
 
+
+@login_required
+def controle_propostas_digitais(request):
+    """Acompanha Propostas Digitais sem quebrar o sigilo antes da importação."""
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        messages.error(
+            request,
+            "Você não tem permissão para acessar o Controle de Propostas Digitais.",
+        )
+        return redirect("pregoes:propostas_iniciais")
+
+    pregoes_lista = (
+        Pregao.objects.filter(tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL)
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
+
+    pregao_id = request.GET.get("pregao")
+    pregao = None
+    propostas = PropostaDigital.objects.none()
+    resumo = {"total": 0, "finalizadas": 0, "importadas": 0, "invalidadas": 0}
+
+    if pregao_id:
+        pregao = get_object_or_404(
+            Pregao,
+            id=pregao_id,
+            tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+        )
+        propostas = (
+            PropostaDigital.objects.filter(pregao=pregao)
+            .select_related(
+                "fornecedor_importado",
+                "importado_por",
+                "invalidada_por",
+            )
+            .order_by("-finalizada_em", "-id")
+        )
+        resumo = {
+            "total": propostas.count(),
+            "finalizadas": propostas.filter(
+                status=PropostaDigital.STATUS_FINALIZADA
+            ).count(),
+            "importadas": propostas.filter(
+                status=PropostaDigital.STATUS_IMPORTADA
+            ).count(),
+            "invalidadas": propostas.filter(
+                status=PropostaDigital.STATUS_INVALIDADA
+            ).count(),
+        }
+
+    return render(
+        request,
+        "pregoes/controle_propostas_digitais.html",
+        {
+            "pregoes": pregoes_lista,
+            "pregao": pregao,
+            "propostas": propostas,
+            "resumo": resumo,
+        },
+    )
+
+
+@login_required
+@require_POST
+def invalidar_proposta_digital(request, proposta_id):
+    """Invalida uma proposta ainda lacrada, preservando o histórico."""
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        messages.error(
+            request,
+            "Você não tem permissão para invalidar Propostas Digitais.",
+        )
+        return redirect("pregoes:controle_propostas_digitais")
+
+    motivo = " ".join(str(request.POST.get("motivo") or "").strip().split())
+    pregao_retorno = request.POST.get("pregao_id")
+
+    if len(motivo) < 10:
+        messages.error(
+            request,
+            "Informe um motivo para a invalidação com pelo menos 10 caracteres.",
+        )
+        if pregao_retorno:
+            return redirect(
+                f"{reverse('pregoes:controle_propostas_digitais')}?pregao={pregao_retorno}"
+            )
+        return redirect("pregoes:controle_propostas_digitais")
+
+    if len(motivo) > 1000:
+        messages.error(
+            request,
+            "O motivo da invalidação deve possuir no máximo 1000 caracteres.",
+        )
+        if pregao_retorno:
+            return redirect(
+                f"{reverse('pregoes:controle_propostas_digitais')}?pregao={pregao_retorno}"
+            )
+        return redirect("pregoes:controle_propostas_digitais")
+
+    try:
+        with transaction.atomic():
+            proposta = (
+                PropostaDigital.objects.select_for_update()
+                .select_related("pregao")
+                .filter(id=proposta_id)
+                .first()
+            )
+
+            if not proposta:
+                raise ValidationError("A Proposta Digital não foi encontrada.")
+
+            pregao = proposta.pregao
+            pregao_retorno = pregao.id
+
+            if pregao.status != Pregao.STATUS_NAO_INICIADO:
+                raise ValidationError(
+                    "A proposta só pode ser invalidada enquanto o pregão estiver "
+                    "com situação Não iniciado."
+                )
+
+            if proposta.status == PropostaDigital.STATUS_IMPORTADA:
+                raise ValidationError(
+                    "Esta Proposta Digital já foi importada. Esta ação não desfaz "
+                    "propostas iniciais já gravadas."
+                )
+
+            if proposta.status == PropostaDigital.STATUS_INVALIDADA:
+                raise ValidationError("Esta Proposta Digital já está invalidada.")
+
+            if proposta.status != PropostaDigital.STATUS_FINALIZADA:
+                raise ValidationError(
+                    "Esta Proposta Digital não está disponível para invalidação."
+                )
+
+            proposta.status = PropostaDigital.STATUS_INVALIDADA
+            proposta.motivo_invalidacao = motivo
+            proposta.invalidada_por = request.user
+            proposta.invalidada_em = timezone.now()
+            proposta.save(
+                update_fields=[
+                    "status",
+                    "motivo_invalidacao",
+                    "invalidada_por",
+                    "invalidada_em",
+                ]
+            )
+
+    except ValidationError as erro:
+        messages.error(request, str(erro))
+    else:
+        messages.success(
+            request,
+            "Proposta Digital invalidada com sucesso. "
+            "O fornecedor poderá enviar uma nova proposta para este pregão.",
+        )
+
+    if pregao_retorno:
+        return redirect(
+            f"{reverse('pregoes:controle_propostas_digitais')}?pregao={pregao_retorno}"
+        )
+    return redirect("pregoes:controle_propostas_digitais")
+
 def propostas_iniciais(request):
     pregoes_lista = (
         Pregao.objects.filter(
@@ -2065,6 +2240,9 @@ def propostas_iniciais(request):
     itens_pregao = []
     fornecedores = []
     propostas_salvas = {}
+    pode_controlar_propostas_digitais = (
+        _perfil_usuario_atual(request.user) in {"administrador", "pregoeiro"}
+    )
     proposta_digital_import_token = (
         request.POST.get("proposta_digital_import_token", "").strip()
         if request.method == "POST"
@@ -2281,6 +2459,7 @@ def propostas_iniciais(request):
                         "fornecedor_selecionado": None,
                         "propostas_salvas": propostas_salvas,
                         "proposta_digital_import_token": proposta_digital_import_token,
+            "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
                     },
                 )
 
@@ -2513,6 +2692,7 @@ def propostas_iniciais(request):
                         "fornecedor_selecionado": fornecedor_selecionado,
                         "propostas_salvas": propostas_digitadas,
                         "proposta_digital_import_token": proposta_digital_import_token,
+            "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
                     },
                 )
 
@@ -2635,6 +2815,7 @@ def propostas_iniciais(request):
             "fornecedor_selecionado": fornecedor_selecionado,
             "propostas_salvas": propostas_salvas,
             "proposta_digital_import_token": proposta_digital_import_token,
+            "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
         },
     )
 

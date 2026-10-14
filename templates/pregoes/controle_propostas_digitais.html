@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}Controle de Propostas Digitais | Sistema de Pregões{% endblock %}
+{% block page_title %}Controle de Propostas Digitais{% endblock %}
+{% block page_subtitle %}Acompanhe o recebimento e a abertura das propostas digitais sem quebrar o sigilo{% endblock %}
+
+{% block content %}
+<style>
+    .cpd-topo {
+        display:flex; align-items:center; justify-content:space-between;
+        gap:12px; flex-wrap:wrap; margin-bottom:16px;
+    }
+    .cpd-topo p { margin:0; color:#64748b; }
+
+    .cpd-filtro {
+        display:grid; grid-template-columns:minmax(260px,1fr) auto;
+        gap:10px; align-items:end;
+    }
+
+    .cpd-resumo {
+        display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+        gap:10px; margin:16px 0;
+    }
+
+    .cpd-indicador {
+        border:1px solid #e2e8f0; border-radius:11px;
+        background:#f8fafc; padding:13px;
+    }
+    .cpd-indicador small {
+        display:block; color:#64748b; font-weight:700; margin-bottom:4px;
+    }
+    .cpd-indicador strong {
+        display:block; color:#0f172a; font-size:24px; line-height:1;
+    }
+
+    .cpd-aviso-sigilo {
+        margin:14px 0; padding:12px 14px;
+        border:1px solid #bfdbfe; border-radius:10px;
+        background:#eff6ff; color:#1e40af; font-size:13px;
+    }
+
+    .cpd-dados-pregao {
+        display:flex; gap:18px; flex-wrap:wrap;
+        margin:6px 0 2px; color:#475569; font-size:13px;
+    }
+
+    .cpd-tabela-wrap {
+        overflow-x:auto; border:1px solid #e2e8f0; border-radius:10px;
+    }
+    .cpd-tabela {
+        width:100%; min-width:930px; border-collapse:collapse;
+    }
+    .cpd-tabela th, .cpd-tabela td {
+        padding:9px 10px; border-bottom:1px solid #e2e8f0;
+        text-align:left; vertical-align:middle; font-size:13px;
+    }
+    .cpd-tabela th {
+        background:#f8fafc; color:#475569; font-size:11px;
+        text-transform:uppercase; letter-spacing:.025em;
+    }
+    .cpd-tabela tbody tr:last-child td { border-bottom:0; }
+
+    .cpd-protocolo {
+        font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+        font-size:12px; color:#334155; word-break:break-all;
+    }
+
+    .cpd-badge {
+        display:inline-flex; align-items:center; border-radius:999px;
+        padding:4px 8px; font-size:11px; font-weight:800; white-space:nowrap;
+    }
+    .cpd-finalizada { background:#fef3c7; color:#92400e; }
+    .cpd-importada { background:#dcfce7; color:#166534; }
+    .cpd-invalidada { background:#fee2e2; color:#991b1b; }
+
+    .cpd-identidade-protegida {
+        color:#64748b; font-style:italic; font-size:12px;
+    }
+    .cpd-vazio {
+        text-align:center; padding:28px 16px; color:#64748b;
+    }
+
+    @media (max-width:760px) {
+        .cpd-filtro { grid-template-columns:1fr; }
+        .cpd-resumo { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    }
+
+    .cpd-motivo {
+        margin-top:4px; color:#64748b; font-size:11px; line-height:1.35;
+    }
+
+    .cpd-modal-fundo {
+        position:fixed; inset:0; z-index:130000; display:none;
+        align-items:center; justify-content:center; padding:20px;
+        background:rgba(15,23,42,.62);
+    }
+    .cpd-modal-fundo.aberto { display:flex; }
+
+    .cpd-modal {
+        width:min(590px,100%); max-height:90vh; overflow:auto;
+        background:#fff; border-radius:14px; padding:22px;
+        box-shadow:0 25px 65px rgba(15,23,42,.30);
+    }
+    .cpd-modal h3 { margin:0 0 8px; color:#991b1b; }
+    .cpd-modal textarea {
+        width:100%; min-height:110px; resize:vertical; box-sizing:border-box;
+        border:1px solid #cbd5e1; border-radius:8px; padding:10px 11px; font:inherit;
+    }
+    .cpd-modal-acoes {
+        display:flex; justify-content:flex-end; gap:8px;
+        margin-top:14px; flex-wrap:wrap;
+    }
+    .cpd-btn-invalidar { background:#b91c1c; color:#fff; }
+
+</style>
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="cpd-topo">
+    <div>
+        <h2 style="margin:0 0 4px;">Propostas Digitais Recebidas</h2>
+        <p>Consulte a situação dos envelopes digitais enviados para cada Pregão Presencial.</p>
+    </div>
+    <a class="btn btn-secondary" href="{% url 'pregoes:propostas_iniciais' %}">
+        ← Voltar para Propostas Iniciais
+    </a>
+</div>
+
+<div class="card">
+    <form method="get">
+        <div class="cpd-filtro">
+            <div class="form-group" style="margin-bottom:0;">
+                <label for="pregao_controle">Pregão</label>
+                <select name="pregao" id="pregao_controle" required>
+                    <option value="">Selecione o pregão</option>
+                    {% for p in pregoes %}
+                        <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                            Pregão {{ p.numero }}/{{ p.ano }}
+                            — {% for municipio in p.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}
+                            — {{ p.get_status_display }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button class="btn btn-primary" type="submit">Consultar</button>
+        </div>
+    </form>
+</div>
+
+{% if pregao %}
+<div class="card">
+    <h2 style="margin-bottom:4px;">Pregão {{ pregao.numero }}/{{ pregao.ano }}</h2>
+
+    <div class="cpd-dados-pregao">
+        <span><strong>Situação:</strong> {{ pregao.get_status_display }}</span>
+        <span><strong>Data:</strong> {{ pregao.data_pregao|date:"d/m/Y" }}</span>
+        <span><strong>Local:</strong> {{ pregao.local_pregao }}</span>
+    </div>
+
+    <div class="cpd-resumo">
+        <div class="cpd-indicador">
+            <small>Total recebidas</small><strong>{{ resumo.total }}</strong>
+        </div>
+        <div class="cpd-indicador">
+            <small>Aguardando abertura</small><strong>{{ resumo.finalizadas }}</strong>
+        </div>
+        <div class="cpd-indicador">
+            <small>Importadas</small><strong>{{ resumo.importadas }}</strong>
+        </div>
+        <div class="cpd-indicador">
+            <small>Invalidadas</small><strong>{{ resumo.invalidadas }}</strong>
+        </div>
+    </div>
+
+    <div class="cpd-aviso-sigilo">
+        <strong>Sigilo preservado:</strong>
+        enquanto a situação estiver como <strong>Finalizada</strong>, esta tela mostra
+        somente o protocolo e os dados de recebimento. CNPJ, Razão Social, marcas e
+        preços não são exibidos. O fornecedor somente é identificado depois da
+        importação oficial da proposta.
+    </div>
+
+    <div class="cpd-tabela-wrap">
+        <table class="cpd-tabela">
+            <thead>
+                <tr>
+                    <th style="width:255px;">Protocolo</th>
+                    <th style="width:130px;">Situação</th>
+                    <th style="width:165px;">Finalizada em</th>
+                    <th style="width:190px;">Movimentação</th>
+                    <th>Fornecedor</th>
+                    <th style="width:170px;">Responsável</th>
+                    <th style="width:115px; text-align:center;">Ação</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for proposta in propostas %}
+                <tr>
+                    <td><span class="cpd-protocolo">{{ proposta.protocolo }}</span></td>
+                    <td>
+                        {% if proposta.status == "finalizada" %}
+                            <span class="cpd-badge cpd-finalizada">● Finalizada</span>
+                        {% elif proposta.status == "importada" %}
+                            <span class="cpd-badge cpd-importada">● Importada</span>
+                        {% elif proposta.status == "invalidada" %}
+                            <span class="cpd-badge cpd-invalidada">● Invalidada</span>
+                        {% else %}
+                            {{ proposta.get_status_display }}
+                        {% endif %}
+                    </td>
+                    <td>{{ proposta.finalizada_em|date:"d/m/Y H:i:s" }}</td>
+                    <td>
+                        {% if proposta.status == "importada" and proposta.importado_em %}
+                            <strong>Importada:</strong><br>
+                            {{ proposta.importado_em|date:"d/m/Y H:i:s" }}
+                        {% elif proposta.status == "invalidada" and proposta.invalidada_em %}
+                            <strong>Invalidada:</strong><br>
+                            {{ proposta.invalidada_em|date:"d/m/Y H:i:s" }}
+                            {% if proposta.motivo_invalidacao %}
+                                <div class="cpd-motivo">
+                                    <strong>Motivo:</strong> {{ proposta.motivo_invalidacao }}
+                                </div>
+                            {% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if proposta.status == "importada" and proposta.fornecedor_importado %}
+                            <strong>{{ proposta.fornecedor_importado.razao_social }}</strong>
+                        {% else %}
+                            <span class="cpd-identidade-protegida">Identidade protegida</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if proposta.status == "importada" and proposta.importado_por %}
+                            {% firstof proposta.importado_por.get_full_name proposta.importado_por.username %}
+                        {% elif proposta.status == "invalidada" and proposta.invalidada_por %}
+                            {% firstof proposta.invalidada_por.get_full_name proposta.invalidada_por.username %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td style="text-align:center;">
+                        {% if proposta.status == "finalizada" and pregao.status == "nao_iniciado" %}
+                            <button type="button"
+                                    class="btn cpd-btn-invalidar btn-abrir-invalidacao"
+                                    data-url="{% url 'pregoes:invalidar_proposta_digital' proposta.id %}"
+                                    data-protocolo="{{ proposta.protocolo }}">
+                                Invalidar
+                            </button>
+                        {% else %}—{% endif %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" class="cpd-vazio">
+                        Nenhuma Proposta Digital foi recebida para este pregão.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="cpd-vazio">
+        Selecione um Pregão Presencial para visualizar as Propostas Digitais recebidas.
+    </div>
+</div>
+{% endif %}
+
+
+<div class="cpd-modal-fundo" id="modal-invalidacao" aria-hidden="true">
+    <div class="cpd-modal" role="dialog" aria-modal="true" aria-labelledby="titulo-invalidacao">
+        <h3 id="titulo-invalidacao">Invalidar Proposta Digital</h3>
+
+        <p style="margin:0 0 10px;color:#475569;">
+            Protocolo: <strong id="protocolo-invalidacao"></strong>
+        </p>
+
+        <div class="alert alert-error" style="margin-bottom:12px;">
+            A proposta continuará registrada no histórico como <strong>Invalidada</strong>.
+            Depois disso, o mesmo CNPJ poderá enviar uma nova proposta enquanto o pregão
+            estiver como <strong>Não iniciado</strong>.
+        </div>
+
+        <form method="post" id="form-invalidar-proposta">
+            {% csrf_token %}
+            <input type="hidden" name="pregao_id" value="{{ pregao.id|default:'' }}">
+
+            <div class="form-group">
+                <label for="motivo_invalidacao">Motivo da invalidação</label>
+                <textarea name="motivo"
+                          id="motivo_invalidacao"
+                          minlength="10"
+                          maxlength="1000"
+                          required
+                          placeholder="Descreva o motivo da invalidação..."></textarea>
+                <small style="display:block;margin-top:5px;color:#64748b;">
+                    Mínimo de 10 caracteres. O motivo ficará registrado no histórico.
+                </small>
+            </div>
+
+            <div class="cpd-modal-acoes">
+                <button type="button" class="btn btn-secondary" id="btn-cancelar-invalidacao">
+                    Cancelar
+                </button>
+                <button type="submit" class="btn cpd-btn-invalidar">
+                    Confirmar invalidação
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const modal = document.getElementById("modal-invalidacao");
+    const form = document.getElementById("form-invalidar-proposta");
+    const protocolo = document.getElementById("protocolo-invalidacao");
+    const motivo = document.getElementById("motivo_invalidacao");
+    const cancelar = document.getElementById("btn-cancelar-invalidacao");
+
+    function fecharModal() {
+        modal?.classList.remove("aberto");
+        modal?.setAttribute("aria-hidden", "true");
+        if (form) form.action = "";
+        if (motivo) motivo.value = "";
+    }
+
+    document.querySelectorAll(".btn-abrir-invalidacao").forEach(function (botao) {
+        botao.addEventListener("click", function () {
+            if (!modal || !form) return;
+            form.action = this.dataset.url || "";
+            protocolo.textContent = this.dataset.protocolo || "";
+            modal.classList.add("aberto");
+            modal.setAttribute("aria-hidden", "false");
+            setTimeout(function () { motivo?.focus(); }, 50);
+        });
+    });
+
+    cancelar?.addEventListener("click", fecharModal);
+    modal?.addEventListener("click", function (event) {
+        if (event.target === modal) fecharModal();
+    });
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && modal?.classList.contains("aberto")) {
+            fecharModal();
+        }
+    });
+});
+</script>
+
+{% endblock %}

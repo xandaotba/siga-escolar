@@ -86,6 +86,13 @@
         color: #64748b;
     }
 
+    .proposta-digital-acoes {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
     .pd-modal-fundo {
         position: fixed;
         inset: 0;
@@ -386,9 +393,17 @@
         <h2>Proposta Digital</h2>
         <p>Gere um único link do pregão para encaminhar aos fornecedores antes da sessão.</p>
     </div>
-    <button type="button" class="btn btn-primary" id="btn-abrir-proposta-digital">
-        🔗 Gerar link para Proposta Digital
-    </button>
+    <div class="proposta-digital-acoes">
+        <button type="button" class="btn btn-primary" id="btn-abrir-proposta-digital">
+            🔗 Gerar link para Proposta Digital
+        </button>
+        {% if pode_controlar_propostas_digitais %}
+        <a class="btn btn-secondary"
+           href="{% url 'pregoes:controle_propostas_digitais' %}{% if pregao %}?pregao={{ pregao.id }}{% endif %}">
+            📋 Controle de Propostas Digitais
+        </a>
+        {% endif %}
+    </div>
 </div>
 
 <div class="pd-modal-fundo" id="modal-proposta-digital" aria-hidden="true">
