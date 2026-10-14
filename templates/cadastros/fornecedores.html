@@ -7,6 +7,43 @@
 {% block content %}
 
 <style>
+    .card {
+    font-size: 14px;
+}
+
+.card h2 {
+    font-size: 18px;
+}
+
+.card h3 {
+    font-size: 16px;
+}
+
+.card label {
+    font-size: 14px;
+}
+
+.card input,
+.card select,
+.card textarea,
+.card button,
+.card .btn {
+    font-size: 13px;
+}
+
+.card table {
+    font-size: 13px;
+}
+
+.card table th,
+.card table td {
+    font-size: 12px;
+}
+
+
+
+
+
     .fornecedor-chamada-box {
         border: 1px solid #dbeafe;
         background: #eff6ff;
@@ -404,7 +441,6 @@
                         <th>Razão Social</th>
                         <th>Tipo</th>
                         <th>CNPJ/CPF</th>
-                        <th>Limite Anual</th>
                         <th>Telefone</th>
                         <th>Status</th>
                         <th>Ações</th>
@@ -423,7 +459,6 @@
                             {{ fornecedor.cnpj }}
                             {% endif %}
                         </td>
-                        <td>{{ fornecedor.get_limite_anual_chamada_publica_display }}</td>
                         <td>{{ fornecedor.telefone }}</td>
                         <td>
                             {% if fornecedor.ativo %}
@@ -456,7 +491,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="7">Nenhum fornecedor cadastrado.</td>
+                        <td colspan="6">Nenhum fornecedor cadastrado.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
