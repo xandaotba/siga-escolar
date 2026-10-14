@@ -156,28 +156,27 @@ SESSION_SAVE_EVERY_REQUEST = True
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # ============================================================
-# E-MAIL / RECUPERAÇÃO DE ACESSO - RESEND VIA HTTPS API
+# E-MAIL / RECUPERAÇÃO DE ACESSO - POSTMARK VIA HTTPS API
 # ============================================================
-# Railway Hobby bloqueia SMTP externo. Em produção, o SIGA usa a API HTTPS
-# do Resend através do django-anymail. Em desenvolvimento, sem RESEND_API_KEY,
-# os e-mails continuam sendo exibidos no terminal.
+# O SIGA envia e-mails transacionais pela API HTTPS do Postmark através
+# do django-anymail. Em desenvolvimento, sem POSTMARK_SERVER_TOKEN, os
+# e-mails continuam sendo exibidos no terminal.
 
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+POSTMARK_SERVER_TOKEN = os.environ.get("POSTMARK_SERVER_TOKEN", "").strip()
 
 ANYMAIL = {
-    "RESEND_API_KEY": RESEND_API_KEY,
+    "POSTMARK_SERVER_TOKEN": POSTMARK_SERVER_TOKEN,
 }
 
-if RESEND_API_KEY:
-    EMAIL_BACKEND = "anymail.backends.resend.EmailBackend"
+if POSTMARK_SERVER_TOKEN:
+    EMAIL_BACKEND = "anymail.backends.postmark.EmailBackend"
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
-# Remetente temporário para testes. Quando houver domínio próprio verificado
-# no Resend, basta trocar DEFAULT_FROM_EMAIL no Railway.
+# O endereço abaixo precisa estar confirmado em Sender Signatures no Postmark.
 DEFAULT_FROM_EMAIL = os.environ.get(
     "DEFAULT_FROM_EMAIL",
-    "SIGA Escolar <onboarding@resend.dev>",
+    "SIGA Escolar <snp.coadm@edu.mt.gov.br>",
 )
 
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
