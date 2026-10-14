@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    <title>Proposta Digital | SIGA Escolar</title>
+    <style>
+        :root {
+            --azul: #16324f;
+            --azul2: #244f73;
+            --verde: #157347;
+            --verde-claro: #ecfdf5;
+            --cinza: #64748b;
+            --borda: #dbe3ec;
+            --fundo: #f5f7fb;
+            --erro: #b91c1c;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: var(--fundo);
+            color: #1e293b;
+            font-family: Arial, Helvetica, sans-serif;
+            line-height: 1.45;
+        }
+        .topo {
+            background: linear-gradient(135deg, var(--azul), var(--azul2));
+            color: #fff;
+            padding: 22px 20px;
+        }
+        .topo-inner, .conteudo { max-width: 1180px; margin: 0 auto; }
+        .marca { font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; opacity: .88; }
+        .topo h1 { margin: 5px 0 2px; font-size: 27px; }
+        .topo p { margin: 0; opacity: .92; }
+        .conteudo { padding: 22px 16px 38px; }
+        .card {
+            background: #fff;
+            border: 1px solid var(--borda);
+            border-radius: 14px;
+            box-shadow: 0 5px 18px rgba(15,23,42,.06);
+            padding: 20px;
+            margin-bottom: 18px;
+        }
+        .card h2 { margin: 0 0 8px; font-size: 20px; color: var(--azul); }
+        .muted { color: var(--cinza); }
+        .grade-info { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+        .info { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 11px 12px; }
+        .info small { display:block; color:var(--cinza); font-weight:700; margin-bottom:3px; }
+        .info strong { font-size: 15px; }
+        label { display:block; font-weight:800; margin-bottom:6px; }
+        input[type=text] {
+            width: 100%; padding: 10px 11px; border: 1px solid #cbd5e1; border-radius: 8px;
+            font: inherit; background:#fff;
+        }
+        input:focus { outline: 2px solid #bfdbfe; border-color:#2563eb; }
+        button {
+            border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 800; cursor: pointer; font: inherit;
+        }
+        button:disabled { opacity:.55; cursor:not-allowed; }
+        .btn-primary { background:#2563eb; color:#fff; }
+        .btn-success { background:var(--verde); color:#fff; }
+        .btn-light { background:#e2e8f0; color:#1e293b; }
+        .linha-cnpj { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:10px; align-items:end; }
+        .empresa-ok { display:none; margin-top:12px; padding:12px 14px; background:var(--verde-claro); border:1px solid #a7f3d0; border-radius:9px; }
+        .empresa-ok strong { color:#065f46; }
+        .erro { display:none; margin-top:12px; padding:11px 13px; border-radius:8px; background:#fef2f2; color:var(--erro); font-weight:700; }
+        .aviso { padding:12px 14px; border-radius:9px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; margin-top:12px; }
+        .table-wrapper { overflow-x:auto; border:1px solid var(--borda); border-radius:10px; }
+        table { width:100%; border-collapse:collapse; min-width:900px; }
+        th, td { padding:10px 9px; border-bottom:1px solid #e2e8f0; vertical-align:middle; text-align:left; }
+        th { background:#f8fafc; color:#475569; font-size:12px; text-transform:uppercase; letter-spacing:.02em; }
+        tbody tr:last-child td { border-bottom:0; }
+        .num { width:70px; text-align:center; font-weight:800; }
+        .qtd { width:105px; }
+        .unidade { width:120px; }
+        .marca-col { width:180px; }
+        .preco-col { width:150px; }
+        .nao-col { width:105px; text-align:center; }
+        .produto strong { display:block; }
+        .produto small { display:block; color:var(--cinza); margin-top:2px; }
+        .linha-nao-cotar { opacity:.56; background:#f8fafc; }
+        .acoes { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; flex-wrap:wrap; }
+        .bloqueado { opacity:.55; pointer-events:none; }
+        .modal-bg { position:fixed; inset:0; z-index:9999; display:none; align-items:center; justify-content:center; padding:18px; background:rgba(15,23,42,.58); }
+        .modal-bg.aberto { display:flex; }
+        .modal { width:min(820px,100%); max-height:90vh; overflow:auto; background:#fff; border-radius:14px; padding:22px; box-shadow:0 25px 60px rgba(15,23,42,.30); }
+        .modal h2 { margin-top:0; color:var(--azul); }
+        .resumo-box { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:13px; margin:12px 0; }
+        .resumo-box div { margin:4px 0; }
+
+        .revisao-itens {
+            margin:12px 0 4px;
+        }
+
+        .revisao-itens-titulo {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            margin-bottom:7px;
+            color:#334155;
+            font-size:13px;
+        }
+
+        .revisao-itens-tabela-wrap {
+            max-height:270px;
+            overflow:auto;
+            border:1px solid #dbe3ec;
+            border-radius:9px;
+            background:#ffffff;
+        }
+
+        .revisao-itens table {
+            width:100%;
+            min-width:0;
+            border-collapse:collapse;
+            table-layout:fixed;
+        }
+
+        .revisao-itens th,
+        .revisao-itens td {
+            padding:6px 8px;
+            border-bottom:1px solid #edf2f7;
+            font-size:12px;
+            line-height:1.25;
+            vertical-align:middle;
+        }
+
+        .revisao-itens th {
+            position:sticky;
+            top:0;
+            z-index:2;
+            background:#f8fafc;
+            color:#475569;
+            font-size:11px;
+            text-transform:uppercase;
+            letter-spacing:.02em;
+        }
+
+        .revisao-itens tbody tr:last-child td {
+            border-bottom:0;
+        }
+
+        .revisao-itens tbody tr:nth-child(even) {
+            background:#fbfdff;
+        }
+
+        .revisao-item-nome {
+            width:55%;
+            overflow-wrap:anywhere;
+        }
+
+        .revisao-item-marca {
+            width:25%;
+            overflow-wrap:anywhere;
+        }
+
+        .revisao-item-preco {
+            width:20%;
+            text-align:right;
+            white-space:nowrap;
+            font-weight:800;
+        }
+
+        .revisao-item-ordem {
+            display:inline-block;
+            min-width:24px;
+            margin-right:4px;
+            color:#64748b;
+            font-weight:800;
+        }
+
+        .revisao-vazio {
+            padding:12px !important;
+            text-align:center !important;
+            color:#64748b;
+            font-style:italic;
+        }
+        .sucesso { display:none; text-align:center; }
+        .codigo { margin:14px auto; padding:14px; max-width:560px; border:2px dashed #16a34a; border-radius:10px; background:#f0fdf4; font-size:25px; font-weight:900; letter-spacing:.08em; color:#166534; word-break:break-word; }
+        #qrcode { display:flex; justify-content:center; margin:16px 0; }
+        #qrcode img, #qrcode canvas { max-width:190px; height:auto; }
+        .protocolo { font-family:monospace; font-size:13px; word-break:break-all; }
+        .fechado { text-align:center; padding:38px 18px; }
+        .fechado h2 { font-size:24px; }
+        .rodape { text-align:center; color:#64748b; font-size:12px; padding:12px; }
+        @media (max-width:760px) {
+            .grade-info { grid-template-columns:1fr; }
+            .linha-cnpj { grid-template-columns:1fr; }
+            .topo h1 { font-size:22px; }
+            .card { padding:15px; }
+            .codigo { font-size:19px; letter-spacing:.04em; }
+            .modal { padding:16px; }
+            .revisao-itens-titulo { align-items:flex-start; flex-direction:column; gap:2px; }
+            .revisao-item-nome { width:50%; }
+            .revisao-item-marca { width:27%; }
+            .revisao-item-preco { width:23%; }
+            .revisao-itens th,
+            .revisao-itens td { padding:6px; font-size:11px; }
+        }
+        @media print {
+            body * { visibility:hidden !important; }
+            #sucesso, #sucesso * { visibility:visible !important; }
+            #sucesso { position:absolute; left:0; top:0; width:100%; display:block !important; box-shadow:none; border:0; }
+            #sucesso .acoes { display:none !important; }
+            .nao-imprimir { display:none !important; }
+        }
+    
+        .razao-manual-box {
+            display: none;
+            margin-top: 14px;
+            padding: 14px;
+            border: 1px solid #f59e0b;
+            border-radius: 10px;
+            background: #fffbeb;
+        }
+
+        .razao-manual-box label {
+            display: block;
+            margin-top: 12px;
+            margin-bottom: 6px;
+            font-weight: 800;
+        }
+
+        .linha-razao-manual {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: end;
+        }
+
+        .linha-razao-manual input {
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        @media (max-width: 720px) {
+            .linha-razao-manual {
+                grid-template-columns: 1fr;
+            }
+        }
+
+</style>
+</head>
+<body>
+<header class="topo nao-imprimir">
+    <div class="topo-inner">
+        <div class="marca">SIGA Escolar</div>
+        <h1>Proposta Digital de Preços</h1>
+        <p>Pregão Presencial {{ pregao.numero }}/{{ pregao.ano }}</p>
+    </div>
+</header>
+
+<main class="conteudo">
+    {% if not disponivel %}
+        <section class="card fechado">
+            <h2>Recebimento indisponível</h2>
+            <p class="muted">
+                Este link não está aberto para novas propostas. O recebimento é permitido somente antes do início do pregão e enquanto houver itens disponíveis.
+            </p>
+        </section>
+    {% else %}
+        <section class="card nao-imprimir">
+            <h2>Identificação do Pregão</h2>
+            <div class="grade-info">
+                <div class="info"><small>Pregão</small><strong>{{ pregao.numero }}/{{ pregao.ano }}</strong></div>
+                <div class="info"><small>Data prevista</small><strong>{{ pregao.data_pregao|date:"d/m/Y" }}</strong></div>
+                <div class="info"><small>Local</small><strong>{{ pregao.local_pregao }}</strong></div>
+            </div>
+            <div class="aviso">
+                Esta página é para o Fornecedor que estiver interesse em participar deste Pregão preencher a proposta de preços que será utilizada.
+            </div>
+        </section>
+
+        <section class="card nao-imprimir" id="card-cnpj">
+            <h2>1. Identifique o fornecedor</h2>
+            <p class="muted">Digite o CNPJ e clique em Consultar. Confira a Razão Social antes de preencher os preços.</p>
+            <div class="linha-cnpj">
+                <div>
+                    <label for="cnpj">CNPJ</label>
+                    <input type="text" id="cnpj" inputmode="numeric" maxlength="18" placeholder="00.000.000/0000-00" autocomplete="off">
+                </div>
+                <button type="button" class="btn-primary" id="btn-consultar-cnpj">Consultar CNPJ</button>
+            </div>
+            <div class="empresa-ok" id="empresa-ok">
+                <small class="muted" id="rotulo-razao-social">Razão Social localizada</small><br>
+                <strong id="razao-social"></strong><br>
+                <span id="cnpj-formatado"></span>
+            </div>
+
+            <div class="razao-manual-box" id="razao-manual-box">
+                <div class="aviso">
+                    <strong>Consulta automática indisponível.</strong><br>
+                    Informe a Razão Social manualmente, exatamente como consta no cadastro do CNPJ,
+                    para continuar o preenchimento da proposta.
+                </div>
+                <label for="razao-social-manual">Razão Social</label>
+                <div class="linha-razao-manual">
+                    <input
+                        type="text"
+                        id="razao-social-manual"
+                        maxlength="255"
+                        autocomplete="organization"
+                        placeholder="Digite a Razão Social"
+                    >
+                    <button type="button" class="btn-primary" id="btn-confirmar-razao-manual">
+                        Continuar
+                    </button>
+                </div>
+                <div class="erro" id="erro-razao-manual"></div>
+            </div>
+
+            <div class="erro" id="erro-cnpj"></div>
+        </section>
+
+        <section class="card nao-imprimir bloqueado" id="card-itens">
+            <h2>2. Informe marca e preço</h2>
+            <p class="muted">
+                Preencha somente os produtos que deseja cotar. Ao clicar em
+                <strong>Revisar e finalizar proposta</strong>, todo item que estiver com
+                <strong>Marca e Preço vazios</strong> será considerado automaticamente como
+                <strong>Não participa</strong>. A opção “Não cotar” continua disponível apenas se quiser marcar manualmente.
+            </p>
+            <form id="form-proposta">
+                {% csrf_token %}
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="num">Item</th>
+                                <th>Produto</th>
+                                <th class="unidade">Unidade</th>
+                                <th class="qtd">Qtd. total</th>
+                                <th class="marca-col">Marca</th>
+                                <th class="preco-col">Preço unitário</th>
+                                <th class="nao-col">Não cotar<br><small>(opcional)</small></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for pi in itens_pregao %}
+                            <tr class="linha-item"
+                                data-pregao-item-id="{{ pi.id }}"
+                                data-item-id="{{ pi.item.id }}"
+                                data-ordem="{{ pi.ordem }}">
+                                <td class="num">{{ pi.ordem }}</td>
+                                <td class="produto">
+                                    <strong class="nome-item">{{ pi.item.nome_item }}</strong>
+                                    {% if pi.item.descricao %}<small>{{ pi.item.descricao }}</small>{% endif %}
+                                </td>
+                                <td class="unidade">{{ pi.item.get_unidade_medida_display|default:pi.item.unidade_medida }}</td>
+                                <td class="qtd">{{ pi.quantidade_total }}</td>
+                                <td><input type="text" class="marca" maxlength="150" placeholder="Marca"></td>
+                                <td><input type="text" class="preco" inputmode="decimal" maxlength="20" placeholder="0,00"></td>
+                                <td class="nao-col"><input type="checkbox" class="nao-cotar" aria-label="Não cotar item {{ pi.ordem }}"></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="erro" id="erro-proposta"></div>
+                <div class="acoes">
+                    <button type="button" class="btn-success" id="btn-revisar" disabled>Revisar e finalizar proposta</button>
+                </div>
+            </form>
+        </section>
+
+        <div class="modal-bg" id="modal-confirmacao" aria-hidden="true">
+            <div class="modal">
+                <h2>Confirme antes de finalizar</h2>
+                <p>
+                    Revise as informações abaixo. Os itens deixados sem Marca e Preço foram considerados
+                    automaticamente como <strong>não cotados</strong>.
+                    <strong>Depois de finalizada, a proposta não poderá ser alterada por este link.</strong>
+                </p>
+                <div class="resumo-box">
+                    <div><strong>Pregão:</strong> {{ pregao.numero }}/{{ pregao.ano }}</div>
+                    <div><strong>CNPJ:</strong> <span id="resumo-cnpj"></span></div>
+                    <div><strong>Razão Social:</strong> <span id="resumo-razao"></span></div>
+                    <div><strong>Itens cotados:</strong> <span id="resumo-cotados"></span></div>
+                    <div><strong>Itens não cotados:</strong> <span id="resumo-nao-cotados"></span></div>
+                </div>
+
+                <div class="revisao-itens">
+                    <div class="revisao-itens-titulo">
+                        <strong>Itens cotados para conferência</strong>
+                        <span class="muted">Confira marca e preço antes de finalizar</span>
+                    </div>
+
+                    <div class="revisao-itens-tabela-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th class="revisao-item-nome">Item / Produto</th>
+                                    <th class="revisao-item-marca">Marca</th>
+                                    <th class="revisao-item-preco">Preço</th>
+                                </tr>
+                            </thead>
+                            <tbody id="resumo-itens-cotados"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="erro" id="erro-finalizar"></div>
+                <div class="acoes">
+                    <button type="button" class="btn-light" id="btn-voltar">Voltar e corrigir</button>
+                    <button type="button" class="btn-success" id="btn-finalizar">Confirmar e finalizar</button>
+                </div>
+            </div>
+        </div>
+
+        <section class="card sucesso" id="sucesso">
+            <div class="marca" style="color:#166534;">SIGA Escolar</div>
+            <h2 style="color:#166534;font-size:26px;">Proposta registrada com sucesso</h2>
+            <p><strong>Pregão Presencial {{ pregao.numero }}/{{ pregao.ano }}</strong></p>
+            <p><span id="sucesso-razao"></span><br><span id="sucesso-cnpj"></span></p>
+            <p class="muted">Apresente o código abaixo à equipe do pregão somente no momento da abertura das propostas.</p>
+            <div class="codigo" id="codigo-abertura"></div>
+            <div id="qrcode"></div>
+            <p><strong>Protocolo:</strong><br><span class="protocolo" id="protocolo"></span></p>
+            <div class="aviso" style="text-align:left;">
+                <strong>Guarde este código.</strong> Ele contém o segredo necessário para abrir sua proposta. O SIGA não armazena o código de abertura e não consegue recuperá-lo antes da sessão do pregão.
+            </div>
+            <div class="acoes">
+                <button type="button" class="btn-primary" id="btn-copiar-codigo">Copiar código</button>
+                <button type="button" class="btn-light" onclick="window.print()">Imprimir comprovante</button>
+            </div>
+        </section>
+    {% endif %}
+</main>
+
+<footer class="rodape nao-imprimir">Sistema desenvolvido por Alexandre dos Santos - COADM/DRE Sinop. Direitos Reservados</footer>
+
+{% if disponivel %}
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+(function () {
+    "use strict";
+
+    const pregaoId = "{{ pregao.id }}";
+    const estruturaHash = "{{ estrutura_hash|escapejs }}";
+    const tokenPath = window.location.pathname;
+    const cnpjInput = document.getElementById("cnpj");
+    const btnConsultar = document.getElementById("btn-consultar-cnpj");
+    const empresaOk = document.getElementById("empresa-ok");
+    const razaoEl = document.getElementById("razao-social");
+    const cnpjFmtEl = document.getElementById("cnpj-formatado");
+    const rotuloRazaoSocial = document.getElementById("rotulo-razao-social");
+    const erroCnpj = document.getElementById("erro-cnpj");
+    const razaoManualBox = document.getElementById("razao-manual-box");
+    const razaoManualInput = document.getElementById("razao-social-manual");
+    const btnConfirmarRazaoManual = document.getElementById("btn-confirmar-razao-manual");
+    const erroRazaoManual = document.getElementById("erro-razao-manual");
+    const cardItens = document.getElementById("card-itens");
+    const btnRevisar = document.getElementById("btn-revisar");
+    const erroProposta = document.getElementById("erro-proposta");
+    const modal = document.getElementById("modal-confirmacao");
+    const btnVoltar = document.getElementById("btn-voltar");
+    const btnFinalizar = document.getElementById("btn-finalizar");
+    const erroFinalizar = document.getElementById("erro-finalizar");
+    const sucesso = document.getElementById("sucesso");
+    const finalizarUrl = "{% url 'pregoes:finalizar_proposta_digital' link_proposta.token %}";
+
+    let cnpjConfirmado = "";
+    let razaoSocialConfirmada = "";
+    let consultaToken = "";
+    let origemRazaoSocial = "";
+    let cnpjAguardandoRazaoManual = "";
+
+    // Mantém a MESMA tentativa caso a resposta do servidor seja interrompida.
+    // Assim, clicar novamente não gera outro segredo e o backend consegue
+    // reconhecer uma proposta que já tenha sido gravada.
+    let tentativaFinalizacaoPendente = null;
+
+    function somenteDigitos(valor) {
+        return String(valor || "").replace(/\D/g, "");
+    }
+
+    function formatarCnpj(valor) {
+        const v = somenteDigitos(valor).slice(0, 14);
+        if (v.length <= 2) return v;
+        if (v.length <= 5) return `${v.slice(0,2)}.${v.slice(2)}`;
+        if (v.length <= 8) return `${v.slice(0,2)}.${v.slice(2,5)}.${v.slice(5)}`;
+        if (v.length <= 12) return `${v.slice(0,2)}.${v.slice(2,5)}.${v.slice(5,8)}/${v.slice(8)}`;
+        return `${v.slice(0,2)}.${v.slice(2,5)}.${v.slice(5,8)}/${v.slice(8,12)}-${v.slice(12,14)}`;
+    }
+
+    function mostrarErro(el, mensagem) {
+        el.textContent = mensagem;
+        el.style.display = "block";
+    }
+
+    function limparErro(el) {
+        el.textContent = "";
+        el.style.display = "none";
+    }
+
+    function bloquearItens(bloquear) {
+        cardItens.classList.toggle("bloqueado", bloquear);
+        btnRevisar.disabled = bloquear;
+        cardItens.querySelectorAll("input").forEach((input) => input.disabled = bloquear);
+        if (!bloquear) atualizarLinhas();
+    }
+
+    function resetarConsulta() {
+        cnpjConfirmado = "";
+        razaoSocialConfirmada = "";
+        consultaToken = "";
+        origemRazaoSocial = "";
+        cnpjAguardandoRazaoManual = "";
+        empresaOk.style.display = "none";
+        razaoEl.textContent = "";
+        cnpjFmtEl.textContent = "";
+        rotuloRazaoSocial.textContent = "Razão Social localizada";
+        razaoManualBox.style.display = "none";
+        razaoManualInput.value = "";
+        limparErro(erroRazaoManual);
+        bloquearItens(true);
+    }
+
+    function aplicarIdentificacaoConfirmada(data) {
+        cnpjConfirmado = somenteDigitos(data.dados.cnpj);
+        razaoSocialConfirmada = data.dados.razao_social;
+        consultaToken = data.consulta_token;
+        origemRazaoSocial = data.origem_razao_social || "consulta_publica";
+        cnpjAguardandoRazaoManual = "";
+
+        cnpjInput.value = data.dados.cnpj;
+        cnpjFmtEl.textContent = data.dados.cnpj;
+        razaoEl.textContent = data.dados.razao_social;
+        rotuloRazaoSocial.textContent =
+            origemRazaoSocial === "manual"
+                ? "Razão Social informada manualmente"
+                : "Razão Social localizada";
+
+        empresaOk.style.display = "block";
+        razaoManualBox.style.display = "none";
+        limparErro(erroCnpj);
+        limparErro(erroRazaoManual);
+        bloquearItens(false);
+    }
+
+    function liberarRazaoManual(cnpj, mensagem) {
+        cnpjAguardandoRazaoManual = somenteDigitos(cnpj);
+        cnpjInput.value = formatarCnpj(cnpjAguardandoRazaoManual);
+        razaoManualBox.style.display = "block";
+        razaoManualInput.focus();
+        bloquearItens(true);
+        mostrarErro(
+            erroCnpj,
+            mensagem || "A consulta automática está indisponível. Informe a Razão Social manualmente."
+        );
+    }
+
+    cnpjInput.addEventListener("input", function () {
+        const atual = somenteDigitos(this.value);
+        this.value = formatarCnpj(atual);
+        if (cnpjConfirmado && atual !== cnpjConfirmado) resetarConsulta();
+        limparErro(erroCnpj);
+    });
+
+    btnConsultar.addEventListener("click", async function () {
+        limparErro(erroCnpj);
+        const cnpj = somenteDigitos(cnpjInput.value);
+        if (cnpj.length !== 14) {
+            mostrarErro(erroCnpj, "Informe um CNPJ com 14 dígitos.");
+            return;
+        }
+
+        btnConsultar.disabled = true;
+        btnConsultar.textContent = "Consultando...";
+
+        try {
+            const response = await fetch(`consultar-cnpj/?cnpj=${encodeURIComponent(cnpj)}`, {
+                method: "GET",
+                credentials: "same-origin",
+                cache: "no-store"
+            });
+            const data = await response.json();
+
+            if (!response.ok || !data.ok) {
+                resetarConsulta();
+
+                if (data.permitir_razao_manual) {
+                    liberarRazaoManual(cnpj, data.mensagem);
+                    return;
+                }
+
+                mostrarErro(
+                    erroCnpj,
+                    data.mensagem || "Não foi possível consultar o CNPJ."
+                );
+                return;
+            }
+
+            aplicarIdentificacaoConfirmada(data);
+        } catch (e) {
+            resetarConsulta();
+            mostrarErro(
+                erroCnpj,
+                "Não foi possível comunicar com o serviço de consulta. Tente novamente."
+            );
+        } finally {
+            btnConsultar.disabled = false;
+            btnConsultar.textContent = "Consultar CNPJ";
+        }
+    });
+
+    btnConfirmarRazaoManual.addEventListener("click", async function () {
+        limparErro(erroRazaoManual);
+
+        const cnpj = cnpjAguardandoRazaoManual || somenteDigitos(cnpjInput.value);
+        const razao = String(razaoManualInput.value || "").trim().replace(/\s+/g, " ");
+
+        if (cnpj.length !== 14) {
+            mostrarErro(erroRazaoManual, "Informe um CNPJ válido antes de continuar.");
+            return;
+        }
+
+        if (razao.length < 3) {
+            mostrarErro(erroRazaoManual, "Informe a Razão Social.");
+            razaoManualInput.focus();
+            return;
+        }
+
+        btnConfirmarRazaoManual.disabled = true;
+        btnConfirmarRazaoManual.textContent = "Confirmando...";
+
+        try {
+            const url =
+                `consultar-cnpj/?cnpj=${encodeURIComponent(cnpj)}` +
+                `&razao_social_manual=${encodeURIComponent(razao)}`;
+
+            const response = await fetch(url, {
+                method: "GET",
+                credentials: "same-origin",
+                cache: "no-store"
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.ok) {
+                if (data.permitir_razao_manual) {
+                    mostrarErro(
+                        erroRazaoManual,
+                        data.mensagem || "Confira a Razão Social informada."
+                    );
+                    return;
+                }
+
+                mostrarErro(
+                    erroRazaoManual,
+                    data.mensagem || "Não foi possível confirmar a identificação."
+                );
+                return;
+            }
+
+            aplicarIdentificacaoConfirmada(data);
+        } catch (e) {
+            mostrarErro(
+                erroRazaoManual,
+                "Não foi possível confirmar a identificação neste momento. Tente novamente."
+            );
+        } finally {
+            btnConfirmarRazaoManual.disabled = false;
+            btnConfirmarRazaoManual.textContent = "Continuar";
+        }
+    });
+
+    razaoManualInput.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            btnConfirmarRazaoManual.click();
+        }
+    });
+
+    function normalizarPreco(valor) {
+        let texto = String(valor || "").trim().replace(/\s/g, "");
+        if (!texto) return null;
+        if (texto.includes(",") && texto.includes(".")) {
+            texto = texto.replace(/\./g, "").replace(",", ".");
+        } else if (texto.includes(",")) {
+            texto = texto.replace(",", ".");
+        }
+        if (!/^\d+(\.\d{1,4})?$/.test(texto)) return null;
+        const valorNum = Number(texto);
+        if (!Number.isFinite(valorNum) || valorNum <= 0) return null;
+        return texto;
+    }
+
+    function atualizarLinhas() {
+        document.querySelectorAll(".linha-item").forEach((linha) => {
+            const naoCotar = linha.querySelector(".nao-cotar");
+            const marca = linha.querySelector(".marca");
+            const preco = linha.querySelector(".preco");
+            const desativar = naoCotar.checked;
+            marca.disabled = desativar;
+            preco.disabled = desativar;
+            marca.required = !desativar;
+            preco.required = !desativar;
+            if (desativar) {
+                marca.value = "";
+                preco.value = "";
+            }
+            linha.classList.toggle("linha-nao-cotar", desativar);
+        });
+    }
+
+    document.querySelectorAll(".nao-cotar").forEach((cb) => cb.addEventListener("change", atualizarLinhas));
+    bloquearItens(true);
+
+    function coletarItens(validar) {
+        const itens = [];
+        const erros = [];
+
+        document.querySelectorAll(".linha-item").forEach((linha) => {
+            const checkNaoCotar = linha.querySelector(".nao-cotar");
+            const campoMarca = linha.querySelector(".marca");
+            const campoPreco = linha.querySelector(".preco");
+
+            let naoCotar = checkNaoCotar.checked;
+            const marca = campoMarca.value.trim();
+            const precoDigitado = campoPreco.value.trim();
+            const ordem = Number(linha.dataset.ordem);
+
+            /*
+             * Regra automática:
+             * se Marca E Preço estiverem vazios, o fornecedor não precisa
+             * marcar "Não cotar". No momento da revisão, o sistema converte
+             * automaticamente a linha para "Não participa".
+             */
+            if (validar && !naoCotar && !marca && !precoDigitado) {
+                naoCotar = true;
+                checkNaoCotar.checked = true;
+                campoMarca.disabled = true;
+                campoPreco.disabled = true;
+                campoMarca.required = false;
+                campoPreco.required = false;
+                linha.classList.add("linha-nao-cotar");
+            }
+
+            const preco = naoCotar ? null : normalizarPreco(precoDigitado);
+
+            /*
+             * Se o fornecedor começou a preencher o item, exigimos os dois
+             * dados. Assim uma Marca sem Preço (ou Preço sem Marca) não será
+             * descartada silenciosamente como "Não participa".
+             */
+            if (validar && !naoCotar) {
+                if (!marca && precoDigitado) {
+                    erros.push(
+                        `Informe a marca do item ${ordem}. ` +
+                        `Para não participar, deixe Marca e Preço vazios.`
+                    );
+                } else if (marca && !precoDigitado) {
+                    erros.push(
+                        `Informe o preço do item ${ordem}. ` +
+                        `Para não participar, deixe Marca e Preço vazios.`
+                    );
+                } else {
+                    if (!marca) {
+                        erros.push(
+                            `Informe a marca do item ${ordem}, ou deixe Marca e Preço vazios.`
+                        );
+                    }
+                    if (!preco) {
+                        erros.push(
+                            `Informe um preço válido para o item ${ordem}, ou deixe Marca e Preço vazios.`
+                        );
+                    }
+                }
+            }
+
+            itens.push({
+                pregao_item_id: Number(linha.dataset.pregaoItemId),
+                item_id: Number(linha.dataset.itemId),
+                ordem: ordem,
+                nome: linha.querySelector(".nome-item").textContent.trim(),
+                participa: !naoCotar,
+                marca: naoCotar ? "" : marca,
+                preco_inicial: naoCotar ? null : preco
+            });
+        });
+
+        return {itens, erros};
+    }
+
+    function formatarPrecoRevisao(valor) {
+        const numero = Number(valor);
+        if (!Number.isFinite(numero)) return "-";
+
+        return numero.toLocaleString("pt-BR", {
+            style: "currency",
+            currency: "BRL",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 4
+        });
+    }
+
+    function preencherResumoItensCotados(itens) {
+        const tbody = document.getElementById("resumo-itens-cotados");
+        tbody.innerHTML = "";
+
+        const cotados = itens.filter(item => item.participa);
+
+        if (!cotados.length) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = 3;
+            td.className = "revisao-vazio";
+            td.textContent = "Nenhum item foi cotado nesta proposta.";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+
+        cotados.forEach(function (item) {
+            const tr = document.createElement("tr");
+
+            const tdItem = document.createElement("td");
+            tdItem.className = "revisao-item-nome";
+
+            const ordem = document.createElement("span");
+            ordem.className = "revisao-item-ordem";
+            ordem.textContent = String(item.ordem) + ".";
+
+            const nome = document.createElement("span");
+            nome.textContent = item.nome;
+
+            tdItem.appendChild(ordem);
+            tdItem.appendChild(nome);
+
+            const tdMarca = document.createElement("td");
+            tdMarca.className = "revisao-item-marca";
+            tdMarca.textContent = item.marca || "-";
+
+            const tdPreco = document.createElement("td");
+            tdPreco.className = "revisao-item-preco";
+            tdPreco.textContent = formatarPrecoRevisao(item.preco_inicial);
+
+            tr.appendChild(tdItem);
+            tr.appendChild(tdMarca);
+            tr.appendChild(tdPreco);
+            tbody.appendChild(tr);
+        });
+    }
+
+    btnRevisar.addEventListener("click", function () {
+        limparErro(erroProposta);
+        if (!cnpjConfirmado || !razaoSocialConfirmada || !consultaToken) {
+            mostrarErro(erroProposta, "Confirme o CNPJ e a Razão Social antes de finalizar.");
+            return;
+        }
+        const {itens, erros} = coletarItens(true);
+        if (erros.length) {
+            mostrarErro(erroProposta, erros.slice(0, 6).join(" ") + (erros.length > 6 ? " Confira também os demais itens." : ""));
+            return;
+        }
+
+        document.getElementById("resumo-cnpj").textContent = formatarCnpj(cnpjConfirmado);
+        document.getElementById("resumo-razao").textContent = razaoSocialConfirmada;
+        document.getElementById("resumo-cotados").textContent = itens.filter(i => i.participa).length;
+        document.getElementById("resumo-nao-cotados").textContent = itens.filter(i => !i.participa).length;
+        preencherResumoItensCotados(itens);
+        limparErro(erroFinalizar);
+        modal.classList.add("aberto");
+        modal.setAttribute("aria-hidden", "false");
+    });
+
+    btnVoltar.addEventListener("click", function () {
+        modal.classList.remove("aberto");
+        modal.setAttribute("aria-hidden", "true");
+
+        // O usuário poderá alterar os itens; descarta o pacote anterior.
+        tentativaFinalizacaoPendente = null;
+    });
+
+    function bytesParaBase64(bytes) {
+        let binario = "";
+        const tamanho = 0x8000;
+        for (let i = 0; i < bytes.length; i += tamanho) {
+            binario += String.fromCharCode.apply(null, bytes.subarray(i, i + tamanho));
+        }
+        return btoa(binario);
+    }
+
+    function bytesParaHex(bytes) {
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function sha256Texto(texto) {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(texto));
+        return bytesParaHex(new Uint8Array(digest));
+    }
+
+    async function sha256Bytes(bytes) {
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        return bytesParaHex(new Uint8Array(digest));
+    }
+
+    function gerarCodigoSecreto() {
+        const alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        const aleatorios = new Uint8Array(20);
+        crypto.getRandomValues(aleatorios);
+        let codigo = "";
+        for (const b of aleatorios) codigo += alfabeto[b & 31];
+        return codigo;
+    }
+
+    function formatarCodigo(codigo) {
+        return codigo.match(/.{1,4}/g).join("-");
+    }
+
+    async function criptografar(payload, codigo) {
+        const salt = crypto.getRandomValues(new Uint8Array(16));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const material = await crypto.subtle.importKey(
+            "raw",
+            new TextEncoder().encode(codigo),
+            "PBKDF2",
+            false,
+            ["deriveKey"]
+        );
+        const chave = await crypto.subtle.deriveKey(
+            {name:"PBKDF2", salt:salt, iterations:200000, hash:"SHA-256"},
+            material,
+            {name:"AES-GCM", length:256},
+            false,
+            ["encrypt"]
+        );
+        const cifrado = await crypto.subtle.encrypt(
+            {name:"AES-GCM", iv:iv},
+            chave,
+            new TextEncoder().encode(JSON.stringify(payload))
+        );
+        return {salt, iv, cifrado:new Uint8Array(cifrado)};
+    }
+
+    function csrftoken() {
+        return document.querySelector('#form-proposta input[name="csrfmiddlewaretoken"]').value;
+    }
+
+    async function lerRespostaJsonFinalizacao(response) {
+        const contentType = String(
+            response.headers.get("content-type") || ""
+        ).toLowerCase();
+
+        const texto = await response.text();
+
+        if (!contentType.includes("application/json")) {
+            let mensagem =
+                `O servidor retornou uma resposta inesperada (HTTP ${response.status}). ` +
+                "Não feche esta página. Você pode tentar finalizar novamente.";
+
+            if (response.status === 403) {
+                mensagem =
+                    "O servidor recusou a validação de segurança da página (HTTP 403). " +
+                    "Não feche esta página. Tente finalizar novamente; se persistir, informe este código HTTP.";
+            } else if (response.status === 404) {
+                mensagem =
+                    "O endereço de finalização não foi localizado (HTTP 404). " +
+                    "Não feche esta página e informe este código HTTP.";
+            } else if (response.status >= 500) {
+                mensagem =
+                    `O servidor apresentou uma falha temporária (HTTP ${response.status}). ` +
+                    "Não feche esta página. Clique novamente em Confirmar e finalizar.";
+            }
+
+            throw new Error(mensagem);
+        }
+
+        let data;
+        try {
+            data = JSON.parse(texto);
+        } catch (e) {
+            throw new Error(
+                `O servidor retornou JSON inválido (HTTP ${response.status}). ` +
+                "Não feche esta página e tente novamente."
+            );
+        }
+
+        return data;
+    }
+
+    btnFinalizar.addEventListener("click", async function () {
+        limparErro(erroFinalizar);
+        if (!window.crypto || !window.crypto.subtle) {
+            mostrarErro(erroFinalizar, "Este navegador não oferece o recurso de segurança necessário. Use uma versão atual do Chrome, Edge ou Firefox.");
+            return;
+        }
+
+        const {itens, erros} = coletarItens(true);
+        if (erros.length) {
+            mostrarErro(erroFinalizar, "Existem campos pendentes. Volte e confira a proposta.");
+            return;
+        }
+
+        btnFinalizar.disabled = true;
+        btnFinalizar.textContent = "Protegendo e enviando...";
+
+        try {
+            if (!tentativaFinalizacaoPendente) {
+                const codigo = gerarCodigoSecreto();
+                const codigoFormatado = formatarCodigo(codigo);
+
+                const payload = {
+                    versao: 1,
+                    pregao_id: pregaoId,
+                    pregao: "{{ pregao.numero|escapejs }}/{{ pregao.ano }}",
+                    cnpj: cnpjConfirmado,
+                    razao_social: razaoSocialConfirmada,
+                    origem_razao_social: origemRazaoSocial,
+                    itens: itens
+                };
+
+                const protegido = await criptografar(payload, codigo);
+                const codigoHash = await sha256Texto(codigo);
+                const cnpjHash = await sha256Texto(cnpjConfirmado);
+                const conteudoHash = await sha256Bytes(protegido.cifrado);
+
+                const body = {
+                    consulta_token: consultaToken,
+                    codigo_hash: codigoHash,
+                    cnpj_hash: cnpjHash,
+                    pacote_criptografado: bytesParaBase64(protegido.cifrado),
+                    iv_b64: bytesParaBase64(protegido.iv),
+                    salt_b64: bytesParaBase64(protegido.salt),
+                    conteudo_hash: conteudoHash,
+                    estrutura_hash: estruturaHash,
+                    quantidade_itens: itens.length
+                };
+
+                tentativaFinalizacaoPendente = {
+                    codigo: codigo,
+                    codigoFormatado: codigoFormatado,
+                    body: body
+                };
+            }
+
+            const response = await fetch(finalizarUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                cache: "no-store",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "X-CSRFToken": csrftoken()
+                },
+                body: JSON.stringify(tentativaFinalizacaoPendente.body)
+            });
+
+            const data = await lerRespostaJsonFinalizacao(response);
+
+            if (!response.ok || !data.ok) {
+                // Erros de regra de negócio não devem reaproveitar o segredo.
+                if (response.status >= 400 && response.status < 500) {
+                    tentativaFinalizacaoPendente = null;
+                }
+
+                throw new Error(
+                    data.mensagem || "Não foi possível finalizar a proposta."
+                );
+            }
+
+            const codigoFormatado =
+                tentativaFinalizacaoPendente.codigoFormatado;
+
+            modal.classList.remove("aberto");
+            document.querySelectorAll(".nao-imprimir").forEach(el => {
+                if (el.id !== "sucesso") el.style.display = "none";
+            });
+            sucesso.style.display = "block";
+            document.getElementById("codigo-abertura").textContent = codigoFormatado;
+            document.getElementById("protocolo").textContent = data.protocolo;
+            document.getElementById("sucesso-razao").textContent = razaoSocialConfirmada;
+            document.getElementById("sucesso-cnpj").textContent = formatarCnpj(cnpjConfirmado);
+
+            const qrDiv = document.getElementById("qrcode");
+            qrDiv.innerHTML = "";
+            if (typeof QRCode !== "undefined") {
+                new QRCode(qrDiv, {
+                    text: `SIGA-PROPOSTA|1|${codigoFormatado}`,
+                    width: 190,
+                    height: 190,
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } else {
+                qrDiv.innerHTML = '<p class="muted">QR Code indisponível neste navegador. O código alfanumérico acima continua válido.</p>';
+            }
+
+            // A proposta foi confirmada e o código já está visível ao fornecedor.
+            tentativaFinalizacaoPendente = null;
+
+            window.scrollTo({top:0, behavior:"smooth"});
+        } catch (e) {
+            mostrarErro(erroFinalizar, e.message || "Não foi possível finalizar a proposta.");
+        } finally {
+            btnFinalizar.disabled = false;
+            btnFinalizar.textContent = tentativaFinalizacaoPendente
+                ? "Tentar finalizar novamente"
+                : "Confirmar e finalizar";
+        }
+    });
+
+    document.getElementById("btn-copiar-codigo")?.addEventListener("click", async function () {
+        const codigo = document.getElementById("codigo-abertura").textContent.trim();
+        if (!codigo) return;
+        try {
+            await navigator.clipboard.writeText(codigo);
+            const anterior = this.textContent;
+            this.textContent = "Código copiado!";
+            setTimeout(() => this.textContent = anterior, 1600);
+        } catch (e) {
+            alert(`Código: ${codigo}`);
+        }
+    });
+})();
+</script>
+{% endif %}
+</body>
+</html>

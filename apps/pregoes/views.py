@@ -1,12 +1,28 @@
 from decimal import Decimal, InvalidOperation
+import base64
+import binascii
+import hashlib
+import hmac
+import json
+import re
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.core import signing
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils import timezone
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_GET, require_POST
 
 from django.http import HttpResponse, JsonResponse
-from apps.cadastros.models import Escola, Item
+from apps.cadastros.models import Escola, Item, validar_cnpj
 from .forms import OrdenadorDespesasForm, PregaoForm
 
 from io import BytesIO
@@ -29,6 +45,8 @@ from .models import (
     QuantitativoEscola,
     QuantitativoPregao,
     PropostaInicialItem,
+    PropostaDigitalLink,
+    PropostaDigital,
 )
 
 
@@ -1053,6 +1071,973 @@ def media_precos(request):
     )
 
 
+
+# ============================================================
+# PROPOSTA DIGITAL - ETAPA 1
+# ============================================================
+
+PROPOSTA_DIGITAL_SIGNING_SALT = "siga-proposta-digital-cnpj-v1"
+PROPOSTA_DIGITAL_CONSULTA_MAX_AGE = 12 * 60 * 60
+PROPOSTA_DIGITAL_MAX_PACOTE_B64 = 2_000_000
+PROPOSTA_DIGITAL_IMPORTACAO_SALT = "siga-proposta-digital-importacao-v1"
+PROPOSTA_DIGITAL_IMPORTACAO_MAX_AGE = 2 * 60 * 60
+PROPOSTA_DIGITAL_ALGORITMO_V1 = "AES-256-GCM/PBKDF2-SHA256/200000"
+PROPOSTA_DIGITAL_ALFABETO_CODIGO = set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+
+
+def _normalizar_codigo_abertura_proposta_digital(valor):
+    texto = str(valor or "").strip().upper()
+
+    # Permite também colar o conteúdo integral do QR Code:
+    # SIGA-PROPOSTA|1|PX7K-....
+    if "|" in texto:
+        texto = texto.split("|")[-1]
+
+    codigo = re.sub(r"[^A-Z0-9]", "", texto)
+    if (
+        len(codigo) != 20
+        or any(caractere not in PROPOSTA_DIGITAL_ALFABETO_CODIGO for caractere in codigo)
+    ):
+        return ""
+
+    return codigo
+
+
+def _perfil_usuario_atual(user):
+    if not user.is_authenticated:
+        return None
+    if user.is_superuser:
+        return "administrador"
+    perfil_acesso = getattr(user, "perfil_acesso", None)
+    return getattr(perfil_acesso, "perfil", None)
+
+
+def _somente_digitos(valor):
+    return re.sub(r"\D", "", str(valor or ""))
+
+
+def _formatar_cnpj_publico(valor):
+    cnpj = _somente_digitos(valor)
+    if len(cnpj) != 14:
+        return str(valor or "")
+    return (
+        f"{cnpj[0:2]}.{cnpj[2:5]}.{cnpj[5:8]}/"
+        f"{cnpj[8:12]}-{cnpj[12:14]}"
+    )
+
+
+def _json_no_store(payload, status=200):
+    response = JsonResponse(payload, status=status)
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
+
+
+def _link_proposta_digital_aberto(link):
+    return (
+        link.ativo
+        and link.pregao.tipo_certame == Pregao.TIPO_PREGAO_PRESENCIAL
+        and link.pregao.status == Pregao.STATUS_NAO_INICIADO
+    )
+
+
+def _hash_estrutura_itens_proposta_digital(pregao):
+    partes = []
+    for item in (
+        PregaoItem.objects.filter(pregao=pregao)
+        .values_list("id", "item_id", "ordem", "quantidade_total")
+        .order_by("ordem", "id")
+    ):
+        partes.append("|".join(str(valor) for valor in item))
+    texto = ";".join(partes)
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+@login_required
+@require_POST
+def gerar_link_proposta_digital(request):
+    """
+    Cria (ou reutiliza) um único link público por Pregão Presencial.
+    O mesmo link pode ser enviado a todos os fornecedores.
+    """
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Você não tem permissão para gerar este link."},
+            status=403,
+        )
+
+    pregao_id = request.POST.get("pregao_id")
+    if not pregao_id:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Selecione o pregão."},
+            status=400,
+        )
+
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "O link de proposta digital só pode ser gerado enquanto "
+                    "o pregão estiver com status Não iniciado."
+                ),
+            },
+            status=400,
+        )
+
+    if not PregaoItem.objects.filter(pregao=pregao).exists():
+        garantir_itens_pregao_para_propostas(pregao)
+
+    quantidade_itens = PregaoItem.objects.filter(pregao=pregao).count()
+    if quantidade_itens == 0:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Este pregão ainda não possui itens disponíveis para a proposta. "
+                    "Confira os quantitativos do pregão/escolas antes de gerar o link."
+                ),
+            },
+            status=400,
+        )
+
+    link, criado = PropostaDigitalLink.objects.get_or_create(
+        pregao=pregao,
+        defaults={
+            "criado_por": request.user,
+            "ativo": True,
+        },
+    )
+
+    if not link.ativo:
+        link.ativo = True
+        link.save(update_fields=["ativo", "atualizado_em"])
+
+    url_publica = request.build_absolute_uri(
+        reverse("pregoes:proposta_digital_publica", args=[link.token])
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "criado": criado,
+            "url": url_publica,
+            "pregao": f"{pregao.numero}/{pregao.ano}",
+            "quantidade_itens": quantidade_itens,
+        }
+    )
+
+
+@never_cache
+def proposta_digital_publica(request, token):
+    link = get_object_or_404(
+        PropostaDigitalLink.objects.select_related("pregao"),
+        token=token,
+        ativo=True,
+    )
+    pregao = link.pregao
+    disponivel = _link_proposta_digital_aberto(link)
+
+    itens_pregao = []
+    if disponivel:
+        itens_pregao = list(
+            PregaoItem.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("ordem", "item__nome_item")
+        )
+
+    response = render(
+        request,
+        "pregoes/proposta_digital_publica.html",
+        {
+            "link_proposta": link,
+            "pregao": pregao,
+            "itens_pregao": itens_pregao,
+            "disponivel": disponivel and bool(itens_pregao),
+            "estrutura_hash": (
+                _hash_estrutura_itens_proposta_digital(pregao)
+                if disponivel and itens_pregao
+                else ""
+            ),
+        },
+    )
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
+
+
+@never_cache
+@require_GET
+def consultar_cnpj_proposta_digital(request, token):
+    """
+    Consulta apenas CNPJ + Razão Social na BrasilAPI para conferência do fornecedor.
+    Não consulta cadastro de fornecedores nem vínculo com o pregão.
+    """
+    link = get_object_or_404(
+        PropostaDigitalLink.objects.select_related("pregao"),
+        token=token,
+        ativo=True,
+    )
+
+    if not _link_proposta_digital_aberto(link):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Este link não está mais aberto para recebimento de propostas.",
+            },
+            status=410,
+        )
+
+    cnpj = _somente_digitos(request.GET.get("cnpj"))
+    if len(cnpj) != 14:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Informe um CNPJ com 14 dígitos."},
+            status=400,
+        )
+
+    try:
+        validar_cnpj(cnpj)
+    except ValidationError:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "CNPJ inválido. Confira os números informados.",
+            },
+            status=400,
+        )
+
+    # Antes de consultar qualquer serviço externo, verifica se este CNPJ
+    # já possui uma proposta digital registrada para o mesmo pregão.
+    # O CNPJ continua sem ser armazenado em texto puro: a comparação é feita
+    # somente pelo SHA-256, exatamente como na finalização da proposta.
+    cnpj_hash_consulta = hashlib.sha256(cnpj.encode("utf-8")).hexdigest()
+
+    if PropostaDigital.objects.filter(
+        pregao=link.pregao,
+        cnpj_hash=cnpj_hash_consulta,
+    ).exists():
+        return _json_no_store(
+            {
+                "ok": False,
+                "proposta_existente": True,
+                "permitir_razao_manual": False,
+                "mensagem": (
+                    "Já existe uma proposta finalizada para este CNPJ neste pregão. "
+                    "Não é necessário preencher uma nova proposta."
+                ),
+            },
+            status=409,
+        )
+
+    razao_social_manual = " ".join(
+        str(request.GET.get("razao_social_manual") or "").strip().split()
+    )
+
+    # Consulta com redundância:
+    # 1) BrasilAPI
+    # 2) Minha Receita
+    # 3) CNPJ.ws (API pública), como fallback adicional.
+    #
+    # Não há qualquer consulta ao cadastro de fornecedores do SIGA aqui.
+    provedores = [
+        (
+            "BrasilAPI",
+            f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}",
+        ),
+        (
+            "Minha Receita",
+            f"https://minhareceita.org/{cnpj}",
+        ),
+        (
+            "CNPJ.ws",
+            f"https://publica.cnpj.ws/cnpj/{cnpj}",
+        ),
+    ]
+
+    dados = None
+    erros_provedores = []
+
+    for nome_provedor, url in provedores:
+        requisicao = Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/154.0 Safari/537.36 SIGA-Escolar/1.0"
+                ),
+            },
+        )
+
+        try:
+            with urlopen(requisicao, timeout=12) as resposta:
+                candidato = json.loads(resposta.read().decode("utf-8"))
+
+            # Os provedores utilizados devolvem "razao_social" no nível
+            # principal. Se houver resposta 200 sem esse campo, o SIGA tenta
+            # automaticamente o próximo serviço.
+            if isinstance(candidato, dict) and str(
+                candidato.get("razao_social") or ""
+            ).strip():
+                dados = candidato
+                break
+
+            erros_provedores.append(f"{nome_provedor}: resposta incompleta")
+
+        except HTTPError as erro:
+            erros_provedores.append(f"{nome_provedor}: HTTP {erro.code}")
+            continue
+
+        except (URLError, TimeoutError, json.JSONDecodeError) as erro:
+            erros_provedores.append(
+                f"{nome_provedor}: falha de conexão/resposta"
+            )
+            continue
+
+    if dados is None:
+        # Se todos os serviços responderam 404, não tratamos isso como
+        # indisponibilidade técnica: o CNPJ simplesmente não foi localizado.
+        if erros_provedores and all("HTTP 404" in erro for erro in erros_provedores):
+            return _json_no_store(
+                {
+                    "ok": False,
+                    "mensagem": "CNPJ não encontrado nas bases públicas de consulta.",
+                    "permitir_razao_manual": False,
+                },
+                status=404,
+            )
+
+        # A digitação manual só é aceita neste ponto: isto é, depois de as
+        # três fontes externas terem sido tentadas sem retornar Razão Social.
+        if razao_social_manual:
+            if len(razao_social_manual) < 3:
+                return _json_no_store(
+                    {
+                        "ok": False,
+                        "mensagem": "Informe uma Razão Social válida.",
+                        "permitir_razao_manual": True,
+                        "cnpj": _formatar_cnpj_publico(cnpj),
+                    },
+                    status=400,
+                )
+
+            if len(razao_social_manual) > 255:
+                return _json_no_store(
+                    {
+                        "ok": False,
+                        "mensagem": "A Razão Social deve possuir no máximo 255 caracteres.",
+                        "permitir_razao_manual": True,
+                        "cnpj": _formatar_cnpj_publico(cnpj),
+                    },
+                    status=400,
+                )
+
+            consulta_token = signing.dumps(
+                {
+                    "pregao_id": link.pregao_id,
+                    "cnpj": cnpj,
+                    "razao_social": razao_social_manual,
+                    "origem_razao_social": "manual",
+                },
+                salt=PROPOSTA_DIGITAL_SIGNING_SALT,
+                compress=True,
+            )
+
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "dados": {
+                        "cnpj": _formatar_cnpj_publico(cnpj),
+                        "razao_social": razao_social_manual,
+                    },
+                    "consulta_token": consulta_token,
+                    "origem_razao_social": "manual",
+                    "aviso": (
+                        "Razão Social informada manualmente porque os serviços "
+                        "públicos de consulta estavam indisponíveis."
+                    ),
+                }
+            )
+
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Os serviços públicos de consulta de CNPJ estão indisponíveis "
+                    "no momento. Informe a Razão Social manualmente para continuar."
+                ),
+                "permitir_razao_manual": True,
+                "cnpj": _formatar_cnpj_publico(cnpj),
+            },
+            status=502,
+        )
+
+    razao_social = str(dados.get("razao_social") or "").strip()
+    if not razao_social:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "A consulta não retornou a Razão Social deste CNPJ.",
+            },
+            status=502,
+        )
+
+    # Token assinado e temporário: comprova no POST final que este CNPJ foi
+    # efetivamente consultado em fonte pública, sem exigir cadastro prévio no SIGA.
+    consulta_token = signing.dumps(
+        {
+            "pregao_id": link.pregao_id,
+            "cnpj": cnpj,
+            "razao_social": razao_social,
+            "origem_razao_social": "consulta_publica",
+        },
+        salt=PROPOSTA_DIGITAL_SIGNING_SALT,
+        compress=True,
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "dados": {
+                "cnpj": _formatar_cnpj_publico(cnpj),
+                "razao_social": razao_social,
+            },
+            "consulta_token": consulta_token,
+            "origem_razao_social": "consulta_publica",
+        }
+    )
+
+
+@never_cache
+@require_POST
+def finalizar_proposta_digital(request, token):
+    link = get_object_or_404(
+        PropostaDigitalLink.objects.select_related("pregao"),
+        token=token,
+        ativo=True,
+    )
+    pregao = link.pregao
+
+    if not _link_proposta_digital_aberto(link):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Este link não está mais aberto para recebimento de propostas.",
+            },
+            status=410,
+        )
+
+    try:
+        dados = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Dados da proposta inválidos."},
+            status=400,
+        )
+
+    consulta_token = str(dados.get("consulta_token") or "")
+    try:
+        consulta = signing.loads(
+            consulta_token,
+            salt=PROPOSTA_DIGITAL_SIGNING_SALT,
+            max_age=PROPOSTA_DIGITAL_CONSULTA_MAX_AGE,
+        )
+    except signing.SignatureExpired:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A consulta do CNPJ expirou. Consulte o CNPJ novamente "
+                    "antes de finalizar a proposta."
+                ),
+            },
+            status=400,
+        )
+    except signing.BadSignature:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "A validação do CNPJ não pôde ser confirmada.",
+            },
+            status=400,
+        )
+
+    if str(consulta.get("pregao_id")) != str(pregao.id):
+        return _json_no_store(
+            {"ok": False, "mensagem": "A consulta do CNPJ pertence a outro pregão."},
+            status=400,
+        )
+
+    cnpj = _somente_digitos(consulta.get("cnpj"))
+    cnpj_hash_esperado = hashlib.sha256(cnpj.encode("utf-8")).hexdigest()
+    cnpj_hash = str(dados.get("cnpj_hash") or "").lower()
+
+    if not hmac.compare_digest(cnpj_hash, cnpj_hash_esperado):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O CNPJ da proposta não corresponde ao CNPJ consultado.",
+            },
+            status=400,
+        )
+
+    codigo_hash = str(dados.get("codigo_hash") or "").lower()
+    conteudo_hash = str(dados.get("conteudo_hash") or "").lower()
+    padrao_hash = re.compile(r"^[0-9a-f]{64}$")
+
+    if not padrao_hash.fullmatch(codigo_hash):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Código de abertura inválido."},
+            status=400,
+        )
+    if not padrao_hash.fullmatch(conteudo_hash):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Hash de integridade inválido."},
+            status=400,
+        )
+
+    pacote_b64 = str(dados.get("pacote_criptografado") or "")
+    iv_b64 = str(dados.get("iv_b64") or "")
+    salt_b64 = str(dados.get("salt_b64") or "")
+
+    if not pacote_b64 or len(pacote_b64) > PROPOSTA_DIGITAL_MAX_PACOTE_B64:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Tamanho do pacote da proposta inválido."},
+            status=400,
+        )
+
+    try:
+        pacote_bytes = base64.b64decode(pacote_b64, validate=True)
+        iv_bytes = base64.b64decode(iv_b64, validate=True)
+        salt_bytes = base64.b64decode(salt_b64, validate=True)
+    except (ValueError, TypeError, binascii.Error):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Pacote criptografado inválido."},
+            status=400,
+        )
+
+    if len(iv_bytes) != 12 or len(salt_bytes) != 16 or len(pacote_bytes) <= 16:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Parâmetros criptográficos inválidos."},
+            status=400,
+        )
+
+    hash_real = hashlib.sha256(pacote_bytes).hexdigest()
+    if not hmac.compare_digest(hash_real, conteudo_hash):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Falha na verificação de integridade do pacote criptografado.",
+            },
+            status=400,
+        )
+
+    try:
+        quantidade_itens = int(dados.get("quantidade_itens"))
+    except (TypeError, ValueError):
+        quantidade_itens = -1
+
+    quantidade_esperada = PregaoItem.objects.filter(pregao=pregao).count()
+    estrutura_hash = str(dados.get("estrutura_hash") or "").lower()
+    estrutura_atual = _hash_estrutura_itens_proposta_digital(pregao)
+    if (
+        quantidade_itens != quantidade_esperada
+        or quantidade_esperada <= 0
+        or not padrao_hash.fullmatch(estrutura_hash)
+        or not hmac.compare_digest(estrutura_hash, estrutura_atual)
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A relação de itens do pregão foi alterada. Atualize a página "
+                    "e confira a proposta antes de finalizar."
+                ),
+            },
+            status=409,
+        )
+
+    # Finalização idempotente:
+    # se o navegador não recebeu a resposta anterior (queda de conexão,
+    # proxy retornando HTML, etc.), ele pode reenviar exatamente a mesma
+    # tentativa. Como o servidor só possui o hash do código, o mesmo
+    # codigo_hash identifica com segurança a mesma abertura.
+    proposta_mesmo_codigo = PropostaDigital.objects.filter(
+        codigo_hash=codigo_hash,
+    ).first()
+
+    if proposta_mesmo_codigo:
+        if (
+            proposta_mesmo_codigo.pregao_id == pregao.id
+            and hmac.compare_digest(
+                proposta_mesmo_codigo.cnpj_hash,
+                cnpj_hash,
+            )
+        ):
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "protocolo": str(proposta_mesmo_codigo.protocolo),
+                    "mensagem": "Proposta registrada com sucesso.",
+                    "ja_registrada": True,
+                },
+                status=200,
+            )
+
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O código de abertura informado não pode ser utilizado.",
+            },
+            status=409,
+        )
+
+    proposta_mesmo_cnpj = PropostaDigital.objects.filter(
+        pregao=pregao,
+        cnpj_hash=cnpj_hash,
+    ).first()
+
+    if proposta_mesmo_cnpj:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Já existe uma proposta finalizada para este CNPJ neste pregão. "
+                    "Após a finalização, uma nova proposta não pode ser enviada pelo mesmo CNPJ."
+                ),
+            },
+            status=409,
+        )
+
+    try:
+        proposta = PropostaDigital.objects.create(
+            pregao=pregao,
+            link=link,
+            codigo_hash=codigo_hash,
+            cnpj_hash=cnpj_hash,
+            pacote_criptografado=pacote_b64,
+            iv_b64=iv_b64,
+            salt_b64=salt_b64,
+            conteudo_hash=conteudo_hash,
+            estrutura_hash=estrutura_hash,
+            quantidade_itens=quantidade_itens,
+        )
+    except IntegrityError:
+        # Proteção contra concorrência: outra requisição pode ter concluído
+        # entre as verificações acima e o INSERT.
+        proposta_mesmo_codigo = PropostaDigital.objects.filter(
+            codigo_hash=codigo_hash,
+        ).first()
+
+        if (
+            proposta_mesmo_codigo
+            and proposta_mesmo_codigo.pregao_id == pregao.id
+            and hmac.compare_digest(
+                proposta_mesmo_codigo.cnpj_hash,
+                cnpj_hash,
+            )
+        ):
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "protocolo": str(proposta_mesmo_codigo.protocolo),
+                    "mensagem": "Proposta registrada com sucesso.",
+                    "ja_registrada": True,
+                },
+                status=200,
+            )
+
+        if PropostaDigital.objects.filter(
+            pregao=pregao,
+            cnpj_hash=cnpj_hash,
+        ).exists():
+            mensagem = (
+                "Já existe uma proposta finalizada para este CNPJ neste pregão. "
+                "Após a finalização, uma nova proposta não pode ser enviada pelo mesmo CNPJ."
+            )
+        else:
+            mensagem = "Não foi possível registrar a proposta. Tente novamente sem fechar esta página."
+
+        return _json_no_store(
+            {"ok": False, "mensagem": mensagem},
+            status=409,
+        )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "protocolo": str(proposta.protocolo),
+            "mensagem": "Proposta registrada com sucesso.",
+            "ja_registrada": False,
+        },
+        status=201,
+    )
+
+
+@login_required
+@require_POST
+def localizar_proposta_digital(request):
+    """
+    Localiza uma Proposta Digital pelo código entregue pelo fornecedor.
+
+    O servidor:
+    - usa somente o hash do código para localizar a proposta;
+    - confere Pregão + CNPJ do fornecedor selecionado;
+    - não descriptografa marca ou preços;
+    - devolve o pacote criptografado para abertura no navegador.
+
+    A proposta somente é marcada como importada quando o usuário confirmar
+    o salvamento das Propostas Iniciais.
+    """
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Você não tem permissão para importar propostas digitais."},
+            status=403,
+        )
+
+    pregao_id = request.POST.get("pregao_id")
+    fornecedor_id = request.POST.get("fornecedor_id")
+    codigo = _normalizar_codigo_abertura_proposta_digital(
+        request.POST.get("codigo")
+    )
+
+    if not pregao_id or not fornecedor_id:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Selecione o pregão e o fornecedor antes de informar o código.",
+            },
+            status=400,
+        )
+
+    if not codigo:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Código inválido. Confira o código fornecido pelo fornecedor.",
+            },
+            status=400,
+        )
+
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if pregao.status not in [
+        Pregao.STATUS_NAO_INICIADO,
+        Pregao.STATUS_EM_ANDAMENTO,
+    ]:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Este pregão não está disponível para importação de propostas.",
+            },
+            status=409,
+        )
+
+    vinculo_fornecedor = (
+        PregaoFornecedor.objects.filter(
+            pregao=pregao,
+            fornecedor_id=fornecedor_id,
+            ativo_no_pregao=True,
+        )
+        .select_related("fornecedor")
+        .first()
+    )
+
+    if not vinculo_fornecedor:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O fornecedor selecionado não está ativo neste pregão.",
+            },
+            status=400,
+        )
+
+    fornecedor = vinculo_fornecedor.fornecedor
+    cnpj_fornecedor = _somente_digitos(fornecedor.cnpj)
+
+    if len(cnpj_fornecedor) != 14:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "O fornecedor selecionado não possui um CNPJ válido cadastrado. "
+                    "Confira o cadastro antes de importar a proposta."
+                ),
+            },
+            status=400,
+        )
+
+    codigo_hash = hashlib.sha256(codigo.encode("utf-8")).hexdigest()
+
+    proposta = (
+        PropostaDigital.objects.select_related("pregao")
+        .filter(codigo_hash=codigo_hash)
+        .first()
+    )
+
+    # Não revelamos a qual pregão ou fornecedor pertence um código que não confere.
+    mensagem_nao_confere = (
+        "O código informado não corresponde ao fornecedor selecionado "
+        "ou ao pregão atual. Nenhuma informação foi importada."
+    )
+
+    if not proposta or proposta.pregao_id != pregao.id:
+        return _json_no_store(
+            {"ok": False, "mensagem": mensagem_nao_confere},
+            status=404,
+        )
+
+    cnpj_hash_fornecedor = hashlib.sha256(
+        cnpj_fornecedor.encode("utf-8")
+    ).hexdigest()
+
+    if not hmac.compare_digest(
+        proposta.cnpj_hash,
+        cnpj_hash_fornecedor,
+    ):
+        return _json_no_store(
+            {"ok": False, "mensagem": mensagem_nao_confere},
+            status=409,
+        )
+
+    if proposta.status == PropostaDigital.STATUS_IMPORTADA:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Esta Proposta Digital já foi importada anteriormente.",
+            },
+            status=409,
+        )
+
+    if proposta.status != PropostaDigital.STATUS_FINALIZADA:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Esta Proposta Digital não está disponível para importação.",
+            },
+            status=409,
+        )
+
+    if proposta.algoritmo != PROPOSTA_DIGITAL_ALGORITMO_V1:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Esta proposta utiliza uma versão de criptografia não suportada "
+                    "por esta versão do SIGA."
+                ),
+            },
+            status=409,
+        )
+
+    estrutura_atual = _hash_estrutura_itens_proposta_digital(pregao)
+    quantidade_atual = PregaoItem.objects.filter(pregao=pregao).count()
+
+    if (
+        proposta.quantidade_itens != quantidade_atual
+        or not hmac.compare_digest(
+            proposta.estrutura_hash,
+            estrutura_atual,
+        )
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A relação de itens deste pregão foi alterada após o envio "
+                    "da proposta. A importação foi bloqueada para conferência."
+                ),
+            },
+            status=409,
+        )
+
+    try:
+        pacote_bytes = base64.b64decode(
+            proposta.pacote_criptografado,
+            validate=True,
+        )
+        iv_bytes = base64.b64decode(proposta.iv_b64, validate=True)
+        salt_bytes = base64.b64decode(proposta.salt_b64, validate=True)
+    except (ValueError, TypeError, binascii.Error):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O pacote criptografado desta proposta está inválido.",
+            },
+            status=409,
+        )
+
+    if (
+        len(iv_bytes) != 12
+        or len(salt_bytes) != 16
+        or len(pacote_bytes) <= 16
+        or len(proposta.pacote_criptografado) > PROPOSTA_DIGITAL_MAX_PACOTE_B64
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Os parâmetros criptográficos desta proposta estão inválidos.",
+            },
+            status=409,
+        )
+
+    conteudo_hash_real = hashlib.sha256(pacote_bytes).hexdigest()
+    if not hmac.compare_digest(
+        conteudo_hash_real,
+        proposta.conteudo_hash,
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A verificação de integridade da Proposta Digital falhou. "
+                    "Nenhuma informação foi importada."
+                ),
+            },
+            status=409,
+        )
+
+    token_importacao = signing.dumps(
+        {
+            "proposta_digital_id": proposta.id,
+            "pregao_id": pregao.id,
+            "fornecedor_id": fornecedor.id,
+            "codigo_hash": proposta.codigo_hash,
+            "estrutura_hash": proposta.estrutura_hash,
+        },
+        salt=PROPOSTA_DIGITAL_IMPORTACAO_SALT,
+        compress=True,
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "protocolo": str(proposta.protocolo),
+            "pacote_criptografado": proposta.pacote_criptografado,
+            "iv_b64": proposta.iv_b64,
+            "salt_b64": proposta.salt_b64,
+            "conteudo_hash": proposta.conteudo_hash,
+            "estrutura_hash": proposta.estrutura_hash,
+            "quantidade_itens": proposta.quantidade_itens,
+            "algoritmo": proposta.algoritmo,
+            "token_importacao": token_importacao,
+        }
+    )
+
+
 def propostas_iniciais(request):
     pregoes_lista = (
         Pregao.objects.filter(
@@ -1080,6 +2065,11 @@ def propostas_iniciais(request):
     itens_pregao = []
     fornecedores = []
     propostas_salvas = {}
+    proposta_digital_import_token = (
+        request.POST.get("proposta_digital_import_token", "").strip()
+        if request.method == "POST"
+        else ""
+    )
 
     if pregao_id:
         pregao = get_object_or_404(
@@ -1290,6 +2280,7 @@ def propostas_iniciais(request):
                         "fornecedores": fornecedores,
                         "fornecedor_selecionado": None,
                         "propostas_salvas": propostas_salvas,
+                        "proposta_digital_import_token": proposta_digital_import_token,
                     },
                 )
 
@@ -1342,6 +2333,82 @@ def propostas_iniciais(request):
 
             erros = []
             dados_validados = []
+            proposta_digital_para_importar_id = None
+
+            # Se a tela foi preenchida por uma Proposta Digital, o token assinado
+            # confirma que o código foi validado para este Pregão + Fornecedor.
+            if proposta_digital_import_token:
+                try:
+                    dados_importacao = signing.loads(
+                        proposta_digital_import_token,
+                        salt=PROPOSTA_DIGITAL_IMPORTACAO_SALT,
+                        max_age=PROPOSTA_DIGITAL_IMPORTACAO_MAX_AGE,
+                    )
+                except signing.SignatureExpired:
+                    erros.append(
+                        "A autorização da Proposta Digital expirou. "
+                        "Informe o código novamente antes de salvar."
+                    )
+                except signing.BadSignature:
+                    erros.append(
+                        "Não foi possível validar a Proposta Digital importada. "
+                        "Informe o código novamente."
+                    )
+                else:
+                    if (
+                        str(dados_importacao.get("pregao_id")) != str(pregao.id)
+                        or str(dados_importacao.get("fornecedor_id"))
+                        != str(fornecedor_selecionado.id)
+                    ):
+                        erros.append(
+                            "A Proposta Digital importada não corresponde ao "
+                            "pregão/fornecedor selecionado."
+                        )
+                    else:
+                        proposta_digital_para_importar_id = (
+                            dados_importacao.get("proposta_digital_id")
+                        )
+                        proposta_digital_validacao = (
+                            PropostaDigital.objects.filter(
+                                id=proposta_digital_para_importar_id,
+                                pregao=pregao,
+                                status=PropostaDigital.STATUS_FINALIZADA,
+                            )
+                            .first()
+                        )
+
+                        if not proposta_digital_validacao:
+                            erros.append(
+                                "Esta Proposta Digital não está mais disponível "
+                                "para importação."
+                            )
+                        else:
+                            cnpj_fornecedor = _somente_digitos(
+                                fornecedor_selecionado.cnpj
+                            )
+                            cnpj_hash_fornecedor = hashlib.sha256(
+                                cnpj_fornecedor.encode("utf-8")
+                            ).hexdigest()
+
+                            if (
+                                len(cnpj_fornecedor) != 14
+                                or not hmac.compare_digest(
+                                    proposta_digital_validacao.cnpj_hash,
+                                    cnpj_hash_fornecedor,
+                                )
+                                or not hmac.compare_digest(
+                                    proposta_digital_validacao.codigo_hash,
+                                    str(dados_importacao.get("codigo_hash") or ""),
+                                )
+                                or not hmac.compare_digest(
+                                    proposta_digital_validacao.estrutura_hash,
+                                    _hash_estrutura_itens_proposta_digital(pregao),
+                                )
+                            ):
+                                erros.append(
+                                    "A validação da Proposta Digital não confere. "
+                                    "Informe o código novamente."
+                                )
 
             # Primeiro valida tudo. Só grava depois que todas as linhas
             # selecionadas estiverem corretas.
@@ -1445,33 +2512,110 @@ def propostas_iniciais(request):
                         "fornecedores": fornecedores,
                         "fornecedor_selecionado": fornecedor_selecionado,
                         "propostas_salvas": propostas_digitadas,
+                        "proposta_digital_import_token": proposta_digital_import_token,
                     },
                 )
 
             salvos = 0
             participantes = 0
 
-            for dados in dados_validados:
-                PropostaInicialItem.objects.update_or_create(
-                    pregao=pregao,
-                    pregao_item=dados["pregao_item"],
-                    fornecedor=fornecedor_selecionado,
-                    defaults={
-                        "participa": dados["participa"],
-                        "marca": dados["marca"],
-                        "preco_inicial": dados["preco_inicial"],
-                    },
-                )
-                salvos += 1
-                if dados["participa"]:
-                    participantes += 1
+            try:
+                with transaction.atomic():
+                    proposta_digital_bloqueada = None
 
-            messages.success(
-                request,
+                    if proposta_digital_para_importar_id:
+                        proposta_digital_bloqueada = (
+                            PropostaDigital.objects.select_for_update()
+                            .filter(
+                                id=proposta_digital_para_importar_id,
+                                pregao=pregao,
+                            )
+                            .first()
+                        )
+
+                        if (
+                            not proposta_digital_bloqueada
+                            or proposta_digital_bloqueada.status
+                            != PropostaDigital.STATUS_FINALIZADA
+                        ):
+                            raise ValidationError(
+                                "Esta Proposta Digital já foi importada, invalidada "
+                                "ou não está mais disponível."
+                            )
+
+                        cnpj_fornecedor = _somente_digitos(
+                            fornecedor_selecionado.cnpj
+                        )
+                        cnpj_hash_fornecedor = hashlib.sha256(
+                            cnpj_fornecedor.encode("utf-8")
+                        ).hexdigest()
+
+                        if (
+                            len(cnpj_fornecedor) != 14
+                            or not hmac.compare_digest(
+                                proposta_digital_bloqueada.cnpj_hash,
+                                cnpj_hash_fornecedor,
+                            )
+                            or not hmac.compare_digest(
+                                proposta_digital_bloqueada.estrutura_hash,
+                                _hash_estrutura_itens_proposta_digital(pregao),
+                            )
+                        ):
+                            raise ValidationError(
+                                "A Proposta Digital não corresponde ao "
+                                "pregão/fornecedor selecionado."
+                            )
+
+                    for dados in dados_validados:
+                        PropostaInicialItem.objects.update_or_create(
+                            pregao=pregao,
+                            pregao_item=dados["pregao_item"],
+                            fornecedor=fornecedor_selecionado,
+                            defaults={
+                                "participa": dados["participa"],
+                                "marca": dados["marca"],
+                                "preco_inicial": dados["preco_inicial"],
+                            },
+                        )
+                        salvos += 1
+                        if dados["participa"]:
+                            participantes += 1
+
+                    if proposta_digital_bloqueada:
+                        proposta_digital_bloqueada.status = (
+                            PropostaDigital.STATUS_IMPORTADA
+                        )
+                        proposta_digital_bloqueada.fornecedor_importado = (
+                            fornecedor_selecionado
+                        )
+                        proposta_digital_bloqueada.importado_por = request.user
+                        proposta_digital_bloqueada.importado_em = timezone.now()
+                        proposta_digital_bloqueada.save(
+                            update_fields=[
+                                "status",
+                                "fornecedor_importado",
+                                "importado_por",
+                                "importado_em",
+                            ]
+                        )
+
+            except ValidationError as erro_importacao:
+                messages.error(request, str(erro_importacao))
+                return redirect(
+                    f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                    f"&fornecedor={fornecedor_selecionado.id}"
+                )
+
+            mensagem_sucesso = (
                 f"Propostas do fornecedor {fornecedor_selecionado.razao_social} "
                 f"salvas com sucesso. Itens participantes: {participantes}. "
-                f"Registros processados: {salvos}.",
+                f"Registros processados: {salvos}."
             )
+
+            if proposta_digital_para_importar_id:
+                mensagem_sucesso += " Proposta Digital marcada como importada."
+
+            messages.success(request, mensagem_sucesso)
 
             return redirect(
                 f"{request.path}?modo=fornecedor&pregao={pregao.id}"
@@ -1490,6 +2634,7 @@ def propostas_iniciais(request):
             "fornecedores": fornecedores,
             "fornecedor_selecionado": fornecedor_selecionado,
             "propostas_salvas": propostas_salvas,
+            "proposta_digital_import_token": proposta_digital_import_token,
         },
     )
 

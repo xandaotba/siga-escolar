@@ -162,6 +162,9 @@ class LoginRequiredMiddleware:
             reverse("password_reset_done"),
             # A confirmação contém uid/token dinâmicos; liberamos o prefixo.
             "/redefinir-senha/",
+            # Link público da Proposta Digital. A geração do link fica em
+            # /pregoes/propostas-iniciais/gerar-link-digital/ e continua autenticada.
+            "/pregoes/proposta-digital/",
             "/admin/",
             settings.STATIC_URL,
         ]

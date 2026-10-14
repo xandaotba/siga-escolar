@@ -1,3 +1,4 @@
+import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
@@ -660,3 +661,148 @@ class PropostaInicialItem(models.Model):
 
     def __str__(self):
         return f"{self.pregao} - {self.pregao_item.item.nome_item} - {self.fornecedor.razao_social}"
+
+class PropostaDigitalLink(models.Model):
+    pregao = models.OneToOneField(
+        Pregao,
+        on_delete=models.CASCADE,
+        related_name="link_proposta_digital",
+        verbose_name="Pregão",
+    )
+    token = models.UUIDField(
+        "Token público",
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+    ativo = models.BooleanField("Ativo", default=True)
+    criado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="links_proposta_digital_criados",
+        verbose_name="Criado por",
+    )
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "Link de Proposta Digital"
+        verbose_name_plural = "Links de Propostas Digitais"
+
+    def __str__(self):
+        return f"Link proposta digital - {self.pregao}"
+
+
+class PropostaDigital(models.Model):
+    STATUS_FINALIZADA = "finalizada"
+    STATUS_IMPORTADA = "importada"
+    STATUS_INVALIDADA = "invalidada"
+
+    STATUS_CHOICES = [
+        (STATUS_FINALIZADA, "Finalizada"),
+        (STATUS_IMPORTADA, "Importada"),
+        (STATUS_INVALIDADA, "Invalidada"),
+    ]
+
+    pregao = models.ForeignKey(
+        Pregao,
+        on_delete=models.CASCADE,
+        related_name="propostas_digitais",
+        verbose_name="Pregão",
+    )
+    link = models.ForeignKey(
+        PropostaDigitalLink,
+        on_delete=models.PROTECT,
+        related_name="propostas",
+        verbose_name="Link utilizado",
+    )
+    protocolo = models.UUIDField(
+        "Protocolo",
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+
+    # O código de abertura nunca é salvo no servidor.
+    # Apenas o SHA-256 normalizado do código é persistido para futura localização.
+    codigo_hash = models.CharField(
+        "Hash do código de abertura",
+        max_length=64,
+        unique=True,
+        db_index=True,
+    )
+
+    # O CNPJ e a razão social ficam dentro do pacote criptografado.
+    # Este hash permite impedir duas propostas finalizadas para o mesmo CNPJ/pregão
+    # sem armazenar o CNPJ em texto puro neste registro.
+    cnpj_hash = models.CharField(
+        "Hash do CNPJ",
+        max_length=64,
+        db_index=True,
+    )
+
+    pacote_criptografado = models.TextField("Pacote criptografado")
+    iv_b64 = models.CharField("IV AES-GCM", max_length=64)
+    salt_b64 = models.CharField("Salt PBKDF2", max_length=64)
+    conteudo_hash = models.CharField("Hash do conteúdo criptografado", max_length=64)
+    estrutura_hash = models.CharField(
+        "Hash da estrutura de itens",
+        max_length=64,
+        help_text="Fingerprint da relação de itens do pregão no momento do envio.",
+    )
+    algoritmo = models.CharField(
+        "Algoritmo",
+        max_length=80,
+        default="AES-256-GCM/PBKDF2-SHA256/200000",
+    )
+    quantidade_itens = models.PositiveIntegerField("Quantidade de itens")
+
+    status = models.CharField(
+        "Status",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_FINALIZADA,
+    )
+    finalizada_em = models.DateTimeField("Finalizada em", auto_now_add=True)
+
+    # Campos reservados para a etapa de importação no dia do pregão.
+    fornecedor_importado = models.ForeignKey(
+        Fornecedor,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="propostas_digitais_importadas",
+        verbose_name="Fornecedor importado",
+    )
+    importado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="propostas_digitais_importadas",
+        verbose_name="Importado por",
+    )
+    importado_em = models.DateTimeField("Importado em", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Proposta Digital"
+        verbose_name_plural = "Propostas Digitais"
+        ordering = ["-finalizada_em"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pregao", "cnpj_hash"],
+                name="unique_proposta_digital_cnpj_pregao",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["pregao", "status"],
+                name="pregao_prop_digital_status_idx",
+            )
+        ]
+
+    def __str__(self):
+        return f"Proposta digital {str(self.protocolo)[:8]} - {self.pregao}"
+

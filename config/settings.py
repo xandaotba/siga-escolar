@@ -188,3 +188,4 @@ PASSWORD_RESET_TIMEOUT = int(os.environ.get("PASSWORD_RESET_TIMEOUT", "3600"))
 # Railway/reverse proxy informa ao Django que a requisição original usa HTTPS.
 # Isso garante que os links de redefinição sejam gerados com https:// em produção.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+

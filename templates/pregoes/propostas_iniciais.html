@@ -64,6 +64,311 @@
         min-width: 120px;
         max-width: 150px;
     }
+
+
+    /* =========================================================
+       PROPOSTA DIGITAL
+       ========================================================= */
+    .proposta-digital-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        flex-wrap: wrap;
+    }
+
+    .proposta-digital-card h2 {
+        margin-bottom: 4px;
+    }
+
+    .proposta-digital-card p {
+        margin: 0;
+        color: #64748b;
+    }
+
+    .pd-modal-fundo {
+        position: fixed;
+        inset: 0;
+        z-index: 120000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(15, 23, 42, 0.55);
+    }
+
+    .pd-modal-fundo.aberto {
+        display: flex;
+    }
+
+    .pd-modal {
+        width: min(620px, 100%);
+        max-height: 90vh;
+        overflow: auto;
+        background: #ffffff;
+        border-radius: 14px;
+        box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+        padding: 22px;
+    }
+
+    .pd-modal-topo {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 18px;
+    }
+
+    .pd-modal-topo h2 {
+        margin: 0 0 4px;
+    }
+
+    .pd-modal-fechar {
+        border: 0;
+        background: transparent;
+        font-size: 24px;
+        line-height: 1;
+        cursor: pointer;
+        color: #64748b;
+    }
+
+    .pd-link-resultado {
+        display: none;
+        margin-top: 18px;
+        padding: 14px;
+        border: 1px solid #bbf7d0;
+        border-radius: 10px;
+        background: #f0fdf4;
+    }
+
+    .pd-link-linha {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+    }
+
+    .pd-link-linha input {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .pd-erro {
+        display: none;
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #fef2f2;
+        color: #b91c1c;
+        font-weight: 700;
+    }
+
+    .pd-importacao-card {
+        margin: 16px 0;
+        padding: 14px;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        background: #eff6ff;
+    }
+
+    .pd-importacao-card h3 {
+        margin: 0 0 4px;
+        color: #1e3a8a;
+    }
+
+    .pd-importacao-card p {
+        margin: 0 0 10px;
+        color: #475569;
+        font-size: 13px;
+    }
+
+    .pd-importacao-linha {
+        display: grid;
+        grid-template-columns: minmax(240px, 420px) auto;
+        gap: 8px;
+        align-items: end;
+    }
+
+    .pd-importacao-linha input {
+        width: 100%;
+        box-sizing: border-box;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        font-weight: 700;
+    }
+
+    .pd-importacao-status {
+        display: none;
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .pd-importacao-status.sucesso {
+        display: block;
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        color: #166534;
+    }
+
+    .pd-importacao-status.erro {
+        display: block;
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+        color: #b91c1c;
+    }
+
+    @media (max-width: 650px) {
+        .pd-link-linha {
+            flex-direction: column;
+        }
+
+        .pd-importacao-linha {
+            grid-template-columns: 1fr;
+        }
+    }
+
+
+    /* =========================================================
+       LEITOR DE QR CODE - PROPOSTA DIGITAL
+       ========================================================= */
+    .pd-importacao-botoes {
+        display: flex;
+        align-items: end;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .pd-qr-modal-fundo {
+        position: fixed;
+        inset: 0;
+        z-index: 130000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(15, 23, 42, 0.72);
+    }
+
+    .pd-qr-modal-fundo.aberto {
+        display: flex;
+    }
+
+    .pd-qr-modal {
+        width: min(620px, 100%);
+        max-height: 92vh;
+        overflow: auto;
+        background: #ffffff;
+        border-radius: 14px;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.34);
+        padding: 20px;
+    }
+
+    .pd-qr-modal-topo {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 14px;
+    }
+
+    .pd-qr-modal-topo h3 {
+        margin: 0 0 4px;
+        color: #0f172a;
+    }
+
+    .pd-qr-modal-topo p {
+        margin: 0;
+        color: #64748b;
+        font-size: 13px;
+    }
+
+    .pd-qr-fechar {
+        border: 0;
+        background: transparent;
+        color: #64748b;
+        font-size: 25px;
+        line-height: 1;
+        cursor: pointer;
+    }
+
+    .pd-qr-camera {
+        position: relative;
+        overflow: hidden;
+        border-radius: 12px;
+        background: #020617;
+        aspect-ratio: 4 / 3;
+    }
+
+    .pd-qr-camera video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .pd-qr-mira {
+        position: absolute;
+        inset: 50% auto auto 50%;
+        width: min(64%, 290px);
+        aspect-ratio: 1 / 1;
+        transform: translate(-50%, -50%);
+        border: 3px solid rgba(255,255,255,.95);
+        border-radius: 18px;
+        box-shadow:
+            0 0 0 9999px rgba(2, 6, 23, .28),
+            0 0 0 1px rgba(15,23,42,.25);
+        pointer-events: none;
+    }
+
+    .pd-qr-mira::before {
+        content: "";
+        position: absolute;
+        left: 12%;
+        right: 12%;
+        top: 50%;
+        height: 2px;
+        background: rgba(34, 197, 94, .95);
+        box-shadow: 0 0 8px rgba(34, 197, 94, .8);
+    }
+
+    .pd-qr-status {
+        min-height: 20px;
+        margin-top: 11px;
+        color: #475569;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .pd-qr-status.erro {
+        color: #b91c1c;
+    }
+
+    .pd-qr-status.sucesso {
+        color: #166534;
+    }
+
+    .pd-qr-acoes {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 12px;
+    }
+
+    @media (max-width: 650px) {
+        .pd-importacao-botoes {
+            width: 100%;
+        }
+
+        .pd-importacao-botoes .btn {
+            flex: 1;
+        }
+
+        .pd-qr-modal {
+            padding: 15px;
+        }
+    }
+
 </style>
 
 {% if messages %}
@@ -75,6 +380,65 @@
         {% endif %}
     {% endfor %}
 {% endif %}
+
+<div class="card proposta-digital-card">
+    <div>
+        <h2>Proposta Digital</h2>
+        <p>Gere um único link do pregão para encaminhar aos fornecedores antes da sessão.</p>
+    </div>
+    <button type="button" class="btn btn-primary" id="btn-abrir-proposta-digital">
+        🔗 Gerar link para Proposta Digital
+    </button>
+</div>
+
+<div class="pd-modal-fundo" id="modal-proposta-digital" aria-hidden="true">
+    <div class="pd-modal" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-proposta-digital">
+        <div class="pd-modal-topo">
+            <div>
+                <h2 id="titulo-modal-proposta-digital">Gerar link para Proposta Digital</h2>
+                <p style="margin:0;color:#64748b;">
+                    O mesmo link poderá ser enviado para todos os fornecedores do pregão selecionado.
+                </p>
+            </div>
+            <button type="button" class="pd-modal-fechar" id="btn-fechar-proposta-digital" aria-label="Fechar">×</button>
+        </div>
+
+        <form id="form-gerar-link-proposta-digital">
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="pregao_link_digital">Pregão</label>
+                <select name="pregao_id" id="pregao_link_digital" required>
+                    <option value="">Selecione o pregão</option>
+                    {% for p in pregoes %}
+                        {% if p.status == "nao_iniciado" %}
+                        <option value="{{ p.id }}">
+                            Pregão {{ p.numero }}/{{ p.ano }} — {% for municipio in p.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %}
+                        </option>
+                        {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn btn-success" id="btn-gerar-link-digital">
+                    Gerar link
+                </button>
+            </div>
+        </form>
+
+        <div class="pd-erro" id="erro-link-digital"></div>
+
+        <div class="pd-link-resultado" id="resultado-link-digital">
+            <strong>Link pronto para envio</strong>
+            <div class="pd-link-linha">
+                <input type="text" id="link-proposta-digital" readonly>
+                <button type="button" class="btn btn-primary" id="btn-copiar-link-digital">Copiar link</button>
+                <a class="btn btn-secondary" id="btn-abrir-link-digital" href="#" target="_blank" rel="noopener">Abrir</a>
+            </div>
+            <small id="info-link-digital" style="display:block;margin-top:8px;color:#475569;"></small>
+        </div>
+    </div>
+</div>
 
 <div class="card">
     <h2>Modo de Cadastro</h2>
@@ -292,6 +656,75 @@
         {% if fornecedor_selecionado.cnpj %} — {{ fornecedor_selecionado.cnpj }}{% endif %}
     </p>
 
+    <div class="pd-importacao-card"
+         id="pd-importacao-card"
+         data-pregao-id="{{ pregao.id }}"
+         data-fornecedor-id="{{ fornecedor_selecionado.id }}"
+         data-fornecedor-cnpj="{{ fornecedor_selecionado.cnpj|default:'' }}">
+        <h3>📥 Importar Proposta Digital</h3>
+        <p>
+            Digite o código apresentado pelo fornecedor. O SIGA conferirá o Pregão e o CNPJ
+            antes de abrir a proposta e preencher os itens abaixo.
+        </p>
+
+        <div class="pd-importacao-linha">
+            <div class="form-group" style="margin:0;">
+                <label for="codigo-proposta-digital">Código da proposta</label>
+                <input
+                    type="text"
+                    id="codigo-proposta-digital"
+                    maxlength="60"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Ex.: PX7K-4M2D-9QFA-8RWT-6H3N"
+                >
+            </div>
+            <div class="pd-importacao-botoes">
+                <button type="button" class="btn btn-primary" id="btn-importar-proposta-digital">
+                    Localizar e importar proposta
+                </button>
+
+                <button type="button" class="btn btn-secondary" id="btn-ler-qr-proposta-digital">
+                    📷 Ler QR Code
+                </button>
+            </div>
+        </div>
+
+        <div class="pd-importacao-status" id="status-importacao-digital"></div>
+    </div>
+
+    <div class="pd-qr-modal-fundo" id="modal-leitor-qr" aria-hidden="true">
+        <div class="pd-qr-modal" role="dialog" aria-modal="true" aria-labelledby="titulo-leitor-qr">
+            <div class="pd-qr-modal-topo">
+                <div>
+                    <h3 id="titulo-leitor-qr">📷 Ler QR Code da Proposta</h3>
+                    <p>
+                        Aponte a câmera para o QR Code entregue pelo fornecedor.
+                        A leitura acontece somente neste navegador.
+                    </p>
+                </div>
+                <button type="button" class="pd-qr-fechar" id="btn-fechar-leitor-qr" aria-label="Fechar câmera">×</button>
+            </div>
+
+            <div class="pd-qr-camera">
+                <video id="video-leitor-qr" autoplay playsinline muted></video>
+                <div class="pd-qr-mira" aria-hidden="true"></div>
+            </div>
+
+            <canvas id="canvas-leitor-qr" hidden></canvas>
+
+            <div class="pd-qr-status" id="status-leitor-qr">
+                Clique em “Ler QR Code” e permita o acesso à câmera.
+            </div>
+
+            <div class="pd-qr-acoes">
+                <button type="button" class="btn btn-secondary" id="btn-cancelar-leitor-qr">
+                    Fechar câmera
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div class="alert alert-success">
         Marque os itens em que este fornecedor participará. Para os itens marcados, informe a marca e o preço inicial.
         Os itens desmarcados ficarão registrados como não participantes para este fornecedor.
@@ -302,6 +735,12 @@
         <input type="hidden" name="modo" value="fornecedor">
         <input type="hidden" name="pregao" value="{{ pregao.id }}">
         <input type="hidden" name="fornecedor" value="{{ fornecedor_selecionado.id }}">
+        <input
+            type="hidden"
+            name="proposta_digital_import_token"
+            id="proposta_digital_import_token"
+            value="{{ proposta_digital_import_token|default:'' }}"
+        >
 
         <div class="table-wrapper">
             <table>
@@ -386,6 +825,93 @@
     </form>
 </div>
 {% endif %}
+
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const modal = document.getElementById("modal-proposta-digital");
+    const abrir = document.getElementById("btn-abrir-proposta-digital");
+    const fechar = document.getElementById("btn-fechar-proposta-digital");
+    const form = document.getElementById("form-gerar-link-proposta-digital");
+    const erro = document.getElementById("erro-link-digital");
+    const resultado = document.getElementById("resultado-link-digital");
+    const linkInput = document.getElementById("link-proposta-digital");
+    const copiar = document.getElementById("btn-copiar-link-digital");
+    const abrirLink = document.getElementById("btn-abrir-link-digital");
+    const info = document.getElementById("info-link-digital");
+    const btnGerar = document.getElementById("btn-gerar-link-digital");
+
+    function abrirModal() {
+        modal.classList.add("aberto");
+        modal.setAttribute("aria-hidden", "false");
+        erro.style.display = "none";
+        document.getElementById("pregao_link_digital")?.focus();
+    }
+
+    function fecharModal() {
+        modal.classList.remove("aberto");
+        modal.setAttribute("aria-hidden", "true");
+    }
+
+    abrir?.addEventListener("click", abrirModal);
+    fechar?.addEventListener("click", fecharModal);
+    modal?.addEventListener("click", function (event) {
+        if (event.target === modal) fecharModal();
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && modal?.classList.contains("aberto")) {
+            fecharModal();
+        }
+    });
+
+    form?.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        erro.style.display = "none";
+        resultado.style.display = "none";
+        btnGerar.disabled = true;
+        btnGerar.textContent = "Gerando...";
+
+        try {
+            const response = await fetch("{% url 'pregoes:gerar_link_proposta_digital' %}", {
+                method: "POST",
+                body: new FormData(form),
+                headers: {"X-Requested-With": "XMLHttpRequest"},
+                credentials: "same-origin"
+            });
+
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+                throw new Error(data.mensagem || "Não foi possível gerar o link.");
+            }
+
+            linkInput.value = data.url;
+            abrirLink.href = data.url;
+            info.textContent = `${data.pregao} • ${data.quantidade_itens} item(ns). ${data.criado ? "Novo link criado." : "Link já existente reutilizado."}`;
+            resultado.style.display = "block";
+        } catch (e) {
+            erro.textContent = e.message || "Não foi possível gerar o link.";
+            erro.style.display = "block";
+        } finally {
+            btnGerar.disabled = false;
+            btnGerar.textContent = "Gerar link";
+        }
+    });
+
+    copiar?.addEventListener("click", async function () {
+        if (!linkInput.value) return;
+        try {
+            await navigator.clipboard.writeText(linkInput.value);
+            const textoAnterior = copiar.textContent;
+            copiar.textContent = "Copiado!";
+            setTimeout(() => copiar.textContent = textoAnterior, 1600);
+        } catch (e) {
+            linkInput.select();
+            document.execCommand("copy");
+        }
+    });
+});
+</script>
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
@@ -553,6 +1079,636 @@ document.addEventListener("DOMContentLoaded", function () {
 
         atualizar();
         checkbox.addEventListener("change", atualizar);
+    });
+});
+</script>
+
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const cardImportacao = document.getElementById("pd-importacao-card");
+    if (!cardImportacao) return;
+
+    const campoCodigo = document.getElementById("codigo-proposta-digital");
+    const botaoImportar = document.getElementById("btn-importar-proposta-digital");
+    const statusImportacao = document.getElementById("status-importacao-digital");
+    const tokenImportacao = document.getElementById("proposta_digital_import_token");
+    const formFornecedor = document.getElementById("form-propostas-fornecedor");
+
+    const botaoLerQr = document.getElementById("btn-ler-qr-proposta-digital");
+    const modalQr = document.getElementById("modal-leitor-qr");
+    const botaoFecharQr = document.getElementById("btn-fechar-leitor-qr");
+    const botaoCancelarQr = document.getElementById("btn-cancelar-leitor-qr");
+    const videoQr = document.getElementById("video-leitor-qr");
+    const canvasQr = document.getElementById("canvas-leitor-qr");
+    const statusQr = document.getElementById("status-leitor-qr");
+
+    let streamQr = null;
+    let timerQr = null;
+    let detectorQr = null;
+    let lendoQr = false;
+
+    const pregaoId = Number(cardImportacao.dataset.pregaoId || 0);
+    const fornecedorId = Number(cardImportacao.dataset.fornecedorId || 0);
+    const cnpjFornecedor = somenteDigitos(cardImportacao.dataset.fornecedorCnpj || "");
+
+    function somenteDigitos(valor) {
+        return String(valor || "").replace(/\D/g, "");
+    }
+
+    function normalizarCodigo(valor) {
+        let texto = String(valor || "").trim().toUpperCase();
+        if (texto.includes("|")) {
+            const partes = texto.split("|");
+            texto = partes[partes.length - 1];
+        }
+        return texto.replace(/[^A-Z0-9]/g, "");
+    }
+
+    function formatarCodigoDigitado(valor) {
+        const codigo = normalizarCodigo(valor).slice(0, 20);
+        return codigo.match(/.{1,4}/g)?.join("-") || "";
+    }
+
+    function mostrarStatusQr(tipo, mensagem) {
+        if (!statusQr) return;
+        statusQr.className = "pd-qr-status" + (tipo ? " " + tipo : "");
+        statusQr.textContent = mensagem || "";
+    }
+
+    function pararCameraQr() {
+        lendoQr = false;
+
+        if (timerQr) {
+            clearTimeout(timerQr);
+            timerQr = null;
+        }
+
+        if (videoQr) {
+            try {
+                videoQr.pause();
+            } catch (e) {}
+            videoQr.srcObject = null;
+        }
+
+        if (streamQr) {
+            streamQr.getTracks().forEach(function (track) {
+                track.stop();
+            });
+            streamQr = null;
+        }
+    }
+
+    function fecharModalQr() {
+        pararCameraQr();
+
+        if (modalQr) {
+            modalQr.classList.remove("aberto");
+            modalQr.setAttribute("aria-hidden", "true");
+        }
+    }
+
+    async function prepararDetectorQr() {
+        detectorQr = null;
+
+        if ("BarcodeDetector" in window) {
+            try {
+                const formatos = await BarcodeDetector.getSupportedFormats();
+                if (formatos.includes("qr_code")) {
+                    detectorQr = new BarcodeDetector({
+                        formats: ["qr_code"]
+                    });
+                    return "nativo";
+                }
+            } catch (e) {
+                detectorQr = null;
+            }
+        }
+
+        if (typeof window.jsQR === "function") {
+            return "jsqr";
+        }
+
+        return "";
+    }
+
+    function obterCodigoValidoDoQr(conteudo) {
+        const codigo = normalizarCodigo(conteudo);
+        return codigo.length === 20 ? codigo : "";
+    }
+
+    async function processarQrLido(conteudo) {
+        const codigo = obterCodigoValidoDoQr(conteudo);
+
+        if (!codigo) {
+            mostrarStatusQr(
+                "erro",
+                "O QR Code lido não corresponde a uma Proposta Digital do SIGA."
+            );
+            return false;
+        }
+
+        mostrarStatusQr(
+            "sucesso",
+            "QR Code identificado. Abrindo a proposta..."
+        );
+
+        campoCodigo.value = formatarCodigoDigitado(codigo);
+        campoCodigo.dispatchEvent(new Event("input", {bubbles: true}));
+
+        fecharModalQr();
+
+        // Reaproveita a mesma importação por código já testada.
+        setTimeout(function () {
+            botaoImportar?.click();
+        }, 120);
+
+        return true;
+    }
+
+    async function tentarLeituraNativaQr() {
+        if (!lendoQr || !detectorQr || !videoQr) return;
+
+        if (videoQr.readyState < 2) {
+            timerQr = setTimeout(tentarLeituraNativaQr, 180);
+            return;
+        }
+
+        try {
+            const resultados = await detectorQr.detect(videoQr);
+
+            for (const resultado of resultados || []) {
+                if (await processarQrLido(resultado.rawValue || "")) {
+                    return;
+                }
+            }
+        } catch (e) {
+            // Falhas isoladas de um frame não encerram a câmera.
+        }
+
+        if (lendoQr) {
+            timerQr = setTimeout(tentarLeituraNativaQr, 220);
+        }
+    }
+
+    async function tentarLeituraJsQr() {
+        if (!lendoQr || !videoQr || !canvasQr) return;
+
+        if (
+            videoQr.readyState < 2
+            || !videoQr.videoWidth
+            || !videoQr.videoHeight
+        ) {
+            timerQr = setTimeout(tentarLeituraJsQr, 180);
+            return;
+        }
+
+        try {
+            const larguraOriginal = videoQr.videoWidth;
+            const alturaOriginal = videoQr.videoHeight;
+            const limite = 900;
+            const escala = Math.min(
+                1,
+                limite / Math.max(larguraOriginal, alturaOriginal)
+            );
+
+            const largura = Math.max(
+                1,
+                Math.round(larguraOriginal * escala)
+            );
+            const altura = Math.max(
+                1,
+                Math.round(alturaOriginal * escala)
+            );
+
+            canvasQr.width = largura;
+            canvasQr.height = altura;
+
+            const contexto = canvasQr.getContext("2d", {
+                willReadFrequently: true
+            });
+
+            contexto.drawImage(
+                videoQr,
+                0,
+                0,
+                largura,
+                altura
+            );
+
+            const imagem = contexto.getImageData(
+                0,
+                0,
+                largura,
+                altura
+            );
+
+            const resultado = window.jsQR(
+                imagem.data,
+                largura,
+                altura,
+                {inversionAttempts: "attemptBoth"}
+            );
+
+            if (
+                resultado
+                && resultado.data
+                && await processarQrLido(resultado.data)
+            ) {
+                return;
+            }
+        } catch (e) {
+            // Continua tentando nos próximos frames.
+        }
+
+        if (lendoQr) {
+            timerQr = setTimeout(tentarLeituraJsQr, 180);
+        }
+    }
+
+    async function abrirModalQr() {
+        limparStatus();
+
+        if (
+            !navigator.mediaDevices
+            || !navigator.mediaDevices.getUserMedia
+        ) {
+            mostrarStatus(
+                "erro",
+                "Este navegador não permite acessar a câmera. Digite o código da proposta manualmente."
+            );
+            return;
+        }
+
+        modalQr?.classList.add("aberto");
+        modalQr?.setAttribute("aria-hidden", "false");
+        mostrarStatusQr("", "Solicitando acesso à câmera...");
+
+        try {
+            streamQr = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                    facingMode: {ideal: "environment"},
+                    width: {ideal: 1280},
+                    height: {ideal: 720}
+                }
+            });
+
+            videoQr.srcObject = streamQr;
+            await videoQr.play();
+
+            const modoDetector = await prepararDetectorQr();
+
+            if (!modoDetector) {
+                pararCameraQr();
+                mostrarStatusQr(
+                    "erro",
+                    "O leitor de QR não está disponível neste navegador. Digite o código manualmente."
+                );
+                return;
+            }
+
+            lendoQr = true;
+
+            mostrarStatusQr(
+                "",
+                "Câmera ativa. Centralize o QR Code dentro do quadro."
+            );
+
+            if (modoDetector === "nativo") {
+                tentarLeituraNativaQr();
+            } else {
+                tentarLeituraJsQr();
+            }
+        } catch (erro) {
+            pararCameraQr();
+
+            let mensagem =
+                "Não foi possível acessar a câmera. Verifique a permissão do navegador.";
+
+            if (erro && erro.name === "NotAllowedError") {
+                mensagem =
+                    "A permissão da câmera foi negada. Autorize a câmera no navegador ou digite o código manualmente.";
+            } else if (erro && erro.name === "NotFoundError") {
+                mensagem =
+                    "Nenhuma câmera foi encontrada neste dispositivo. Digite o código manualmente.";
+            } else if (erro && erro.name === "NotReadableError") {
+                mensagem =
+                    "A câmera está sendo usada por outro aplicativo. Feche-o e tente novamente.";
+            }
+
+            mostrarStatusQr("erro", mensagem);
+        }
+    }
+
+    function mostrarStatus(tipo, mensagem) {
+        statusImportacao.className = "pd-importacao-status " + tipo;
+        statusImportacao.textContent = mensagem;
+    }
+
+    function limparStatus() {
+        statusImportacao.className = "pd-importacao-status";
+        statusImportacao.textContent = "";
+    }
+
+    function csrfToken() {
+        return formFornecedor?.querySelector(
+            'input[name="csrfmiddlewaretoken"]'
+        )?.value || "";
+    }
+
+    function base64ParaBytes(valor) {
+        const binario = atob(valor);
+        const bytes = new Uint8Array(binario.length);
+        for (let i = 0; i < binario.length; i++) {
+            bytes[i] = binario.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    function bytesParaHex(bytes) {
+        return Array.from(bytes)
+            .map(b => b.toString(16).padStart(2, "0"))
+            .join("");
+    }
+
+    async function sha256Bytes(bytes) {
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        return bytesParaHex(new Uint8Array(digest));
+    }
+
+    async function descriptografarPacote(data, codigo) {
+        if (
+            data.algoritmo !== "AES-256-GCM/PBKDF2-SHA256/200000"
+        ) {
+            throw new Error(
+                "A versão de criptografia desta proposta não é suportada."
+            );
+        }
+
+        const cifrado = base64ParaBytes(data.pacote_criptografado);
+        const iv = base64ParaBytes(data.iv_b64);
+        const salt = base64ParaBytes(data.salt_b64);
+
+        const hashReal = await sha256Bytes(cifrado);
+        if (hashReal !== String(data.conteudo_hash || "").toLowerCase()) {
+            throw new Error(
+                "A verificação de integridade da proposta falhou."
+            );
+        }
+
+        const material = await crypto.subtle.importKey(
+            "raw",
+            new TextEncoder().encode(codigo),
+            "PBKDF2",
+            false,
+            ["deriveKey"]
+        );
+
+        const chave = await crypto.subtle.deriveKey(
+            {
+                name: "PBKDF2",
+                salt: salt,
+                iterations: 200000,
+                hash: "SHA-256"
+            },
+            material,
+            {name: "AES-GCM", length: 256},
+            false,
+            ["decrypt"]
+        );
+
+        let aberto;
+        try {
+            aberto = await crypto.subtle.decrypt(
+                {name: "AES-GCM", iv: iv},
+                chave,
+                cifrado
+            );
+        } catch (erro) {
+            throw new Error(
+                "Não foi possível abrir a proposta. Confira o código informado."
+            );
+        }
+
+        let payload;
+        try {
+            payload = JSON.parse(new TextDecoder().decode(aberto));
+        } catch (erro) {
+            throw new Error("O conteúdo da Proposta Digital está inválido.");
+        }
+
+        return payload;
+    }
+
+    function preencherFormulario(payload, tokenAssinado) {
+        if (
+            Number(payload.versao) !== 1
+            || Number(payload.pregao_id) !== pregaoId
+            || somenteDigitos(payload.cnpj) !== cnpjFornecedor
+            || !Array.isArray(payload.itens)
+        ) {
+            throw new Error(
+                "A proposta aberta não corresponde ao fornecedor/pregão selecionado."
+            );
+        }
+
+        const itensRecebidos = new Map();
+        payload.itens.forEach(function (item) {
+            itensRecebidos.set(Number(item.pregao_item_id), item);
+        });
+
+        const checkboxes = Array.from(
+            document.querySelectorAll(".check-participa-item")
+        );
+
+        if (itensRecebidos.size !== checkboxes.length) {
+            throw new Error(
+                "A relação de itens desta proposta não corresponde ao pregão atual."
+            );
+        }
+
+        let participantes = 0;
+
+        for (const checkbox of checkboxes) {
+            const id = Number(checkbox.dataset.item);
+            const item = itensRecebidos.get(id);
+
+            if (!item) {
+                throw new Error(
+                    "A relação de itens desta proposta não corresponde ao pregão atual."
+                );
+            }
+
+            const participa = Boolean(item.participa);
+            checkbox.checked = participa;
+            checkbox.dispatchEvent(new Event("change", {bubbles: true}));
+
+            const marca = document.getElementById(`marca_item_${id}`);
+            const preco = document.getElementById(`preco_item_${id}`);
+
+            if (participa) {
+                const marcaValor = String(item.marca || "").trim();
+                const precoValor = String(item.preco_inicial || "").trim();
+
+                if (!marcaValor || !precoValor) {
+                    throw new Error(
+                        `A proposta possui dados incompletos no item ${item.ordem || id}.`
+                    );
+                }
+
+                marca.value = marcaValor;
+                preco.value = precoValor.replace(".", ",");
+                participantes += 1;
+            } else {
+                if (marca) marca.value = "";
+                if (preco) preco.value = "";
+            }
+        }
+
+        tokenImportacao.value = tokenAssinado;
+
+        return {
+            participantes,
+            naoParticipantes: checkboxes.length - participantes,
+            razaoSocial: String(payload.razao_social || "").trim()
+        };
+    }
+
+    botaoLerQr?.addEventListener("click", abrirModalQr);
+    botaoFecharQr?.addEventListener("click", fecharModalQr);
+    botaoCancelarQr?.addEventListener("click", fecharModalQr);
+
+    modalQr?.addEventListener("click", function (event) {
+        if (event.target === modalQr) {
+            fecharModalQr();
+        }
+    });
+
+    document.addEventListener("keydown", function (event) {
+        if (
+            event.key === "Escape"
+            && modalQr?.classList.contains("aberto")
+        ) {
+            fecharModalQr();
+        }
+    });
+
+    window.addEventListener("beforeunload", pararCameraQr);
+
+    campoCodigo?.addEventListener("input", function () {
+        const formatado = formatarCodigoDigitado(this.value);
+        if (this.value !== formatado) {
+            this.value = formatado;
+        }
+        limparStatus();
+    });
+
+    botaoImportar?.addEventListener("click", async function () {
+        limparStatus();
+
+        if (!window.crypto || !window.crypto.subtle) {
+            mostrarStatus(
+                "erro",
+                "Este navegador não oferece o recurso de segurança necessário para abrir a Proposta Digital."
+            );
+            return;
+        }
+
+        const codigo = normalizarCodigo(campoCodigo.value);
+
+        if (codigo.length !== 20) {
+            mostrarStatus(
+                "erro",
+                "Confira o código informado. O código da Proposta Digital possui 20 caracteres."
+            );
+            campoCodigo.focus();
+            return;
+        }
+
+        if (cnpjFornecedor.length !== 14) {
+            mostrarStatus(
+                "erro",
+                "O fornecedor selecionado não possui um CNPJ válido cadastrado no SIGA."
+            );
+            return;
+        }
+
+        botaoImportar.disabled = true;
+        botaoImportar.textContent = "Abrindo proposta...";
+
+        try {
+            const dadosForm = new FormData();
+            dadosForm.append("pregao_id", String(pregaoId));
+            dadosForm.append("fornecedor_id", String(fornecedorId));
+            dadosForm.append("codigo", codigo);
+
+            const response = await fetch(
+                "{% url 'pregoes:localizar_proposta_digital' %}",
+                {
+                    method: "POST",
+                    body: dadosForm,
+                    headers: {
+                        "X-CSRFToken": csrfToken(),
+                        "X-Requested-With": "XMLHttpRequest"
+                    },
+                    credentials: "same-origin",
+                    cache: "no-store"
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok || !data.ok) {
+                throw new Error(
+                    data.mensagem || "Não foi possível localizar a Proposta Digital."
+                );
+            }
+
+            const payload = await descriptografarPacote(data, codigo);
+            const resumo = preencherFormulario(
+                payload,
+                data.token_importacao
+            );
+
+            campoCodigo.value = formatarCodigoDigitado(codigo);
+            campoCodigo.readOnly = true;
+            botaoImportar.disabled = true;
+            botaoImportar.textContent = "Proposta carregada";
+
+            let mensagem =
+                `✓ Proposta Digital carregada com sucesso. ` +
+                `${resumo.participantes} item(ns) participante(s) e ` +
+                `${resumo.naoParticipantes} não participante(s).`;
+
+            if (resumo.razaoSocial) {
+                mensagem += ` Razão Social da proposta: ${resumo.razaoSocial}.`;
+            }
+
+            mensagem += " Confira os itens abaixo e clique em Salvar Propostas do Fornecedor.";
+
+            mostrarStatus("sucesso", mensagem);
+        } catch (erro) {
+            tokenImportacao.value = "";
+            mostrarStatus(
+                "erro",
+                erro.message || "Não foi possível importar a Proposta Digital."
+            );
+        } finally {
+            if (!tokenImportacao.value) {
+                botaoImportar.disabled = false;
+                botaoImportar.textContent = "Localizar e importar proposta";
+            }
+        }
+    });
+
+    campoCodigo?.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            botaoImportar?.click();
+        }
     });
 });
 </script>
