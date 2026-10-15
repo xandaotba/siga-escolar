@@ -17,3 +17,5 @@ tzdata==2026.2
 whitenoise==6.12.0
 selenium>=4.25,<5
 django-anymail==15.2
+google-api-python-client>=2.160,<3
+google-auth>=2.38,<3

@@ -2,7 +2,7 @@
 
 {% block title %}Backup / Exportações | Sistema de Pregões{% endblock %}
 {% block page_title %}Backup / Exportações{% endblock %}
-{% block page_subtitle %}Baixe os principais dados do sistema em planilha Excel{% endblock %}
+{% block page_subtitle %}Exportações em Excel e backup técnico do banco de dados{% endblock %}
 
 {% block content %}
 
@@ -20,14 +20,18 @@
         padding: 18px;
     }
 
+    .backup-card-full {
+        grid-column: 1 / -1;
+    }
+
     .backup-card h2 {
-        margin-bottom: 8px;
+        margin: 0 0 8px;
     }
 
     .backup-card p {
         color: #64748b;
         line-height: 1.55;
-        margin-bottom: 16px;
+        margin: 0 0 16px;
     }
 
     .backup-lista {
@@ -47,8 +51,153 @@
         font-weight: 700;
     }
 
+    .backup-status-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 16px 0;
+    }
+
+    .backup-status-item {
+        border: 1px solid #e2e8f0;
+        background: #f8fafc;
+        border-radius: 12px;
+        padding: 12px;
+    }
+
+    .backup-status-item span {
+        display: block;
+        color: #64748b;
+        font-size: 12px;
+        margin-bottom: 5px;
+    }
+
+    .backup-status-item strong {
+        color: #0f172a;
+        font-size: 14px;
+    }
+
+    .backup-ok { color: #166534 !important; }
+    .backup-erro { color: #991b1b !important; }
+
+    .backup-form-linha {
+        display: flex;
+        align-items: end;
+        gap: 14px;
+        flex-wrap: wrap;
+    }
+
+    .backup-form-grupo {
+        min-width: 190px;
+    }
+
+    .backup-form-grupo label {
+        display: block;
+        font-weight: 800;
+        color: #334155;
+        margin-bottom: 6px;
+        font-size: 13px;
+    }
+
+    .backup-form-grupo select {
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #fff;
+    }
+
+    .backup-checkbox {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 42px;
+        font-weight: 700;
+        color: #334155;
+    }
+
+    .backup-checkbox input {
+        width: auto;
+    }
+
+    .backup-acoes {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 16px;
+    }
+
+    .backup-info {
+        margin-top: 14px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 12px 14px;
+        color: #475569;
+        line-height: 1.55;
+        font-size: 13px;
+    }
+
+    .backup-tabela-wrapper {
+        overflow-x: auto;
+        margin-top: 16px;
+    }
+
+    .backup-tabela {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+
+    .backup-tabela th,
+    .backup-tabela td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #e2e8f0;
+        text-align: left;
+        vertical-align: top;
+        white-space: nowrap;
+    }
+
+    .backup-tabela th {
+        color: #334155;
+        background: #f8fafc;
+        font-weight: 800;
+    }
+
+    .backup-status-badge {
+        display: inline-flex;
+        border-radius: 999px;
+        padding: 4px 9px;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .backup-status-badge.ok {
+        color: #166534;
+        background: #dcfce7;
+    }
+
+    .backup-status-badge.erro {
+        color: #991b1b;
+        background: #fee2e2;
+    }
+
     @media (max-width: 900px) {
         .backup-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .backup-card-full {
+            grid-column: auto;
+        }
+
+        .backup-status-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 560px) {
+        .backup-status-grid {
             grid-template-columns: 1fr;
         }
     }
@@ -67,14 +216,14 @@
 {% endif %}
 
 <div class="backup-alerta">
-    Esta área é restrita ao Administrador. O backup é gerado em Excel com várias abas e pode ser salvo fora do sistema para segurança.
+    Esta área é restrita ao Administrador. A exportação em Excel auxilia na conferência; o backup técnico PostgreSQL gera uma cópia restaurável do banco e a envia ao Google Drive institucional.
 </div>
 
 <div class="backup-grid">
     <div class="backup-card">
-        <h2>Backup completo do sistema</h2>
+        <h2>Exportação em Excel</h2>
         <p>
-            Gera uma planilha Excel única contendo os principais cadastros e quantitativos usados nos pregões.
+            Gera uma planilha Excel única contendo os principais cadastros e quantitativos usados nos certames.
         </p>
 
         <ul class="backup-lista">
@@ -83,8 +232,8 @@
             <li>Fornecedores</li>
             <li>Escolas</li>
             <li>Itens</li>
-            <li>Pregões</li>
-            <li>Quantitativo por Pregão</li>
+            <li>Certames</li>
+            <li>Quantitativo por Certame</li>
             <li>Quantitativo por Escola</li>
         </ul>
 
@@ -94,17 +243,157 @@
     </div>
 
     <div class="backup-card">
-        <h2>Observações</h2>
+        <h2>Backup automático diário</h2>
         <p>
-            Este backup é uma exportação dos dados principais em formato de consulta.
-            Ele não substitui uma cópia técnica do banco de dados, mas facilita conferência,
-            auditoria, arquivamento e recuperação manual de informações.
+            Escolha o horário em que o SIGA deverá realizar o backup técnico diário. O horário abaixo é sempre considerado no fuso de Mato Grosso.
         </p>
 
+        <form method="post" action="{% url 'importacoes:salvar_configuracao_backup' %}">
+            {% csrf_token %}
+            <div class="backup-form-linha">
+                <div class="backup-form-grupo">
+                    <label for="{{ form_configuracao_backup.horario_diario.id_for_label }}">Horário diário</label>
+                    {{ form_configuracao_backup.horario_diario }}
+                    {{ form_configuracao_backup.horario_diario.errors }}
+                </div>
+
+                <label class="backup-checkbox">
+                    {{ form_configuracao_backup.ativo }}
+                    Backup automático ativo
+                </label>
+
+                <button class="btn btn-success" type="submit">Salvar configuração</button>
+            </div>
+        </form>
+
+        <div class="backup-info">
+            <strong>Fuso horário:</strong> America/Cuiaba.<br>
+            A configuração fica salva no banco. Para a execução automática, o serviço Cron do Railway deverá executar o comando de verificação uma vez por hora.
+        </div>
+    </div>
+
+    <div class="backup-card backup-card-full">
+        <h2>Backup técnico PostgreSQL</h2>
         <p>
-            Recomenda-se baixar um backup após concluir cadastros, importações,
-            finalização de pregões ou geração de documentos importantes.
+            Gera um arquivo <strong>.dump</strong> completo e restaurável do PostgreSQL e envia automaticamente para a pasta configurada no Drive compartilhado <strong>SIGA Escolar - Backups</strong>.
         </p>
+
+        <div class="backup-status-grid">
+            <div class="backup-status-item">
+                <span>pg_dump no Railway</span>
+                {% if status_integracao_backup.pg_dump %}
+                <strong class="backup-ok">✓ Disponível</strong>
+                {% else %}
+                <strong class="backup-erro">✗ Não encontrado</strong>
+                {% endif %}
+            </div>
+            <div class="backup-status-item">
+                <span>Credencial Google</span>
+                {% if status_integracao_backup.credencial_google %}
+                <strong class="backup-ok">✓ Configurada</strong>
+                {% else %}
+                <strong class="backup-erro">✗ Não configurada</strong>
+                {% endif %}
+            </div>
+            <div class="backup-status-item">
+                <span>Pasta Google Drive</span>
+                {% if status_integracao_backup.pasta_drive %}
+                <strong class="backup-ok">✓ Configurada</strong>
+                {% else %}
+                <strong class="backup-erro">✗ Não configurada</strong>
+                {% endif %}
+            </div>
+            <div class="backup-status-item">
+                <span>Banco PostgreSQL</span>
+                {% if status_integracao_backup.database_url %}
+                <strong class="backup-ok">✓ Conectado</strong>
+                {% else %}
+                <strong class="backup-erro">✗ DATABASE_URL ausente</strong>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if ultimo_backup_concluido %}
+        <div class="backup-info">
+            <strong>Último backup concluído:</strong>
+            {{ ultimo_backup_concluido.iniciado_em|date:"d/m/Y H:i" }} —
+            {{ ultimo_backup_concluido.tamanho_formatado }} —
+            {{ ultimo_backup_concluido.get_tipo_display }}.
+        </div>
+        {% endif %}
+
+        <div class="backup-acoes">
+            <form method="post" action="{% url 'importacoes:gerar_backup_banco' %}">
+                {% csrf_token %}
+                <button class="btn btn-success" type="submit" {% if not integracao_backup_pronta %}disabled{% endif %}>
+                    Gerar backup agora
+                </button>
+            </form>
+        </div>
+
+        {% if not integracao_backup_pronta %}
+        <div class="backup-info">
+            O botão será habilitado quando todas as quatro verificações acima estiverem concluídas.
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="backup-card backup-card-full">
+        <h2>Histórico dos backups técnicos</h2>
+        <p>São exibidas as 30 execuções mais recentes.</p>
+
+        <div class="backup-tabela-wrapper">
+            <table class="backup-tabela">
+                <thead>
+                    <tr>
+                        <th>Data/Hora</th>
+                        <th>Tipo</th>
+                        <th>Status</th>
+                        <th>Arquivo</th>
+                        <th>Tamanho</th>
+                        <th>Solicitado por</th>
+                        <th>Google Drive</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for backup in historicos_backup %}
+                    <tr>
+                        <td>{{ backup.iniciado_em|date:"d/m/Y H:i" }}</td>
+                        <td>{{ backup.get_tipo_display }}</td>
+                        <td>
+                            {% if backup.status == "concluido" %}
+                            <span class="backup-status-badge ok">Concluído</span>
+                            {% else %}
+                            <span class="backup-status-badge erro" title="{{ backup.mensagem_erro }}">Erro</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ backup.nome_arquivo|default:"-" }}</td>
+                        <td>{{ backup.tamanho_formatado }}</td>
+                        <td>
+                            {% if backup.solicitado_por %}
+                            {{ backup.solicitado_por.get_full_name|default:backup.solicitado_por.username }}
+                            {% elif backup.tipo == "automatico" %}
+                            Sistema
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if backup.drive_web_view_link %}
+                            <a class="btn btn-secondary" href="{{ backup.drive_web_view_link }}" target="_blank" rel="noopener noreferrer">Abrir no Drive</a>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7">Nenhum backup técnico executado ainda.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 

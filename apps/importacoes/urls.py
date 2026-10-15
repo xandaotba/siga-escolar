@@ -19,4 +19,6 @@ urlpatterns = [
     path("media-precos/modelo/", views.baixar_modelo_media_precos, name="modelo_media_precos"),
     path("exportacoes/", views.exportacoes, name="exportacoes"),
     path("exportacoes/backup-completo/", views.baixar_backup_completo, name="backup_completo"),
+    path("exportacoes/backup-banco/gerar/", views.gerar_backup_banco, name="gerar_backup_banco"),
+    path("exportacoes/backup-banco/configuracao/", views.salvar_configuracao_backup, name="salvar_configuracao_backup"),
 ]

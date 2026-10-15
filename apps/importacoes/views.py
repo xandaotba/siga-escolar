@@ -11,6 +11,7 @@ from django.db.models import Sum
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import HttpResponse
+from django.views.decorators.http import require_POST
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
@@ -20,6 +21,9 @@ from openpyxl.utils import get_column_letter
 from apps.cadastros.models import Escola, Fornecedor, Item, Municipio, UnidadeMedida, validar_cnpj, validar_cpf
 
 from .forms import ImportacaoPlanilhaForm
+from .backup_forms import ConfiguracaoBackupForm
+from .backup_service import BackupBancoErro, executar_backup_postgresql, status_integracao_backup
+from .models import ConfiguracaoBackup, HistoricoBackup
 from apps.pregoes.models import Pregao, PregaoItem, QuantitativoEscola, QuantitativoPregao
 
 
@@ -3879,7 +3883,71 @@ def importar_media_precos(request):
 @login_required
 @user_passes_test(usuario_pode_importar, login_url="dashboard")
 def exportacoes(request):
-    return render(request, "importacoes/exportacoes.html")
+    configuracao = ConfiguracaoBackup.obter()
+    form_configuracao = ConfiguracaoBackupForm(instance=configuracao)
+    historicos = HistoricoBackup.objects.select_related("solicitado_por").all()[:30]
+    status_integracao = status_integracao_backup()
+
+    ultimo_concluido = (
+        HistoricoBackup.objects
+        .filter(status=HistoricoBackup.STATUS_CONCLUIDO)
+        .order_by("-iniciado_em")
+        .first()
+    )
+
+    return render(
+        request,
+        "importacoes/exportacoes.html",
+        {
+            "configuracao_backup": configuracao,
+            "form_configuracao_backup": form_configuracao,
+            "historicos_backup": historicos,
+            "ultimo_backup_concluido": ultimo_concluido,
+            "status_integracao_backup": status_integracao,
+            "integracao_backup_pronta": all(status_integracao.values()),
+        },
+    )
+
+
+@login_required
+@user_passes_test(usuario_pode_importar, login_url="dashboard")
+@require_POST
+def salvar_configuracao_backup(request):
+    configuracao = ConfiguracaoBackup.obter()
+    form = ConfiguracaoBackupForm(request.POST, instance=configuracao)
+
+    if form.is_valid():
+        objeto = form.save(commit=False)
+        objeto.timezone = "America/Cuiaba"
+        objeto.atualizado_por = request.user
+        objeto.save()
+        messages.success(
+            request,
+            f"Configuração do backup diário salva. Horário: {objeto.horario_diario:%H:%M} (Mato Grosso).",
+        )
+    else:
+        messages.error(request, "Não foi possível salvar a configuração do backup.")
+
+    return redirect("importacoes:exportacoes")
+
+
+@login_required
+@user_passes_test(usuario_pode_importar, login_url="dashboard")
+@require_POST
+def gerar_backup_banco(request):
+    try:
+        historico = executar_backup_postgresql(
+            tipo=HistoricoBackup.TIPO_MANUAL,
+            usuario=request.user,
+        )
+        messages.success(
+            request,
+            f"Backup técnico concluído e enviado ao Google Drive: {historico.nome_arquivo}",
+        )
+    except BackupBancoErro as erro:
+        messages.error(request, f"Não foi possível gerar o backup técnico: {erro}")
+
+    return redirect("importacoes:exportacoes")
 
 
 @login_required
