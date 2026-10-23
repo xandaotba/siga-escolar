@@ -15,7 +15,7 @@ class PregaoForm(forms.ModelForm):
     fornecedores = forms.ModelMultipleChoiceField(
         queryset=Fornecedor.objects.filter(ativo=True).order_by("razao_social"),
         widget=forms.CheckboxSelectMultiple,
-        required=True,
+        required=False,
         label="Fornecedores",
     )
 
