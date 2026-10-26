@@ -1,6 +1,6 @@
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
-from difflib import get_close_matches
+from difflib import SequenceMatcher, get_close_matches
 import unicodedata
 import json
 import re
@@ -1048,6 +1048,66 @@ def validar_cabecalho_planilha_itens(linha):
     return encontrados[:len(CABECALHOS_ITENS)] == CABECALHOS_ITENS
 
 
+# Equivalências comuns usadas nas planilhas. A chave representa a unidade
+# canônica e os valores aceitam nomes, siglas e formas usuais de escrita.
+EQUIVALENCIAS_UNIDADE_MEDIDA = {
+    "quilograma": {"quilograma", "quilogramas", "kg", "quilo", "quilos", "kilograma", "kilogramas"},
+    "grama": {"grama", "gramas", "g", "gr"},
+    "miligrama": {"miligrama", "miligramas", "mg"},
+    "litro": {"litro", "litros", "l"},
+    "mililitro": {"mililitro", "mililitros", "ml"},
+    "duzia": {"duzia", "duzias", "dz"},
+    "unidade": {"unidade", "unidades", "un", "und", "unid"},
+    "pacote": {"pacote", "pacotes", "pct"},
+    "caixa": {"caixa", "caixas", "cx"},
+    "fardo": {"fardo", "fardos", "fd"},
+    "saco": {"saco", "sacos", "sc"},
+    "bandeja": {"bandeja", "bandejas", "bdj"},
+    "garrafa": {"garrafa", "garrafas", "gf"},
+}
+
+
+def chave_equivalencia_unidade(texto):
+    """
+    Converte variações usuais da unidade para uma chave comum.
+
+    Exemplos:
+    - "Quilograma (KG)", "KG" e "Quilo" -> "quilograma"
+    - "Dúzia (DZ)", "DZ" e "Duzia" -> "duzia"
+
+    A normalização também ignora acentos, pontuação e espaços extras.
+    """
+    normalizado = normalizar_texto_comparacao(texto)
+
+    if not normalizado:
+        return ""
+
+    tokens = normalizado.split()
+
+    for chave, equivalencias in EQUIVALENCIAS_UNIDADE_MEDIDA.items():
+        equivalencias_normalizadas = {
+            normalizar_texto_comparacao(valor)
+            for valor in equivalencias
+        }
+
+        # Correspondência direta: KG, quilo, dúzia, DZ etc.
+        if normalizado in equivalencias_normalizadas:
+            return chave
+
+        # Correspondência composta: "Quilograma (KG)" -> "quilograma kg".
+        for equivalencia in equivalencias_normalizadas:
+            if not equivalencia:
+                continue
+
+            if " " in equivalencia:
+                if equivalencia in normalizado:
+                    return chave
+            elif equivalencia in tokens:
+                return chave
+
+    return normalizado
+
+
 def buscar_unidade_medida_cadastrada(texto_unidade):
     texto_unidade = texto_celula(texto_unidade)
 
@@ -1055,14 +1115,17 @@ def buscar_unidade_medida_cadastrada(texto_unidade):
         return None
 
     texto_normalizado = normalizar_texto_comparacao(texto_unidade)
+    chave_entrada = chave_equivalencia_unidade(texto_unidade)
 
-    # Primeiro tenta pelo código interno.
+    # 1) Código interno exatamente igual.
     unidade = UnidadeMedida.objects.filter(codigo__iexact=texto_unidade).first()
     if unidade:
         return unidade
 
-    # Depois tenta por nome ou sigla, ignorando acentos e variações de caixa.
-    for unidade in UnidadeMedida.objects.all().order_by("nome"):
+    unidades = list(UnidadeMedida.objects.all().order_by("nome"))
+
+    # 2) Nome, sigla, código ou exibição equivalentes após normalização.
+    for unidade in unidades:
         possibilidades = [
             unidade.codigo,
             unidade.nome,
@@ -1071,8 +1134,53 @@ def buscar_unidade_medida_cadastrada(texto_unidade):
         ]
 
         for possibilidade in possibilidades:
-            if possibilidade and normalizar_texto_comparacao(possibilidade) == texto_normalizado:
+            if not possibilidade:
+                continue
+
+            if normalizar_texto_comparacao(possibilidade) == texto_normalizado:
                 return unidade
+
+            if chave_equivalencia_unidade(possibilidade) == chave_entrada:
+                return unidade
+
+    # 3) Pequenos erros de digitação. Só considera textos com 4 ou mais
+    # caracteres e exige uma única unidade claramente mais próxima.
+    if len(texto_normalizado) >= 4:
+        pontuacoes = []
+
+        for unidade in unidades:
+            melhor = 0.0
+
+            for possibilidade in [unidade.codigo, unidade.nome, unidade.sigla, str(unidade)]:
+                if not possibilidade:
+                    continue
+
+                candidato = normalizar_texto_comparacao(possibilidade)
+
+                if len(candidato) < 4:
+                    continue
+
+                pontuacao = SequenceMatcher(
+                    None,
+                    texto_normalizado,
+                    candidato,
+                ).ratio()
+
+                if pontuacao >= 0.88:
+                    melhor = max(melhor, pontuacao)
+
+            if melhor > 0:
+                pontuacoes.append((melhor, unidade))
+
+        pontuacoes.sort(key=lambda item: item[0], reverse=True)
+
+        if pontuacoes:
+            melhor_pontuacao, melhor_unidade = pontuacoes[0]
+            segunda_pontuacao = pontuacoes[1][0] if len(pontuacoes) > 1 else 0
+
+            # Margem mínima evita escolher automaticamente quando houver ambiguidade.
+            if melhor_pontuacao >= 0.88 and (melhor_pontuacao - segunda_pontuacao >= 0.05 or segunda_pontuacao == 0):
+                return melhor_unidade
 
     return None
 
