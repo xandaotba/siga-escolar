@@ -1715,10 +1715,13 @@ def opcoes_item_para_correcao(texto_item):
     ]
 
 
-def opcoes_item_certame_para_correcao(texto_item, pregao):
+def opcoes_item_quantitativo_pregao_para_correcao(texto_item, pregao):
     """
-    Retorna somente itens que possuem QuantitativoPregao no certame selecionado.
-    A lista é ordenada priorizando os nomes mais parecidos com o texto da planilha.
+    Retorna somente sugestões de itens que possuem QuantitativoPregao no certame
+    selecionado e cujo nome tenha similaridade com o texto informado na planilha.
+
+    Essa função é exclusiva da importação de Quantitativo por Escola. Assim ela
+    não conflita com outras rotinas que trabalham com PregaoItem.
     """
     if not pregao:
         return []
@@ -1731,35 +1734,53 @@ def opcoes_item_certame_para_correcao(texto_item, pregao):
     itens = [quantitativo.item for quantitativo in quantitativos]
 
     texto_normalizado = normalizar_texto_comparacao(texto_item)
-    mapa_normalizado = {
-        normalizar_texto_comparacao(item.nome_item): item.nome_item
+    if not texto_normalizado or not itens:
+        return []
+
+    mapa_itens = {
+        normalizar_texto_comparacao(item.nome_item): item
         for item in itens
     }
 
-    sugestoes = get_close_matches(
+    # Primeiro considera os nomes mais próximos. Um cutoff moderado permite
+    # casos como "BANANA" -> "BANANA DA TERRA", sem listar todo o certame.
+    nomes_sugeridos = get_close_matches(
         texto_normalizado,
-        list(mapa_normalizado.keys()),
+        list(mapa_itens.keys()),
         n=8,
         cutoff=0.45,
     )
-    sugestoes_normalizadas = set(sugestoes)
 
-    itens_ordenados = sorted(
-        itens,
-        key=lambda item: (
-            0 if normalizar_texto_comparacao(item.nome_item) in sugestoes_normalizadas else 1,
-            item.nome_item,
-        ),
-    )
+    # Complementa com comparação por inclusão de palavras. Isso ajuda em nomes
+    # compostos quando o Excel traz apenas parte do nome cadastrado.
+    tokens_entrada = set(texto_normalizado.split())
+    for nome_normalizado in mapa_itens:
+        tokens_item = set(nome_normalizado.split())
+        if tokens_entrada and tokens_item and (
+            tokens_entrada.issubset(tokens_item)
+            or tokens_item.issubset(tokens_entrada)
+        ):
+            if nome_normalizado not in nomes_sugeridos:
+                nomes_sugeridos.append(nome_normalizado)
 
-    return [
-        {
-            "id": item.id,
-            "nome": item.nome_item,
-            "unidade": item.get_unidade_medida_display(),
-        }
-        for item in itens_ordenados
-    ]
+    sugestoes = []
+    ids_adicionados = set()
+
+    for nome_normalizado in nomes_sugeridos:
+        item = mapa_itens.get(nome_normalizado)
+        if not item or item.id in ids_adicionados:
+            continue
+
+        ids_adicionados.add(item.id)
+        sugestoes.append(
+            {
+                "id": item.id,
+                "nome": item.nome_item,
+                "unidade": item.get_unidade_medida_display(),
+            }
+        )
+
+    return sugestoes
 
 
 def obter_item_por_correcao(request, numero_linha):
@@ -2465,11 +2486,11 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
 
         if not item:
             erro_item = True
-            item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
+            item_opcoes = opcoes_item_quantitativo_pregao_para_correcao(item_texto, pregao)
             erros.append("Item não encontrado no sistema. Selecione o item correto na coluna Correção.")
         elif not item_existe_no_quantitativo_pregao(pregao, item):
             erro_item = True
-            item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
+            item_opcoes = opcoes_item_quantitativo_pregao_para_correcao(item_texto, pregao)
             erros.append("Este item não existe no quantitativo do pregão selecionado.")
 
     if unidade_texto:
@@ -2718,7 +2739,7 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
     if item:
         if not item_existe_no_quantitativo_pregao(pregao, item):
             linha["erro_item"] = True
-            linha["item_opcoes"] = opcoes_item_certame_para_correcao(linha["dados"].get("item_texto"), pregao)
+            linha["item_opcoes"] = opcoes_item_quantitativo_pregao_para_correcao(linha["dados"].get("item_texto"), pregao)
             erros_filtrados.append("Este item não existe no quantitativo do pregão selecionado.")
         else:
             linha["erro_item"] = False
