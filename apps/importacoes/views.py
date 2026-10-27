@@ -3,10 +3,12 @@ from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher, get_close_matches
 import unicodedata
 import json
+import logging
 import re
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.db import transaction
 from django.db.models import Sum
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -25,6 +27,9 @@ from .backup_forms import ConfiguracaoBackupForm
 from .backup_service import BackupBancoErro, executar_backup_postgresql, status_integracao_backup
 from .models import ConfiguracaoBackup, HistoricoBackup
 from apps.pregoes.models import Pregao, PregaoItem, QuantitativoEscola, QuantitativoPregao
+
+
+logger = logging.getLogger(__name__)
 
 
 CABECALHOS_FORNECEDORES = [
@@ -3004,38 +3009,154 @@ def importar_quantitativo_escola(request):
             criados = 0
             atualizados = 0
             ignorados = 0
+            linha_em_processamento = None
 
-            for linha in linhas:
-                if linha.get("ignorar"):
-                    ignorados += 1
-                    continue
+            try:
+                # A importação inteira é atômica: se qualquer linha falhar,
+                # nenhuma alteração desta confirmação permanece no banco.
+                with transaction.atomic():
+                    for linha in linhas:
+                        if linha.get("ignorar"):
+                            ignorados += 1
+                            continue
 
-                dados = linha["dados"]
-                escola = Escola.objects.get(id=dados["escola_id"])
-                item = Item.objects.get(id=dados["item_id"])
-                quantidade = Decimal(str(dados["quantidade"]))
+                        linha_em_processamento = linha
+                        dados = linha["dados"]
 
-                quantitativo = QuantitativoEscola.objects.filter(
-                    pregao=pregao,
-                    escola=escola,
-                    item=item,
-                ).first()
+                        escola = Escola.objects.filter(
+                            id=dados.get("escola_id")
+                        ).first()
+                        item = Item.objects.filter(
+                            id=dados.get("item_id")
+                        ).first()
 
-                if quantitativo:
-                    quantitativo.quantidade = quantidade
-                    quantitativo.full_clean()
-                    quantitativo.save()
-                    atualizados += 1
+                        if not escola:
+                            raise ValidationError(
+                                "Escola não encontrada no momento da gravação."
+                            )
+
+                        if not item:
+                            raise ValidationError(
+                                "Item não encontrado no momento da gravação."
+                            )
+
+                        if not item_existe_no_quantitativo_pregao(pregao, item):
+                            raise ValidationError(
+                                "O item selecionado não possui quantitativo no certame."
+                            )
+
+                        quantidade = decimal_planilha(dados.get("quantidade"))
+
+                        if quantidade is None:
+                            raise ValidationError(
+                                "Quantidade inválida no momento da gravação."
+                            )
+
+                        quantitativo = QuantitativoEscola.objects.filter(
+                            pregao=pregao,
+                            escola=escola,
+                            item=item,
+                        ).first()
+
+                        if quantitativo:
+                            quantitativo.quantidade = quantidade
+                            quantitativo.full_clean()
+                            quantitativo.save()
+                            atualizados += 1
+                        else:
+                            quantitativo = QuantitativoEscola(
+                                pregao=pregao,
+                                escola=escola,
+                                item=item,
+                                quantidade=quantidade,
+                            )
+                            quantitativo.full_clean()
+                            quantitativo.save()
+                            criados += 1
+
+            except Exception as erro:
+                logger.exception(
+                    "Erro ao confirmar importação de quantitativo por escola. Pregão=%s",
+                    getattr(pregao, "id", None),
+                )
+
+                # A exceção sai do bloco atomic, portanto todas as gravações
+                # desta tentativa já foram revertidas automaticamente.
+                numero_linha = (
+                    linha_em_processamento.get("linha")
+                    if linha_em_processamento
+                    else "não identificada"
+                )
+
+                if isinstance(erro, ValidationError):
+                    if hasattr(erro, "message_dict"):
+                        partes = []
+                        for campo, mensagens_campo in erro.message_dict.items():
+                            partes.append(
+                                f"{campo}: {', '.join(str(m) for m in mensagens_campo)}"
+                            )
+                        detalhe_erro = "; ".join(partes)
+                    else:
+                        detalhe_erro = "; ".join(str(m) for m in erro.messages)
                 else:
-                    quantitativo = QuantitativoEscola(
-                        pregao=pregao,
-                        escola=escola,
-                        item=item,
-                        quantidade=quantidade,
+                    detalhe_erro = str(erro).strip() or erro.__class__.__name__
+
+                if linha_em_processamento:
+                    linha_em_processamento["valido"] = False
+                    linha_em_processamento["acao"] = "Erro"
+                    mensagem_linha = (
+                        f"Falha ao gravar esta linha: {detalhe_erro}"
                     )
-                    quantitativo.full_clean()
-                    quantitativo.save()
-                    criados += 1
+                    if mensagem_linha not in linha_em_processamento.get("erros", []):
+                        linha_em_processamento.setdefault("erros", []).append(
+                            mensagem_linha
+                        )
+
+                request.session["importacao_quantitativo_escola_linhas"] = linhas
+
+                ignorados_lista = [
+                    linha for linha in linhas if linha.get("ignorar")
+                ]
+                validos = [
+                    linha for linha in linhas
+                    if linha.get("valido") and not linha.get("ignorar")
+                ]
+                erros = [
+                    linha for linha in linhas
+                    if not linha.get("valido") and not linha.get("ignorar")
+                ]
+
+                resumo = {
+                    "total": len(linhas),
+                    "validos": len(validos),
+                    "erros": len(erros),
+                    "criar": len([
+                        linha for linha in validos if linha.get("acao") == "Criar"
+                    ]),
+                    "atualizar": len([
+                        linha for linha in validos if linha.get("acao") == "Atualizar"
+                    ]),
+                    "ignorados": len(ignorados_lista),
+                }
+
+                messages.error(
+                    request,
+                    f"A importação não foi gravada. Erro na linha {numero_linha}: "
+                    f"{detalhe_erro}. Nenhuma linha desta tentativa foi salva.",
+                )
+
+                form = ImportacaoPlanilhaForm()
+                return render(
+                    request,
+                    "importacoes/quantitativo_escola.html",
+                    {
+                        "form": form,
+                        "linhas": linhas,
+                        "resumo": resumo,
+                        "pregoes": pregoes,
+                        "pregao": pregao,
+                    },
+                )
 
             request.session.pop("importacao_quantitativo_escola_linhas", None)
             request.session.pop("importacao_quantitativo_escola_pregao_id", None)
