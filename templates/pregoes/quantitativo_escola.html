@@ -120,8 +120,8 @@
 
                         <td>
                             <input type="text" name="quantidade_{{ resumo.item.id }}" placeholder="0"
-                                inputmode="decimal"
-                                value="{{ resumo.quantidade_escola_atual|unlocalize }}">
+                                inputmode="numeric"
+                                value="{{ resumo.quantidade_escola_atual|floatformat:"0"|unlocalize }}">
                         </td>
                     </tr>
                     {% endfor %}
