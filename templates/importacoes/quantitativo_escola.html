@@ -47,7 +47,7 @@
 
     .resumo-importacao {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 12px;
         margin-bottom: 18px;
     }
@@ -92,6 +92,21 @@
     .badge-erro {
         background: #fee2e2;
         color: #991b1b;
+    }
+
+    .badge-ignorar {
+        background: #f1f5f9;
+        color: #475569;
+    }
+
+    .nao-importar-linha {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 8px;
+        font-size: 12px;
+        font-weight: 800;
+        color: #475569;
     }
 
     @media (max-width: 900px) {
@@ -221,6 +236,11 @@
         <div class="resumo-importacao-label">Atualizar</div>
         <div class="resumo-importacao-valor">{{ resumo.atualizar }}</div>
     </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Não importar</div>
+        <div class="resumo-importacao-valor">{{ resumo.ignorados|default:0 }}</div>
+    </div>
 </div>
 {% endif %}
 
@@ -254,6 +274,8 @@
                         <span class="badge-importacao badge-criar">Criar</span>
                         {% elif linha.acao == "Atualizar" %}
                         <span class="badge-importacao badge-atualizar">Atualizar</span>
+                        {% elif linha.acao == "Não importar" %}
+                        <span class="badge-importacao badge-ignorar">Não importar</span>
                         {% else %}
                         <span class="badge-importacao badge-erro">Erro</span>
                         {% endif %}
@@ -281,7 +303,19 @@
                     </td>
                     <td>{{ linha.dados.item_texto }}</td>
                     <td>
-                        {% if linha.erro_item %}
+                        {% if linha.ignorar %}
+                            <span class="badge-importacao badge-ignorar">Esta linha não será importada</span>
+                            <label class="nao-importar-linha">
+                                <input
+                                    type="checkbox"
+                                    name="nao_importar_{{ linha.linha }}"
+                                    value="1"
+                                    checked
+                                    form="form-confirmar-importacao-quantitativo-escola"
+                                >
+                                Manter como não importar
+                            </label>
+                        {% elif linha.erro_item %}
                             {% if linha.item_opcoes %}
                             <select name="item_corrigido_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo-escola">
                                 <option value="">Selecione o item correto</option>
@@ -292,8 +326,20 @@
                                 {% endfor %}
                             </select>
                             {% else %}
-                            <span style="color:#991b1b; font-weight:800;">Nenhum item ativo cadastrado.</span>
+                            <span style="color:#991b1b; font-weight:800;">
+                                Nenhum item com quantitativo cadastrado para este certame.
+                            </span>
                             {% endif %}
+
+                            <label class="nao-importar-linha">
+                                <input
+                                    type="checkbox"
+                                    name="nao_importar_{{ linha.linha }}"
+                                    value="1"
+                                    form="form-confirmar-importacao-quantitativo-escola"
+                                >
+                                Não importar esta linha
+                            </label>
                         {% elif linha.dados.item_corrigido_nome %}
                             <strong>{{ linha.dados.item_corrigido_nome }}</strong>
                         {% else %}
@@ -323,7 +369,9 @@
                     </td>
                     <td>{{ linha.dados.quantidade }}</td>
                     <td>
-                        {% if linha.erros %}
+                        {% if linha.ignorar %}
+                        <span style="color:#475569; font-weight:800;">Linha marcada para não importar.</span>
+                        {% elif linha.erros %}
                         <ul style="margin:0; padding-left:18px;">
                             {% for erro in linha.erros %}
                             <li>{{ erro }}</li>
@@ -348,8 +396,8 @@
 
         {% if resumo.erros > 0 %}
         <p style="color:#92400e; font-weight:800; margin-bottom:12px;">
-            Se os erros forem apenas de escola, item ou unidade, selecione as opções corretas nas colunas de correção e confirme novamente.
-            Se houver erro de quantidade ou saldo, corrija a planilha e valide novamente.
+            Para erro de item, selecione um item do certame na coluna de correção ou marque "Não importar esta linha".
+            Para escola/unidade, selecione a correção correspondente. Erros de quantidade ou saldo exigem correção da planilha.
         </p>
         {% endif %}
 

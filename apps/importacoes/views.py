@@ -1715,6 +1715,53 @@ def opcoes_item_para_correcao(texto_item):
     ]
 
 
+def opcoes_item_certame_para_correcao(texto_item, pregao):
+    """
+    Retorna somente itens que possuem QuantitativoPregao no certame selecionado.
+    A lista é ordenada priorizando os nomes mais parecidos com o texto da planilha.
+    """
+    if not pregao:
+        return []
+
+    quantitativos = (
+        QuantitativoPregao.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("item__nome_item")
+    )
+    itens = [quantitativo.item for quantitativo in quantitativos]
+
+    texto_normalizado = normalizar_texto_comparacao(texto_item)
+    mapa_normalizado = {
+        normalizar_texto_comparacao(item.nome_item): item.nome_item
+        for item in itens
+    }
+
+    sugestoes = get_close_matches(
+        texto_normalizado,
+        list(mapa_normalizado.keys()),
+        n=8,
+        cutoff=0.45,
+    )
+    sugestoes_normalizadas = set(sugestoes)
+
+    itens_ordenados = sorted(
+        itens,
+        key=lambda item: (
+            0 if normalizar_texto_comparacao(item.nome_item) in sugestoes_normalizadas else 1,
+            item.nome_item,
+        ),
+    )
+
+    return [
+        {
+            "id": item.id,
+            "nome": item.nome_item,
+            "unidade": item.get_unidade_medida_display(),
+        }
+        for item in itens_ordenados
+    ]
+
+
 def obter_item_por_correcao(request, numero_linha):
     item_id = request.POST.get(f"item_corrigido_{numero_linha}")
 
@@ -2418,11 +2465,11 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
 
         if not item:
             erro_item = True
-            item_opcoes = opcoes_item_para_correcao(item_texto)
+            item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
             erros.append("Item não encontrado no sistema. Selecione o item correto na coluna Correção.")
         elif not item_existe_no_quantitativo_pregao(pregao, item):
             erro_item = True
-            item_opcoes = opcoes_item_para_correcao(item_texto)
+            item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
             erros.append("Este item não existe no quantitativo do pregão selecionado.")
 
     if unidade_texto:
@@ -2441,7 +2488,7 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
             f"Unidade correta do item: {item.get_unidade_medida_display()}."
         )
 
-    if pregao and escola and item and quantidade and quantidade > 0:
+    if pregao and escola and item and item_existe_no_quantitativo_pregao(pregao, item) and quantidade and quantidade > 0:
         saldo = saldo_disponivel_quantitativo_escola(pregao, escola, item)
 
         if quantidade > saldo:
@@ -2478,6 +2525,7 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
         "erro_escola": erro_escola,
         "erro_item": erro_item,
         "erro_unidade": erro_unidade,
+        "ignorar": False,
         "escola_opcoes": escola_opcoes,
         "item_opcoes": item_opcoes,
         "unidade_opcoes": unidade_opcoes,
@@ -2615,6 +2663,15 @@ def baixar_modelo_quantitativo_escola(request):
 
 
 def recalcular_linha_quantitativo_escola(linha, pregao):
+    if linha.get("ignorar"):
+        linha["valido"] = True
+        linha["acao"] = "Não importar"
+        linha["erros"] = []
+        linha["erro_escola"] = False
+        linha["erro_item"] = False
+        linha["erro_unidade"] = False
+        return linha
+
     erros = linha.get("erros", [])
 
     escola = Escola.objects.filter(id=linha["dados"].get("escola_id")).first()
@@ -2661,7 +2718,7 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
     if item:
         if not item_existe_no_quantitativo_pregao(pregao, item):
             linha["erro_item"] = True
-            linha["item_opcoes"] = opcoes_item_para_correcao(linha["dados"].get("item_texto"))
+            linha["item_opcoes"] = opcoes_item_certame_para_correcao(linha["dados"].get("item_texto"), pregao)
             erros_filtrados.append("Este item não existe no quantitativo do pregão selecionado.")
         else:
             linha["erro_item"] = False
@@ -2784,6 +2841,7 @@ def importar_quantitativo_escola(request):
                         "erros": len(erros),
                         "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                         "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                        "ignorados": 0,
                     }
 
                     if erros:
@@ -2819,6 +2877,14 @@ def importar_quantitativo_escola(request):
                 return redirect("importacoes:quantitativo_escola")
 
             for linha in linhas:
+                # Quando o usuário marca "Não importar", a linha inteira é ignorada:
+                # não bloqueia a confirmação e não será gravada no banco.
+                linha["ignorar"] = request.POST.get(f"nao_importar_{linha['linha']}") == "1"
+
+                if linha["ignorar"]:
+                    linha = recalcular_linha_quantitativo_escola(linha, pregao)
+                    continue
+
                 if linha.get("erro_escola"):
                     escola_corrigida = obter_escola_por_correcao(request, linha["linha"])
 
@@ -2831,7 +2897,9 @@ def importar_quantitativo_escola(request):
                 if linha.get("erro_item"):
                     item_corrigido = obter_item_por_correcao(request, linha["linha"])
 
-                    if item_corrigido:
+                    # Aceita a correção somente se o item realmente possuir
+                    # quantitativo no certame selecionado.
+                    if item_corrigido and item_existe_no_quantitativo_pregao(pregao, item_corrigido):
                         linha["dados"]["item_id"] = item_corrigido.id
                         linha["dados"]["item_corrigido_id"] = item_corrigido.id
                         linha["dados"]["item_corrigido_nome"] = item_corrigido.nome_item
@@ -2852,6 +2920,9 @@ def importar_quantitativo_escola(request):
             chaves_finais = set()
 
             for linha in linhas:
+                if linha.get("ignorar"):
+                    continue
+
                 escola_id = linha["dados"].get("escola_id")
                 item_id = linha["dados"].get("item_id")
 
@@ -2865,7 +2936,10 @@ def importar_quantitativo_escola(request):
                     else:
                         chaves_finais.add(chave)
 
-            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
+            linhas_invalidas = [
+                linha for linha in linhas
+                if not linha.get("ignorar") and not linha.get("valido")
+            ]
 
             if linhas_invalidas:
                 request.session["importacao_quantitativo_escola_linhas"] = linhas
@@ -2875,14 +2949,22 @@ def importar_quantitativo_escola(request):
                     "Ainda existem linhas inválidas. Corrija a planilha ou selecione escola/item/unidade correta na prévia e confirme novamente.",
                 )
 
-                validos = [linha for linha in linhas if linha.get("valido")]
-                erros = [linha for linha in linhas if not linha.get("valido")]
+                ignorados = [linha for linha in linhas if linha.get("ignorar")]
+                validos = [
+                    linha for linha in linhas
+                    if linha.get("valido") and not linha.get("ignorar")
+                ]
+                erros = [
+                    linha for linha in linhas
+                    if not linha.get("valido") and not linha.get("ignorar")
+                ]
                 resumo = {
                     "total": len(linhas),
                     "validos": len(validos),
                     "erros": len(erros),
                     "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                     "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                    "ignorados": len(ignorados),
                 }
 
                 form = ImportacaoPlanilhaForm()
@@ -2900,8 +2982,13 @@ def importar_quantitativo_escola(request):
 
             criados = 0
             atualizados = 0
+            ignorados = 0
 
             for linha in linhas:
+                if linha.get("ignorar"):
+                    ignorados += 1
+                    continue
+
                 dados = linha["dados"]
                 escola = Escola.objects.get(id=dados["escola_id"])
                 item = Item.objects.get(id=dados["item_id"])
@@ -2936,7 +3023,8 @@ def importar_quantitativo_escola(request):
             messages.success(
                 request,
                 f"Importação concluída para o Pregão {pregao.numero}/{pregao.ano}. "
-                f"Quantitativos criados: {criados}. Quantitativos atualizados: {atualizados}.",
+                f"Quantitativos criados: {criados}. Quantitativos atualizados: {atualizados}. "
+                f"Linhas não importadas: {ignorados}.",
             )
             return redirect("pregoes:quantitativo_escola")
     else:
