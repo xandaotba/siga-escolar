@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load pregoes_extras %}
+{% load l10n %}
 
 {% block title %}Quantitativo por Certame | Sistema de Pregões{% endblock %}
 {% block page_title %}Quantitativo por Certame{% endblock %}
@@ -78,7 +79,8 @@
                         <td title="{{ item.descricao }}">{{ item.descricao|truncatechars:60 }}</td>
                         <td>
                             <input type="text" name="quantidade_{{ item.id }}" placeholder="0"
-                                value="{{ quantitativos_salvos|get_item:item.id|quantidade_br }}">
+                                inputmode="decimal"
+                                value="{{ quantitativos_salvos|get_item:item.id|unlocalize }}">
                         </td>
                     </tr>
                     {% empty %}

@@ -94,6 +94,12 @@
         color: #991b1b;
     }
 
+    .linha-pendente-confirmacao {
+        outline: 3px solid #dc2626;
+        outline-offset: -3px;
+        background: #fff7f7 !important;
+    }
+
     .badge-ignorar {
         background: #f1f5f9;
         color: #475569;
@@ -267,7 +273,7 @@
 
             <tbody>
                 {% for linha in linhas %}
-                <tr>
+                <tr id="linha-importacao-{{ linha.linha }}" data-linha-importacao="{{ linha.linha }}">
                     <td>{{ linha.linha }}</td>
                     <td>
                         {% if linha.acao == "Criar" %}
@@ -308,6 +314,8 @@
                             <label class="nao-importar-linha">
                                 <input
                                     type="checkbox"
+                                    class="nao-importar-item-pendente"
+                                    data-linha="{{ linha.linha }}"
                                     name="nao_importar_{{ linha.linha }}"
                                     value="1"
                                     checked
@@ -317,7 +325,7 @@
                             </label>
                         {% elif linha.erro_item %}
                             {% if linha.item_opcoes %}
-                            <select name="item_corrigido_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo-escola">
+                            <select class="correcao-item-pendente" data-linha="{{ linha.linha }}" name="item_corrigido_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo-escola">
                                 <option value="">Selecione o item correto</option>
                                 {% for item in linha.item_opcoes %}
                                 <option value="{{ item.id }}">
@@ -334,6 +342,8 @@
                             <label class="nao-importar-linha">
                                 <input
                                     type="checkbox"
+                                    class="nao-importar-item-pendente"
+                                    data-linha="{{ linha.linha }}"
                                     name="nao_importar_{{ linha.linha }}"
                                     value="1"
                                     form="form-confirmar-importacao-quantitativo-escola"
@@ -401,12 +411,63 @@
         </p>
         {% endif %}
 
-        <button class="btn btn-success" type="submit"
-            onclick="return confirm('Confirmar a importação dos quantitativos por escola e das correções selecionadas?');">
+        <button class="btn btn-success" type="submit">
             Confirmar Importação
         </button>
     </form>
 </div>
+
+<script>
+(function () {
+    const form = document.getElementById('form-confirmar-importacao-quantitativo-escola');
+    if (!form) return;
+
+    form.addEventListener('submit', function (event) {
+        document.querySelectorAll('.linha-pendente-confirmacao').forEach(function (row) {
+            row.classList.remove('linha-pendente-confirmacao');
+        });
+
+        const selects = Array.from(document.querySelectorAll('.correcao-item-pendente'));
+        const linhasPendentes = [];
+
+        selects.forEach(function (select) {
+            const linha = select.dataset.linha;
+            const checkbox = document.querySelector(
+                '.nao-importar-item-pendente[data-linha="' + linha + '"]'
+            );
+
+            const itemSelecionado = Boolean(select.value);
+            const naoImportar = Boolean(checkbox && checkbox.checked);
+
+            if (!itemSelecionado && !naoImportar) {
+                linhasPendentes.push(linha);
+                const row = document.getElementById('linha-importacao-' + linha);
+                if (row) row.classList.add('linha-pendente-confirmacao');
+            }
+        });
+
+        if (linhasPendentes.length > 0) {
+            event.preventDefault();
+
+            alert(
+                'Existem itens ainda não resolvidos nas linhas: ' +
+                linhasPendentes.join(', ') +
+                '.\n\nSelecione um item sugerido na coluna Correção do Item ou marque “Não importar esta linha”.'
+            );
+
+            const primeiraLinha = document.getElementById('linha-importacao-' + linhasPendentes[0]);
+            if (primeiraLinha) {
+                primeiraLinha.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            return;
+        }
+
+        if (!confirm('Confirmar a importação dos quantitativos por escola e das correções selecionadas?')) {
+            event.preventDefault();
+        }
+    });
+})();
+</script>
 {% endif %}
 
 {% endblock %}

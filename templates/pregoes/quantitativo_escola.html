@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load pregoes_extras %}
+{% load l10n %}
 
 {% block title %}Quantitativo por Escola | Sistema de Pregões{% endblock %}
 {% block page_title %}Quantitativo por Escola{% endblock %}
@@ -119,7 +120,8 @@
 
                         <td>
                             <input type="text" name="quantidade_{{ resumo.item.id }}" placeholder="0"
-                                value="{{ quantitativos_salvos|get_item:resumo.item.id|quantidade_br }}">
+                                inputmode="decimal"
+                                value="{{ resumo.quantidade_escola_atual|unlocalize }}">
                         </td>
                     </tr>
                     {% endfor %}

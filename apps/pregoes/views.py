@@ -343,6 +343,91 @@ def editar_ordenador_despesas(request, pregao_id):
     )
 
 
+def _converter_quantidade_digitada(valor, valor_atual=None):
+    """
+    Converte quantidades digitadas aceitando padrão brasileiro e o formato
+    técnico usado pelo próprio SIGA.
+
+    Exemplos:
+    1442 -> 1442
+    1.442 -> 1442
+    1.442,500 -> 1442.500
+    1442,500 -> 1442.500
+    1,442 -> 1.442
+    1442.500 -> 1442.500
+
+    Se o valor já veio preenchido pelo próprio sistema e não foi alterado,
+    preserva exatamente o Decimal existente.
+    """
+    texto = str(valor or "").strip()
+    texto = texto.replace("\xa0", "").replace(" ", "")
+
+    if not texto:
+        return None
+
+    if valor_atual is not None:
+        try:
+            atual = Decimal(str(valor_atual))
+            if texto in {str(atual), format(atual, "f")}:
+                return atual
+        except (InvalidOperation, ValueError, TypeError):
+            pass
+
+    if not re.fullmatch(r"[+-]?[0-9][0-9.,]*", texto):
+        raise InvalidOperation
+
+    sinal = ""
+    if texto[0] in "+-":
+        sinal = texto[0]
+        texto = texto[1:]
+
+    if "," in texto:
+        # Padrão brasileiro: ponto = milhar, vírgula = decimal.
+        if texto.count(",") > 1:
+            raise InvalidOperation
+
+        parte_inteira, parte_decimal = texto.split(",", 1)
+
+        if "." in parte_decimal:
+            raise InvalidOperation
+
+        parte_inteira = parte_inteira.replace(".", "") or "0"
+        normalizado = parte_inteira
+
+        if parte_decimal:
+            normalizado += "." + parte_decimal
+
+    elif "." in texto:
+        partes = texto.split(".")
+
+        if len(partes) > 2:
+            # Ex.: 1.234.567
+            if not partes[0] or not all(
+                grupo.isdigit() and len(grupo) == 3
+                for grupo in partes[1:]
+            ):
+                raise InvalidOperation
+            normalizado = "".join(partes)
+
+        else:
+            esquerda, direita = partes
+
+            if not esquerda or not direita:
+                raise InvalidOperation
+
+            # Ex.: 1.442 / 12.345 / 123.456 = separador de milhar.
+            # Ex.: 1442.500 = representação decimal técnica.
+            if len(esquerda) <= 3 and len(direita) == 3:
+                normalizado = esquerda + direita
+            else:
+                normalizado = texto
+
+    else:
+        normalizado = texto
+
+    return Decimal(sinal + normalizado)
+
+
 def quantitativo_pregao(request):
     pregoes_lista = (
         Pregao.objects.filter(
@@ -377,28 +462,63 @@ def quantitativo_pregao(request):
             )
             return redirect("pregoes:quantitativo_pregao")
 
-        QuantitativoPregao.objects.filter(pregao=pregao).delete()
-
-        total_salvos = 0
+        quantidades_digitadas = {}
+        erros_validacao = []
 
         for item in itens:
-            quantidade = request.POST.get(f"quantidade_{item.id}")
+            quantidade_texto = request.POST.get(
+                f"quantidade_{item.id}",
+                "",
+            ).strip()
 
-            if quantidade:
-                quantidade = quantidade.replace(",", ".")
+            if not quantidade_texto:
+                continue
 
-                try:
-                    quantidade_float = float(quantidade)
-                except ValueError:
-                    quantidade_float = 0
+            try:
+                quantidade = _converter_quantidade_digitada(
+                    quantidade_texto,
+                    valor_atual=quantitativos_salvos.get(item.id),
+                )
+            except (InvalidOperation, ValueError, TypeError):
+                erros_validacao.append(
+                    f"A quantidade informada para o item '{item.nome_item}' é inválida."
+                )
+                continue
 
-                if quantidade_float > 0:
-                    QuantitativoPregao.objects.create(
-                        pregao=pregao,
-                        item=item,
-                        quantidade=quantidade,
-                    )
-                    total_salvos += 1
+            if quantidade is not None and quantidade > 0:
+                quantidades_digitadas[item.id] = quantidade
+
+        if erros_validacao:
+            for erro in erros_validacao:
+                messages.error(request, erro)
+
+            quantitativos_salvos = {
+                **quantitativos_salvos,
+                **quantidades_digitadas,
+            }
+
+            return render(
+                request,
+                "pregoes/quantitativo_pregao.html",
+                {
+                    "pregoes": pregoes_lista,
+                    "pregao": pregao,
+                    "itens": itens,
+                    "quantitativos_salvos": quantitativos_salvos,
+                },
+            )
+
+        with transaction.atomic():
+            QuantitativoPregao.objects.filter(pregao=pregao).delete()
+
+            for item_id, quantidade in quantidades_digitadas.items():
+                QuantitativoPregao.objects.create(
+                    pregao=pregao,
+                    item_id=item_id,
+                    quantidade=quantidade,
+                )
+
+        total_salvos = len(quantidades_digitadas)
 
         messages.success(
             request,
@@ -454,8 +574,6 @@ def quantitativo_escola(request):
     if escola_id:
         escola = get_object_or_404(Escola, id=escola_id)
 
-    # Validação de segurança:
-    # Só valida quando já existe pregão e escola selecionados.
     if pregao and escola:
         if not pregao.municipios.filter(id=escola.municipio_id).exists():
             messages.error(
@@ -537,22 +655,26 @@ def quantitativo_escola(request):
 
         for qp in itens_pregao:
             item = qp.item
-            quantidade_texto = request.POST.get(f"quantidade_{item.id}", "").strip()
+            quantidade_texto = request.POST.get(
+                f"quantidade_{item.id}",
+                "",
+            ).strip()
 
             if not quantidade_texto:
                 continue
 
-            quantidade_texto = quantidade_texto.replace(",", ".")
-
             try:
-                quantidade_nova = Decimal(quantidade_texto)
-            except InvalidOperation:
+                quantidade_nova = _converter_quantidade_digitada(
+                    quantidade_texto,
+                    valor_atual=quantitativos_salvos.get(item.id),
+                )
+            except (InvalidOperation, ValueError, TypeError):
                 erros_validacao.append(
                     f"A quantidade informada para o item '{item.nome_item}' é inválida."
                 )
                 continue
 
-            if quantidade_nova <= 0:
+            if quantidade_nova is None or quantidade_nova <= 0:
                 continue
 
             quantidade_total_pregao = qp.quantidade
@@ -573,12 +695,15 @@ def quantitativo_escola(request):
             soma_final = soma_outras_escolas + quantidade_nova
 
             if soma_final > quantidade_total_pregao:
-                saldo_permitido_para_esta_escola = quantidade_total_pregao - soma_outras_escolas
+                saldo_permitido_para_esta_escola = (
+                    quantidade_total_pregao - soma_outras_escolas
+                )
 
                 erros_validacao.append(
                     f"O item '{item.nome_item}' ultrapassou o total do pregão. "
                     f"Total do pregão: {quantidade_total_pregao}. "
-                    f"Quantidade máxima permitida para esta escola: {saldo_permitido_para_esta_escola}."
+                    f"Quantidade máxima permitida para esta escola: "
+                    f"{saldo_permitido_para_esta_escola}."
                 )
             else:
                 quantidades_digitadas[item.id] = quantidade_nova
@@ -595,7 +720,7 @@ def quantitativo_escola(request):
 
                 quantidade_escola_atual = quantidades_digitadas.get(
                     item.id,
-                    Decimal("0"),
+                    quantitativos_salvos.get(item.id, Decimal("0")),
                 )
 
                 distribuido_todas_escolas = (
@@ -611,8 +736,12 @@ def quantitativo_escola(request):
                 if distribuido_todas_escolas is None:
                     distribuido_todas_escolas = Decimal("0")
 
-                distribuido_todas_escolas = distribuido_todas_escolas + quantidade_escola_atual
-                saldo_restante_real = quantidade_total_pregao - distribuido_todas_escolas
+                distribuido_todas_escolas = (
+                    distribuido_todas_escolas + quantidade_escola_atual
+                )
+                saldo_restante_real = (
+                    quantidade_total_pregao - distribuido_todas_escolas
+                )
 
                 resumo_itens.append(
                     {
@@ -638,28 +767,30 @@ def quantitativo_escola(request):
                 },
             )
 
-        QuantitativoEscola.objects.filter(
-            pregao=pregao,
-            escola=escola,
-        ).delete()
-
-        total_salvos = 0
-
-        for item_id, quantidade in quantidades_digitadas.items():
-            QuantitativoEscola.objects.create(
+        with transaction.atomic():
+            QuantitativoEscola.objects.filter(
                 pregao=pregao,
                 escola=escola,
-                item_id=item_id,
-                quantidade=quantidade,
-            )
-            total_salvos += 1
+            ).delete()
+
+            for item_id, quantidade in quantidades_digitadas.items():
+                QuantitativoEscola.objects.create(
+                    pregao=pregao,
+                    escola=escola,
+                    item_id=item_id,
+                    quantidade=quantidade,
+                )
+
+        total_salvos = len(quantidades_digitadas)
 
         messages.success(
             request,
             f"Quantitativos da escola salvos com sucesso. Itens gravados: {total_salvos}.",
         )
 
-        return redirect(f"{request.path}?pregao={pregao.id}&escola={escola.id}")
+        return redirect(
+            f"{request.path}?pregao={pregao.id}&escola={escola.id}"
+        )
 
     return render(
         request,
@@ -674,6 +805,7 @@ def quantitativo_escola(request):
             "resumo_itens": resumo_itens,
         },
     )
+
 
 def usuario_eh_consulta_escola(request):
     perfil = getattr(request.user, "perfil_acesso", None)

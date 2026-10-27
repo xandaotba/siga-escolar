@@ -2970,10 +2970,33 @@ def importar_quantitativo_escola(request):
             if linhas_invalidas:
                 request.session["importacao_quantitativo_escola_linhas"] = linhas
 
-                messages.error(
-                    request,
-                    "Ainda existem linhas inválidas. Corrija a planilha ou selecione escola/item/unidade correta na prévia e confirme novamente.",
-                )
+                # Informa exatamente quais linhas ainda precisam de decisão do usuário.
+                linhas_item_pendente = [
+                    linha for linha in linhas_invalidas
+                    if linha.get("erro_item")
+                ]
+                linhas_outros_erros = [
+                    linha for linha in linhas_invalidas
+                    if not linha.get("erro_item")
+                ]
+
+                partes_mensagem = []
+
+                if linhas_item_pendente:
+                    numeros = ", ".join(str(linha["linha"]) for linha in linhas_item_pendente)
+                    partes_mensagem.append(
+                        f"Itens ainda não resolvidos nas linhas: {numeros}. "
+                        "Selecione um item sugerido na coluna Correção do Item ou marque Não importar esta linha."
+                    )
+
+                if linhas_outros_erros:
+                    numeros = ", ".join(str(linha["linha"]) for linha in linhas_outros_erros)
+                    partes_mensagem.append(
+                        f"Também existem outros erros pendentes nas linhas: {numeros}. "
+                        "Revise escola, unidade, quantidade ou saldo antes de confirmar."
+                    )
+
+                messages.error(request, " ".join(partes_mensagem))
 
                 ignorados = [linha for linha in linhas if linha.get("ignorar")]
                 validos = [
