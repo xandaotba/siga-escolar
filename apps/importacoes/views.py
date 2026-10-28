@@ -2455,8 +2455,10 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
         erros.append("Unidade de medida é obrigatória.")
 
     if quantidade is None:
+        erro_quantidade = True
         erros.append("Quantidade da escola é obrigatória e deve ser numérica.")
     elif quantidade <= 0:
+        erro_quantidade = True
         erros.append("Quantidade da escola deve ser maior que zero.")
 
     escola = None
@@ -2466,6 +2468,8 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
     erro_escola = False
     erro_item = False
     erro_unidade = False
+    erro_quantidade = False
+    saldo_maximo = ""
 
     escola_opcoes = []
     item_opcoes = []
@@ -2518,6 +2522,8 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
         saldo = saldo_disponivel_quantitativo_escola(pregao, escola, item)
 
         if quantidade > saldo:
+            erro_quantidade = True
+            saldo_maximo = str(saldo)
             erros.append(
                 f"Quantidade da escola ultrapassa o saldo disponível para este item. "
                 f"Saldo máximo permitido: {saldo}."
@@ -2551,6 +2557,8 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
         "erro_escola": erro_escola,
         "erro_item": erro_item,
         "erro_unidade": erro_unidade,
+        "erro_quantidade": erro_quantidade,
+        "saldo_maximo": saldo_maximo,
         "ignorar": False,
         "escola_opcoes": escola_opcoes,
         "item_opcoes": item_opcoes,
@@ -2696,6 +2704,8 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
         linha["erro_escola"] = False
         linha["erro_item"] = False
         linha["erro_unidade"] = False
+        linha["erro_quantidade"] = False
+        linha["saldo_maximo"] = ""
         return linha
 
     erros = linha.get("erros", [])
@@ -2725,6 +2735,10 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
         if "Unidade de medida não corresponde" in erro:
             continue
         if "Quantidade da escola ultrapassa" in erro:
+            continue
+        if "Quantidade da escola é obrigatória" in erro:
+            continue
+        if "Quantidade da escola deve ser maior que zero" in erro:
             continue
         if "já possui quantitativo cadastrado" in erro:
             continue
@@ -2767,15 +2781,21 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
         erros_filtrados.append("Unidade de medida não encontrada no sistema.")
 
     quantidade = decimal_planilha(linha["dados"].get("quantidade"))
+    linha["erro_quantidade"] = False
+    linha["saldo_maximo"] = ""
 
     if quantidade is None:
+        linha["erro_quantidade"] = True
         erros_filtrados.append("Quantidade da escola é obrigatória e deve ser numérica.")
     elif quantidade <= 0:
+        linha["erro_quantidade"] = True
         erros_filtrados.append("Quantidade da escola deve ser maior que zero.")
     elif pregao and escola and item and item_existe_no_quantitativo_pregao(pregao, item):
         saldo = saldo_disponivel_quantitativo_escola(pregao, escola, item)
 
         if quantidade > saldo:
+            linha["erro_quantidade"] = True
+            linha["saldo_maximo"] = str(saldo)
             erros_filtrados.append(
                 f"Quantidade da escola ultrapassa o saldo disponível para este item. "
                 f"Saldo máximo permitido: {saldo}."
@@ -2940,6 +2960,14 @@ def importar_quantitativo_escola(request):
                         linha["dados"]["unidade_medida"] = unidade_corrigida.codigo
                         linha["dados"]["unidade_texto"] = unidade_corrigida.nome
 
+                quantidade_corrigida = request.POST.get(
+                    f"quantidade_corrigida_{linha['linha']}",
+                    "",
+                ).strip()
+
+                if quantidade_corrigida:
+                    linha["dados"]["quantidade"] = quantidade_corrigida
+
                 linha = recalcular_linha_quantitativo_escola(linha, pregao)
 
             # Verifica duplicidade depois das correções.
@@ -2975,9 +3003,14 @@ def importar_quantitativo_escola(request):
                     linha for linha in linhas_invalidas
                     if linha.get("erro_item")
                 ]
+                linhas_quantidade_pendente = [
+                    linha for linha in linhas_invalidas
+                    if linha.get("erro_quantidade")
+                ]
                 linhas_outros_erros = [
                     linha for linha in linhas_invalidas
                     if not linha.get("erro_item")
+                    and not linha.get("erro_quantidade")
                 ]
 
                 partes_mensagem = []
@@ -2989,11 +3022,20 @@ def importar_quantitativo_escola(request):
                         "Selecione um item sugerido na coluna Correção do Item ou marque Não importar esta linha."
                     )
 
+                if linhas_quantidade_pendente:
+                    numeros = ", ".join(
+                        str(linha["linha"]) for linha in linhas_quantidade_pendente
+                    )
+                    partes_mensagem.append(
+                        f"Quantidades ainda não resolvidas nas linhas: {numeros}. "
+                        "Corrija a quantidade na própria prévia ou marque Não importar esta linha."
+                    )
+
                 if linhas_outros_erros:
                     numeros = ", ".join(str(linha["linha"]) for linha in linhas_outros_erros)
                     partes_mensagem.append(
                         f"Também existem outros erros pendentes nas linhas: {numeros}. "
-                        "Revise escola, unidade, quantidade ou saldo antes de confirmar."
+                        "Revise escola ou unidade antes de confirmar."
                     )
 
                 messages.error(request, " ".join(partes_mensagem))

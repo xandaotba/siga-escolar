@@ -377,7 +377,46 @@
                             -
                         {% endif %}
                     </td>
-                    <td>{{ linha.dados.quantidade }}</td>
+                    <td>
+                        {% if linha.erro_quantidade and not linha.ignorar %}
+                            <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                inputmode="numeric"
+                                class="correcao-quantidade-pendente"
+                                data-linha="{{ linha.linha }}"
+                                name="quantidade_corrigida_{{ linha.linha }}"
+                                value="{{ linha.dados.quantidade|floatformat:'0' }}"
+                                {% if linha.saldo_maximo %}
+                                max="{{ linha.saldo_maximo|floatformat:'0' }}"
+                                {% endif %}
+                                form="form-confirmar-importacao-quantitativo-escola"
+                                style="width:110px;"
+                            >
+                            {% if linha.saldo_maximo %}
+                            <small style="display:block; margin-top:5px; color:#991b1b; font-weight:800;">
+                                Máximo: {{ linha.saldo_maximo|floatformat:'0' }}
+                            </small>
+                            {% endif %}
+
+                            {% if not linha.erro_item %}
+                            <label class="nao-importar-linha">
+                                <input
+                                    type="checkbox"
+                                    class="nao-importar-item-pendente"
+                                    data-linha="{{ linha.linha }}"
+                                    name="nao_importar_{{ linha.linha }}"
+                                    value="1"
+                                    form="form-confirmar-importacao-quantitativo-escola"
+                                >
+                                Não importar esta linha
+                            </label>
+                            {% endif %}
+                        {% else %}
+                            {{ linha.dados.quantidade|floatformat:'0' }}
+                        {% endif %}
+                    </td>
                     <td>
                         {% if linha.ignorar %}
                         <span style="color:#475569; font-weight:800;">Linha marcada para não importar.</span>
@@ -407,7 +446,8 @@
         {% if resumo.erros > 0 %}
         <p style="color:#92400e; font-weight:800; margin-bottom:12px;">
             Para erro de item, selecione um item do certame na coluna de correção ou marque "Não importar esta linha".
-            Para escola/unidade, selecione a correção correspondente. Erros de quantidade ou saldo exigem correção da planilha.
+            Para escola/unidade, selecione a correção correspondente.
+            Para erro de quantidade ou saldo, ajuste a quantidade diretamente na prévia ou marque "Não importar esta linha".
         </p>
         {% endif %}
 
@@ -428,7 +468,8 @@
         });
 
         const selects = Array.from(document.querySelectorAll('.correcao-item-pendente'));
-        const linhasPendentes = [];
+        const quantidades = Array.from(document.querySelectorAll('.correcao-quantidade-pendente'));
+        const linhasPendentes = new Set();
 
         selects.forEach(function (select) {
             const linha = select.dataset.linha;
@@ -440,22 +481,49 @@
             const naoImportar = Boolean(checkbox && checkbox.checked);
 
             if (!itemSelecionado && !naoImportar) {
-                linhasPendentes.push(linha);
-                const row = document.getElementById('linha-importacao-' + linha);
-                if (row) row.classList.add('linha-pendente-confirmacao');
+                linhasPendentes.add(linha);
             }
         });
 
-        if (linhasPendentes.length > 0) {
+        quantidades.forEach(function (input) {
+            const linha = input.dataset.linha;
+            const checkbox = document.querySelector(
+                '.nao-importar-item-pendente[data-linha="' + linha + '"]'
+            );
+            const naoImportar = Boolean(checkbox && checkbox.checked);
+
+            if (naoImportar) return;
+
+            const valor = Number(input.value);
+            const maximo = input.max ? Number(input.max) : null;
+
+            if (
+                !input.value ||
+                !Number.isInteger(valor) ||
+                valor <= 0 ||
+                (maximo !== null && valor > maximo)
+            ) {
+                linhasPendentes.add(linha);
+            }
+        });
+
+        const linhasPendentesLista = Array.from(linhasPendentes);
+
+        linhasPendentesLista.forEach(function (linha) {
+            const row = document.getElementById('linha-importacao-' + linha);
+            if (row) row.classList.add('linha-pendente-confirmacao');
+        });
+
+        if (linhasPendentesLista.length > 0) {
             event.preventDefault();
 
             alert(
-                'Existem itens ainda não resolvidos nas linhas: ' +
-                linhasPendentes.join(', ') +
-                '.\n\nSelecione um item sugerido na coluna Correção do Item ou marque “Não importar esta linha”.'
+                'Existem linhas ainda não resolvidas: ' +
+                linhasPendentesLista.join(', ') +
+                '.\n\nCorrija o item/quantidade indicado ou marque “Não importar esta linha”.'
             );
 
-            const primeiraLinha = document.getElementById('linha-importacao-' + linhasPendentes[0]);
+            const primeiraLinha = document.getElementById('linha-importacao-' + linhasPendentesLista[0]);
             if (primeiraLinha) {
                 primeiraLinha.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
