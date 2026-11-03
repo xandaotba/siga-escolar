@@ -61,10 +61,18 @@ urlpatterns = [
         views.invalidar_proposta_digital,
         name="invalidar_proposta_digital",
     ),
+    # Mantém o endereço UUID antigo funcionando para compatibilidade.
     path(
         "proposta-digital/<uuid:token>/",
         views.proposta_digital_publica,
         name="proposta_digital_publica",
+    ),
+    # Endereço amigável exibido no edital e aos fornecedores.
+    # Exemplo: /pregoes/proposta-digital/15-2027/
+    path(
+        "proposta-digital/<str:numero>-<int:ano>/",
+        views.proposta_digital_publica_amigavel,
+        name="proposta_digital_publica_amigavel",
     ),
     path(
         "proposta-digital/<uuid:token>/consultar-cnpj/",

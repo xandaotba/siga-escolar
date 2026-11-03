@@ -1359,8 +1359,16 @@ def gerar_link_proposta_digital(request):
         link.ativo = True
         link.save(update_fields=["ativo", "atualizado_em"])
 
+    # O UUID continua existindo internamente, mas o endereço apresentado
+    # ao usuário é amigável e baseado no número/ano do pregão.
     url_publica = request.build_absolute_uri(
-        reverse("pregoes:proposta_digital_publica", args=[link.token])
+        reverse(
+            "pregoes:proposta_digital_publica_amigavel",
+            kwargs={
+                "numero": pregao.numero,
+                "ano": pregao.ano,
+            },
+        )
     )
 
     return _json_no_store(
@@ -1415,6 +1423,34 @@ def proposta_digital_publica(request, token):
     response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response["Pragma"] = "no-cache"
     return response
+
+
+@never_cache
+def proposta_digital_publica_amigavel(request, numero, ano):
+    """
+    Endereço público amigável, por exemplo:
+    /pregoes/proposta-digital/15-2027/
+
+    O link só funciona se já existir um PropostaDigitalLink ativo para
+    o Pregão Presencial informado. O UUID permanece sendo usado
+    internamente nas operações sensíveis da proposta.
+    """
+    pregao = get_object_or_404(
+        Pregao,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+        numero=numero,
+        ano=ano,
+    )
+
+    link = get_object_or_404(
+        PropostaDigitalLink,
+        pregao=pregao,
+        ativo=True,
+    )
+
+    # Reutiliza exatamente a mesma renderização e validações do link UUID.
+    # Não há redirect: o navegador permanece exibindo o endereço amigável.
+    return proposta_digital_publica(request, link.token)
 
 
 @never_cache

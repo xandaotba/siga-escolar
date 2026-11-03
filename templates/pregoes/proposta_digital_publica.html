@@ -467,6 +467,7 @@
     const btnFinalizar = document.getElementById("btn-finalizar");
     const erroFinalizar = document.getElementById("erro-finalizar");
     const sucesso = document.getElementById("sucesso");
+    const consultarCnpjUrl = "{% url 'pregoes:consultar_cnpj_proposta_digital' link_proposta.token %}";
     const finalizarUrl = "{% url 'pregoes:finalizar_proposta_digital' link_proposta.token %}";
 
     let cnpjConfirmado = "";
@@ -579,7 +580,7 @@
         btnConsultar.textContent = "Consultando...";
 
         try {
-            const response = await fetch(`consultar-cnpj/?cnpj=${encodeURIComponent(cnpj)}`, {
+            const response = await fetch(`${consultarCnpjUrl}?cnpj=${encodeURIComponent(cnpj)}`, {
                 method: "GET",
                 credentials: "same-origin",
                 cache: "no-store"
@@ -636,7 +637,7 @@
 
         try {
             const url =
-                `consultar-cnpj/?cnpj=${encodeURIComponent(cnpj)}` +
+                `${consultarCnpjUrl}?cnpj=${encodeURIComponent(cnpj)}` +
                 `&razao_social_manual=${encodeURIComponent(razao)}`;
 
             const response = await fetch(url, {
