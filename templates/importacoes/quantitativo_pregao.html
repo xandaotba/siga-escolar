@@ -47,7 +47,7 @@
 
     .resumo-importacao {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 12px;
         margin-bottom: 18px;
     }
@@ -92,6 +92,21 @@
     .badge-erro {
         background: #fee2e2;
         color: #991b1b;
+    }
+
+    .badge-ignorar {
+        background: #f1f5f9;
+        color: #475569;
+    }
+
+    .nao-importar-linha {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        font-size: 12px;
+        font-weight: 800;
+        color: #475569;
     }
 
     @media (max-width: 900px) {
@@ -221,6 +236,11 @@
         <div class="resumo-importacao-label">Atualizar</div>
         <div class="resumo-importacao-valor">{{ resumo.atualizar }}</div>
     </div>
+
+    <div class="resumo-importacao-card">
+        <div class="resumo-importacao-label">Não importar</div>
+        <div class="resumo-importacao-valor">{{ resumo.ignorados|default:0 }}</div>
+    </div>
 </div>
 {% endif %}
 
@@ -239,6 +259,7 @@
                     <th>Unidade informada</th>
                     <th>Correção da Unidade</th>
                     <th>Quantidade</th>
+                    <th>Não importar</th>
                     <th>Erros</th>
                 </tr>
             </thead>
@@ -252,6 +273,8 @@
                         <span class="badge-importacao badge-criar">Criar</span>
                         {% elif linha.acao == "Atualizar" %}
                         <span class="badge-importacao badge-atualizar">Atualizar</span>
+                        {% elif linha.acao == "Não importar" %}
+                        <span class="badge-importacao badge-ignorar">Não importar</span>
                         {% else %}
                         <span class="badge-importacao badge-erro">Erro</span>
                         {% endif %}
@@ -300,7 +323,35 @@
                     </td>
                     <td>{{ linha.dados.quantidade }}</td>
                     <td>
-                        {% if linha.erros %}
+                        {% if linha.ignorar %}
+                            <label class="nao-importar-linha">
+                                <input
+                                    type="checkbox"
+                                    name="nao_importar_{{ linha.linha }}"
+                                    value="1"
+                                    checked
+                                    form="form-confirmar-importacao-quantitativo"
+                                >
+                                Manter
+                            </label>
+                        {% elif not linha.valido %}
+                            <label class="nao-importar-linha">
+                                <input
+                                    type="checkbox"
+                                    name="nao_importar_{{ linha.linha }}"
+                                    value="1"
+                                    form="form-confirmar-importacao-quantitativo"
+                                >
+                                Não importar
+                            </label>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if linha.ignorar %}
+                        <span style="color:#475569; font-weight:800;">Linha marcada para não importar.</span>
+                        {% elif linha.erros %}
                         <ul style="margin:0; padding-left:18px;">
                             {% for erro in linha.erros %}
                             <li>{{ erro }}</li>
@@ -325,8 +376,8 @@
 
         {% if resumo.erros > 0 %}
         <p style="color:#92400e; font-weight:800; margin-bottom:12px;">
-            Se os erros forem apenas de item ou unidade, selecione as opções corretas nas colunas de correção e confirme novamente.
-            Se houver outros erros, corrija a planilha e valide novamente.
+            Para linhas com erro, corrija item/unidade quando possível ou marque "Não importar".
+            As linhas marcadas não serão gravadas e não bloquearão a confirmação das demais.
         </p>
         {% endif %}
 
