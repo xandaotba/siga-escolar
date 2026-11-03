@@ -401,6 +401,7 @@ def importar_fornecedores(request):
                         "erros": len(erros),
                         "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                         "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                        "ignorados": 0,
                     }
 
                     if erros:
@@ -420,7 +421,10 @@ def importar_fornecedores(request):
                 messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
                 return redirect("importacoes:fornecedores")
 
-            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
+            linhas_invalidas = [
+                linha for linha in linhas
+                if not linha.get("ignorar") and not linha.get("valido")
+            ]
 
             if linhas_invalidas:
                 messages.error(request, "Ainda existem linhas inválidas. Corrija a planilha e valide novamente.")
@@ -428,8 +432,13 @@ def importar_fornecedores(request):
 
             criados = 0
             atualizados = 0
+            ignorados = 0
 
             for linha in linhas:
+                if linha.get("ignorar"):
+                    ignorados += 1
+                    continue
+
                 dados = linha["dados"]
                 cnpj_digitos = somente_digitos(dados["cnpj"])
 
@@ -943,14 +952,24 @@ def importar_escolas(request):
                     "Ainda existem linhas inválidas. Se o erro for município, selecione o município correto na coluna Correção e confirme novamente.",
                 )
 
-                validos = [linha for linha in linhas if linha.get("valido")]
-                erros = [linha for linha in linhas if not linha.get("valido")]
+                ignorados_lista = [
+                    linha for linha in linhas if linha.get("ignorar")
+                ]
+                validos = [
+                    linha for linha in linhas
+                    if linha.get("valido") and not linha.get("ignorar")
+                ]
+                erros = [
+                    linha for linha in linhas
+                    if not linha.get("valido") and not linha.get("ignorar")
+                ]
                 resumo = {
                     "total": len(linhas),
                     "validos": len(validos),
                     "erros": len(erros),
                     "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                     "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                    "ignorados": len(ignorados_lista),
                 }
 
                 form = ImportacaoPlanilhaForm()
@@ -1892,6 +1911,7 @@ def montar_linha_quantitativo_pregao(numero_linha, valores, pregao, atualizar_ex
         "erros": erros,
         "erro_item": erro_item,
         "erro_unidade": erro_unidade,
+        "ignorar": False,
         "item_opcoes": item_opcoes,
         "unidade_opcoes": unidade_opcoes,
         "dados": {
@@ -2118,7 +2138,18 @@ def importar_quantitativo_pregao(request):
                 return redirect("importacoes:quantitativo_pregao")
 
             # Aplica correções de item e unidade feitas na tela de prévia.
+            # Linhas marcadas como "Não importar" não bloqueiam a confirmação
+            # e não serão gravadas no banco.
             for linha in linhas:
+                linha["ignorar"] = (
+                    request.POST.get(f"nao_importar_{linha['linha']}") == "1"
+                )
+
+                if linha["ignorar"]:
+                    linha["valido"] = True
+                    linha["acao"] = "Não importar"
+                    continue
+
                 if linha.get("erro_item"):
                     item_corrigido = obter_item_por_correcao(request, linha["linha"])
 
@@ -2190,6 +2221,9 @@ def importar_quantitativo_pregao(request):
             itens_finais = set()
 
             for linha in linhas:
+                if linha.get("ignorar"):
+                    continue
+
                 item_id = linha["dados"].get("item_id")
 
                 if item_id:
@@ -2268,7 +2302,8 @@ def importar_quantitativo_pregao(request):
             messages.success(
                 request,
                 f"Importação concluída para o Pregão {pregao.numero}/{pregao.ano}. "
-                f"Itens criados: {criados}. Itens atualizados: {atualizados}.",
+                f"Itens criados: {criados}. Itens atualizados: {atualizados}. "
+                f"Linhas não importadas: {ignorados}.",
             )
             return redirect(f"/pregoes/quantitativo-pregao/?pregao={pregao.id}")
     else:

@@ -1,2348 +1,988 @@
-from io import BytesIO
 from decimal import Decimal, InvalidOperation
-from difflib import SequenceMatcher, get_close_matches
-import unicodedata
+import base64
+import binascii
+import hashlib
+import hmac
 import json
-import logging
 import re
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required, user_passes_test
-from django.db import transaction
-from django.db.models import Sum
+from django.contrib.auth.decorators import login_required
+from django.core import signing
 from django.core.exceptions import ValidationError
-from django.core.validators import validate_email
-from django.http import HttpResponse
-from django.views.decorators.http import require_POST
-from django.shortcuts import redirect, render
+from django.core.paginator import Paginator
+from django.db import IntegrityError, transaction
+from django.db.models import Sum
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-from openpyxl.utils import get_column_letter
+from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_GET, require_POST
 
-from apps.cadastros.models import Escola, Fornecedor, Item, Municipio, UnidadeMedida, validar_cnpj, validar_cpf
+from django.http import HttpResponse, JsonResponse
+from apps.cadastros.models import Escola, Item, validar_cnpj
+from .forms import OrdenadorDespesasForm, PregaoForm
 
-from .forms import ImportacaoPlanilhaForm
-from .backup_forms import ConfiguracaoBackupForm
-from .backup_service import BackupBancoErro, executar_backup_postgresql, status_integracao_backup
-from .models import ConfiguracaoBackup, HistoricoBackup
-from apps.pregoes.models import Pregao, PregaoItem, QuantitativoEscola, QuantitativoPregao
+from io import BytesIO
+from copy import deepcopy
+from pathlib import Path
 
+from django.conf import settings
+from docx import Document
 
-logger = logging.getLogger(__name__)
-
-
-CABECALHOS_FORNECEDORES = [
-    "RAZÃO SOCIAL",
-    "CNPJ",
-    "ENDEREÇO",
-    "TELEFONE",
-    "REPRESENTANTE LEGAL",
-    "RG REPRESENTANTE",
-    "ÓRGÃO EXPEDIDOR",
-    "CPF REPRESENTANTE",
-    "E-MAIL",
-    "NOME DO BANCO",
-    "AGÊNCIA",
-    "CONTA CORRENTE",
-    "PIX",
-    "ATIVO",
-]
+def paginar_queryset(request, queryset, por_pagina=25):
+    paginator = Paginator(queryset, por_pagina)
+    numero_pagina = request.GET.get("page")
+    return paginator.get_page(numero_pagina)
 
 
-def usuario_pode_importar(user):
-    if not user.is_authenticated:
-        return False
-
-    if user.is_superuser:
-        return True
-
-    perfil = getattr(user, "perfil_acesso", None)
-
-    return bool(
-        perfil
-        and perfil.perfil == "administrador"
-        and user.is_active
-    )
+from .models import (
+    Pregao,
+    PregaoItem,
+    PregaoFornecedor,
+    QuantitativoEscola,
+    QuantitativoPregao,
+    PropostaInicialItem,
+    PropostaDigitalLink,
+    PropostaDigital,
+)
 
 
-def somente_digitos(valor):
-    return "".join(ch for ch in str(valor or "") if ch.isdigit())
 
+def _substituir_texto_celula_preservando_rotulo(cell, valor, rotulo=None):
+    """
+    Preenche uma célula do modelo mantendo o rótulo em negrito quando existir.
+    """
+    valor = str(valor or "").strip() or "-"
 
-def texto_celula(valor):
-    if valor is None:
-        return ""
+    paragraph = cell.paragraphs[0]
 
-    return str(valor).strip()
+    if rotulo:
+        # Mantém o primeiro run (rótulo) do modelo e substitui apenas o conteúdo.
+        if not paragraph.runs:
+            run_rotulo = paragraph.add_run(rotulo)
+            run_rotulo.bold = True
+            paragraph.add_run(f" {valor}")
+            return
 
+        paragraph.runs[0].text = rotulo
+        paragraph.runs[0].bold = True
 
-def limpar_cnpj(valor):
-    digitos = somente_digitos(valor)
-
-    if len(digitos) == 14:
-        return f"{digitos[:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:]}"
-
-    return texto_celula(valor)
-
-
-def limpar_cpf(valor):
-    digitos = somente_digitos(valor)
-
-    if len(digitos) == 11:
-        return f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
-
-    return texto_celula(valor)
-
-
-def texto_ativo(valor):
-    texto = texto_celula(valor).lower()
-
-    if texto in ["", "sim", "s", "ativo", "1", "true", "verdadeiro"]:
-        return True
-
-    if texto in ["não", "nao", "n", "inativo", "0", "false", "falso"]:
-        return False
-
-    return True
-
-
-def validar_email_opcional(email):
-    email = texto_celula(email)
-
-    if not email:
-        return ""
-
-    validate_email(email)
-    return email
-
-
-def cabecalhos_normalizados(linha):
-    return [texto_celula(celula).upper() for celula in linha]
-
-
-def validar_cabecalho_planilha(linha):
-    encontrados = cabecalhos_normalizados(linha)
-
-    return encontrados[:len(CABECALHOS_FORNECEDORES)] == CABECALHOS_FORNECEDORES
-
-
-def montar_linha_fornecedor(numero_linha, valores, atualizar_existentes):
-    dados = dict(zip(CABECALHOS_FORNECEDORES, valores))
-
-    razao_social = texto_celula(dados.get("RAZÃO SOCIAL"))
-    cnpj = limpar_cnpj(dados.get("CNPJ"))
-    endereco = texto_celula(dados.get("ENDEREÇO"))
-    telefone = texto_celula(dados.get("TELEFONE"))
-    representante_legal = texto_celula(dados.get("REPRESENTANTE LEGAL"))
-    rg_representante = texto_celula(dados.get("RG REPRESENTANTE"))
-    orgao_expedidor = texto_celula(dados.get("ÓRGÃO EXPEDIDOR"))
-    cpf_representante = limpar_cpf(dados.get("CPF REPRESENTANTE"))
-    email = texto_celula(dados.get("E-MAIL"))
-    nome_banco = texto_celula(dados.get("NOME DO BANCO"))
-    agencia = texto_celula(dados.get("AGÊNCIA"))
-    conta_corrente = texto_celula(dados.get("CONTA CORRENTE"))
-    pix = texto_celula(dados.get("PIX"))
-    ativo = texto_ativo(dados.get("ATIVO"))
-
-    erros = []
-
-    if not razao_social:
-        erros.append("Razão social é obrigatória.")
-
-    if not cnpj:
-        erros.append("CNPJ é obrigatório.")
-    else:
-        try:
-            validar_cnpj(cnpj)
-        except ValidationError:
-            erros.append("CNPJ inválido.")
-
-    if not endereco:
-        erros.append("Endereço é obrigatório.")
-
-    if not representante_legal:
-        erros.append("Representante legal é obrigatório.")
-
-    if not rg_representante:
-        erros.append("RG do representante é obrigatório.")
-
-    if not orgao_expedidor:
-        erros.append("Órgão expedidor é obrigatório.")
-
-    if not cpf_representante:
-        erros.append("CPF do representante é obrigatório.")
-    else:
-        try:
-            validar_cpf(cpf_representante)
-        except ValidationError:
-            erros.append("CPF do representante inválido.")
-
-    if email:
-        try:
-            email = validar_email_opcional(email)
-        except ValidationError:
-            erros.append("E-mail inválido.")
-
-    fornecedor_existente = None
-
-    if cnpj:
-        fornecedor_existente = Fornecedor.objects.filter(
-            cnpj__regex=rf"\\D*{somente_digitos(cnpj)}\\D*"
-        ).first()
-
-        if not fornecedor_existente:
-            fornecedor_existente = Fornecedor.objects.filter(
-                cnpj=cnpj,
-            ).first()
-
-    acao = "Criar"
-
-    if fornecedor_existente:
-        if atualizar_existentes:
-            acao = "Atualizar"
+        if len(paragraph.runs) >= 2:
+            paragraph.runs[1].text = f" {valor}"
+            for run in paragraph.runs[2:]:
+                run.text = ""
         else:
-            acao = "Ignorar"
-            erros.append("Fornecedor já existe com este CNPJ.")
-
-    valido = not erros
-
-    return {
-        "linha": numero_linha,
-        "valido": valido,
-        "acao": acao if valido else "Erro",
-        "erros": erros,
-        "dados": {
-            "razao_social": razao_social,
-            "cnpj": cnpj,
-            "endereco": endereco,
-            "telefone": telefone,
-            "representante_legal": representante_legal,
-            "rg_representante": rg_representante,
-            "orgao_expedidor_representante": orgao_expedidor,
-            "cpf_representante": cpf_representante,
-            "email": email,
-            "nome_banco": nome_banco,
-            "agencia": agencia,
-            "conta_corrente": conta_corrente,
-            "pix": pix,
-            "ativo": ativo,
-        },
-    }
-
-
-def ler_planilha_fornecedores(arquivo, atualizar_existentes=True):
-    workbook = load_workbook(arquivo, data_only=True)
-    sheet = workbook.active
-
-    primeira_linha = [cell.value for cell in sheet[1]]
-
-    if not validar_cabecalho_planilha(primeira_linha):
-        raise ValueError(
-            "O cabeçalho da planilha não corresponde ao modelo esperado. "
-            "Baixe o modelo novamente e mantenha os nomes das colunas."
-        )
-
-    linhas = []
-    cnpjs_lidos = set()
-
-    for numero_linha in range(2, sheet.max_row + 1):
-        valores = [
-            sheet.cell(row=numero_linha, column=coluna).value
-            for coluna in range(1, len(CABECALHOS_FORNECEDORES) + 1)
-        ]
-
-        if all(texto_celula(valor) == "" for valor in valores):
-            continue
-
-        linha = montar_linha_fornecedor(
-            numero_linha,
-            valores,
-            atualizar_existentes,
-        )
-
-        cnpj_digitos = somente_digitos(linha["dados"]["cnpj"])
-
-        if cnpj_digitos:
-            if cnpj_digitos in cnpjs_lidos:
-                linha["valido"] = False
-                linha["acao"] = "Erro"
-                linha["erros"].append("CNPJ duplicado dentro da própria planilha.")
-            else:
-                cnpjs_lidos.add(cnpj_digitos)
-
-        linhas.append(linha)
-
-    return linhas
-
-
-def criar_modelo_fornecedores_workbook():
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Fornecedores"
-
-    sheet.append(CABECALHOS_FORNECEDORES)
-    sheet.append([
-        "EMPRESA EXEMPLO LTDA",
-        "00.000.000/0000-00",
-        "Rua Exemplo, nº 100, Centro",
-        "(66) 99999-9999",
-        "NOME DO REPRESENTANTE",
-        "1234567",
-        "SSP/MT",
-        "000.000.000-00",
-        "fornecedor@email.com",
-        "Banco do Brasil",
-        "0000-0",
-        "00000-0",
-        "chave-pix@email.com",
-        "Sim",
-    ])
-
-    sheet.freeze_panes = "A2"
-
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
-    )
-
-    for cell in sheet[1]:
-        cell.fill = fill_header
-        cell.font = font_header
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    for row in sheet.iter_rows(min_row=2, max_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-    larguras = {
-        "A": 34,
-        "B": 20,
-        "C": 38,
-        "D": 18,
-        "E": 30,
-        "F": 18,
-        "G": 18,
-        "H": 20,
-        "I": 28,
-        "J": 22,
-        "K": 14,
-        "L": 18,
-        "M": 28,
-        "N": 12,
-    }
-
-    for coluna, largura in larguras.items():
-        sheet.column_dimensions[coluna].width = largura
-
-    sheet.row_dimensions[1].height = 32
-
-    return workbook
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_modelo_fornecedores(request):
-    workbook = criar_modelo_fornecedores_workbook()
-    arquivo = BytesIO()
-    workbook.save(arquivo)
-    arquivo.seek(0)
-
-    response = HttpResponse(
-        arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    response["Content-Disposition"] = 'attachment; filename="modelo_importacao_fornecedores.xlsx"'
-
-    return response
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def importar_fornecedores(request):
-    linhas = []
-    resumo = None
-
-    if request.method == "POST":
-        acao = request.POST.get("acao")
-
-        if acao == "validar":
-            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
-
-            if form.is_valid():
-                arquivo = form.cleaned_data["arquivo"]
-                atualizar_existentes = form.cleaned_data["atualizar_existentes"]
-
-                try:
-                    linhas = ler_planilha_fornecedores(
-                        arquivo,
-                        atualizar_existentes=atualizar_existentes,
-                    )
-                except Exception as erro:
-                    messages.error(request, str(erro))
-                    linhas = []
-
-                if linhas:
-                    validos = [linha for linha in linhas if linha["valido"]]
-                    erros = [linha for linha in linhas if not linha["valido"]]
-
-                    request.session["importacao_fornecedores_linhas"] = linhas
-                    request.session["importacao_fornecedores_atualizar"] = atualizar_existentes
-
-                    resumo = {
-                        "total": len(linhas),
-                        "validos": len(validos),
-                        "erros": len(erros),
-                        "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                        "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                        "ignorados": 0,
-                    }
-
-                    if erros:
-                        messages.warning(
-                            request,
-                            "A planilha possui erros. Corrija as linhas inválidas antes de confirmar a importação.",
-                        )
-                    else:
-                        messages.success(
-                            request,
-                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
-                        )
-        elif acao == "confirmar":
-            linhas = request.session.get("importacao_fornecedores_linhas", [])
-
-            if not linhas:
-                messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
-                return redirect("importacoes:fornecedores")
-
-            linhas_invalidas = [
-                linha for linha in linhas
-                if not linha.get("ignorar") and not linha.get("valido")
-            ]
-
-            if linhas_invalidas:
-                messages.error(request, "Ainda existem linhas inválidas. Corrija a planilha e valide novamente.")
-                return redirect("importacoes:fornecedores")
-
-            criados = 0
-            atualizados = 0
-            ignorados = 0
-
-            for linha in linhas:
-                if linha.get("ignorar"):
-                    ignorados += 1
-                    continue
-
-                dados = linha["dados"]
-                cnpj_digitos = somente_digitos(dados["cnpj"])
-
-                fornecedor = None
-
-                for existente in Fornecedor.objects.all():
-                    if somente_digitos(existente.cnpj) == cnpj_digitos:
-                        fornecedor = existente
-                        break
-
-                if fornecedor:
-                    for campo, valor in dados.items():
-                        setattr(fornecedor, campo, valor)
-                    fornecedor.save()
-                    atualizados += 1
-                else:
-                    Fornecedor.objects.create(**dados)
-                    criados += 1
-
-            request.session.pop("importacao_fornecedores_linhas", None)
-            request.session.pop("importacao_fornecedores_atualizar", None)
-
-            messages.success(
-                request,
-                f"Importação concluída. Fornecedores criados: {criados}. Fornecedores atualizados: {atualizados}.",
-            )
-            return redirect("cadastros:fornecedores")
+            paragraph.add_run(f" {valor}")
     else:
-        form = ImportacaoPlanilhaForm()
-
-    if request.method == "POST" and "form" not in locals():
-        form = ImportacaoPlanilhaForm()
-
-    return render(
-        request,
-        "importacoes/fornecedores.html",
-        {
-            "form": form,
-            "linhas": linhas,
-            "resumo": resumo,
-        },
-    )
-
-
-CABECALHOS_ESCOLAS = [
-    "NOME DA ESCOLA",
-    "CNPJ",
-    "ENDEREÇO",
-    "NÚMERO",
-    "BAIRRO",
-    "MUNICÍPIO",
-    "UF",
-    "PRESIDENTE DO CDCE",
-    "RG PRESIDENTE",
-    "CPF PRESIDENTE",
-    "ATIVO",
-]
-
-
-def validar_cabecalho_planilha_escolas(linha):
-    encontrados = cabecalhos_normalizados(linha)
-
-    return encontrados[:len(CABECALHOS_ESCOLAS)] == CABECALHOS_ESCOLAS
-
-
-def buscar_escola_por_cnpj(cnpj):
-    cnpj_digitos = somente_digitos(cnpj)
-
-    if not cnpj_digitos:
-        return None
-
-    for escola in Escola.objects.all():
-        if somente_digitos(escola.cnpj) == cnpj_digitos:
-            return escola
-
-    return None
-
-
-def normalizar_texto_comparacao(texto):
-    texto = texto_celula(texto).lower()
-    texto = unicodedata.normalize("NFKD", texto)
-    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
-    texto = re.sub(r"[^a-z0-9]+", " ", texto)
-    texto = re.sub(r"\s+", " ", texto).strip()
-
-    return texto
-
-
-def buscar_municipio_cadastrado(nome, uf):
-    nome = texto_celula(nome)
-    uf = texto_celula(uf).upper() or "MT"
-
-    if not nome:
-        return None
-
-    # Primeiro tenta comparação exata ignorando maiúsculas/minúsculas.
-    municipio = Municipio.objects.filter(
-        nome__iexact=nome,
-        uf__iexact=uf,
-    ).first()
-
-    if municipio:
-        return municipio
-
-    # Depois tenta comparação normalizada, ignorando acentos, pontuação e espaços.
-    nome_normalizado = normalizar_texto_comparacao(nome)
-
-    for municipio in Municipio.objects.filter(uf__iexact=uf):
-        if normalizar_texto_comparacao(municipio.nome) == nome_normalizado:
-            return municipio
-
-    return None
-
-
-def sugerir_municipios(nome, uf, limite=3):
-    nome_normalizado = normalizar_texto_comparacao(nome)
-    uf = texto_celula(uf).upper() or "MT"
-
-    municipios = list(Municipio.objects.filter(uf__iexact=uf).order_by("nome"))
-
-    mapa_normalizado = {
-        normalizar_texto_comparacao(municipio.nome): municipio.nome
-        for municipio in municipios
-    }
-
-    sugestoes_normalizadas = get_close_matches(
-        nome_normalizado,
-        list(mapa_normalizado.keys()),
-        n=limite,
-        cutoff=0.72,
-    )
-
-    return [mapa_normalizado[item] for item in sugestoes_normalizadas]
-
-
-
-def opcoes_municipio_para_correcao(nome, uf):
-    """
-    Retorna municípios cadastrados para o usuário selecionar na tela de prévia.
-
-    A lista prioriza os municípios mais parecidos com o texto da planilha,
-    mas também inclui os demais municípios da mesma UF para permitir correção manual.
-    """
-    uf = texto_celula(uf).upper() or "MT"
-    municipios = list(Municipio.objects.filter(uf__iexact=uf).order_by("nome"))
-
-    sugestoes_nomes = sugerir_municipios(nome, uf, limite=5)
-    sugestoes_normalizadas = {
-        normalizar_texto_comparacao(nome_sugerido)
-        for nome_sugerido in sugestoes_nomes
-    }
-
-    municipios_ordenados = sorted(
-        municipios,
-        key=lambda municipio: (
-            0 if normalizar_texto_comparacao(municipio.nome) in sugestoes_normalizadas else 1,
-            municipio.nome,
-        ),
-    )
-
-    return [
-        {
-            "id": municipio.id,
-            "nome": municipio.nome,
-            "uf": municipio.uf,
-        }
-        for municipio in municipios_ordenados
-    ]
-
-
-def obter_municipio_por_correcao(request, numero_linha):
-    municipio_id = request.POST.get(f"municipio_corrigido_{numero_linha}")
-
-    if not municipio_id:
-        return None
-
-    return Municipio.objects.filter(id=municipio_id).first()
-
-
-def montar_linha_escola(numero_linha, valores, atualizar_existentes):
-    dados = dict(zip(CABECALHOS_ESCOLAS, valores))
-
-    nome_escola = texto_celula(dados.get("NOME DA ESCOLA"))
-    cnpj = limpar_cnpj(dados.get("CNPJ"))
-    endereco = texto_celula(dados.get("ENDEREÇO"))
-    numero = texto_celula(dados.get("NÚMERO"))
-    bairro = texto_celula(dados.get("BAIRRO"))
-    municipio_nome = texto_celula(dados.get("MUNICÍPIO"))
-    uf = texto_celula(dados.get("UF")).upper() or "MT"
-    presidente_cdce = texto_celula(dados.get("PRESIDENTE DO CDCE"))
-    rg_presidente = texto_celula(dados.get("RG PRESIDENTE"))
-    cpf_presidente = limpar_cpf(dados.get("CPF PRESIDENTE"))
-    ativo = texto_ativo(dados.get("ATIVO"))
-
-    erros = []
-
-    if not nome_escola:
-        erros.append("Nome da escola é obrigatório.")
-
-    if not cnpj:
-        erros.append("CNPJ é obrigatório.")
-    else:
-        try:
-            validar_cnpj(cnpj)
-        except ValidationError:
-            erros.append("CNPJ inválido.")
-
-    if not endereco:
-        erros.append("Endereço é obrigatório.")
-
-    if not municipio_nome:
-        erros.append("Município é obrigatório.")
-
-    if not uf:
-        erros.append("UF é obrigatória.")
-    elif len(uf) != 2:
-        erros.append("UF deve conter 2 letras.")
-
-    municipio_encontrado = None
-
-    erro_municipio = False
-    municipio_opcoes = []
-
-    if municipio_nome and uf and len(uf) == 2:
-        municipio_encontrado = buscar_municipio_cadastrado(municipio_nome, uf)
-
-        if not municipio_encontrado:
-            erro_municipio = True
-            municipio_opcoes = opcoes_municipio_para_correcao(municipio_nome, uf)
-            sugestoes = sugerir_municipios(municipio_nome, uf)
-
-            if sugestoes:
-                erros.append(
-                    "Município não encontrado no sistema. "
-                    f"Selecione o município correto na coluna Correção. Sugestões: {', '.join(sugestoes)}."
-                )
-            else:
-                erros.append(
-                    "Município não encontrado no sistema. "
-                    "Selecione o município correto na coluna Correção ou cadastre o município antes de importar."
-                )
-
-    if not presidente_cdce:
-        erros.append("Presidente do CDCE é obrigatório.")
-
-    if not rg_presidente:
-        erros.append("RG do presidente é obrigatório.")
-
-    if not cpf_presidente:
-        erros.append("CPF do presidente é obrigatório.")
-    else:
-        try:
-            validar_cpf(cpf_presidente)
-        except ValidationError:
-            erros.append("CPF do presidente inválido.")
-
-    escola_existente = buscar_escola_por_cnpj(cnpj)
-
-    acao = "Criar"
-
-    if escola_existente:
-        if atualizar_existentes:
-            acao = "Atualizar"
+        if paragraph.runs:
+            paragraph.runs[0].text = valor
+            for run in paragraph.runs[1:]:
+                run.text = ""
         else:
-            acao = "Ignorar"
-            erros.append("Escola já existe com este CNPJ.")
-
-    valido = not erros
-
-    return {
-        "linha": numero_linha,
-        "valido": valido,
-        "acao": acao if valido else "Erro",
-        "erros": erros,
-        "erro_municipio": erro_municipio,
-        "municipio_opcoes": municipio_opcoes,
-        "dados": {
-            "nome_escola": nome_escola,
-            "cnpj": cnpj,
-            "endereco": endereco,
-            "numero": numero,
-            "bairro": bairro,
-            "municipio_nome": municipio_nome,
-            "uf": uf,
-            "presidente_cdce": presidente_cdce,
-            "rg_presidente": rg_presidente,
-            "cpf_presidente": cpf_presidente,
-            "ativo": ativo,
-            "municipio_corrigido_id": "",
-            "municipio_corrigido_nome": "",
-            "municipio_corrigido_uf": "",
-        },
-    }
+            paragraph.add_run(valor)
 
 
-def ler_planilha_escolas(arquivo, atualizar_existentes=True):
-    workbook = load_workbook(arquivo, data_only=True)
-    sheet = workbook.active
-
-    primeira_linha = [cell.value for cell in sheet[1]]
-
-    if not validar_cabecalho_planilha_escolas(primeira_linha):
-        raise ValueError(
-            "O cabeçalho da planilha não corresponde ao modelo esperado. "
-            "Baixe o modelo novamente e mantenha os nomes das colunas."
-        )
-
-    linhas = []
-    cnpjs_lidos = set()
-
-    for numero_linha in range(2, sheet.max_row + 1):
-        valores = [
-            sheet.cell(row=numero_linha, column=coluna).value
-            for coluna in range(1, len(CABECALHOS_ESCOLAS) + 1)
-        ]
-
-        if all(texto_celula(valor) == "" for valor in valores):
-            continue
-
-        linha = montar_linha_escola(
-            numero_linha,
-            valores,
-            atualizar_existentes,
-        )
-
-        cnpj_digitos = somente_digitos(linha["dados"]["cnpj"])
-
-        if cnpj_digitos:
-            if cnpj_digitos in cnpjs_lidos:
-                linha["valido"] = False
-                linha["acao"] = "Erro"
-                linha["erros"].append("CNPJ duplicado dentro da própria planilha.")
-            else:
-                cnpjs_lidos.add(cnpj_digitos)
-
-        linhas.append(linha)
-
-    return linhas
-
-
-def criar_modelo_escolas_workbook():
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Escolas"
-
-    sheet.append(CABECALHOS_ESCOLAS)
-    sheet.append([
-        "EE EXEMPLO",
-        "00.000.000/0000-00",
-        "Rua Exemplo",
-        "100",
-        "Centro",
-        "Sinop",
-        "MT",
-        "NOME DO PRESIDENTE",
-        "1234567",
-        "000.000.000-00",
-        "Sim",
-    ])
-
-    sheet.freeze_panes = "A2"
-
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
+def _preencher_tabela_fornecedor(table, fornecedor):
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(0, 1),
+        fornecedor.razao_social,
     )
-
-    for cell in sheet[1]:
-        cell.fill = fill_header
-        cell.font = font_header
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    for row in sheet.iter_rows(min_row=2, max_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-    larguras = {
-        "A": 34,
-        "B": 20,
-        "C": 34,
-        "D": 12,
-        "E": 20,
-        "F": 22,
-        "G": 10,
-        "H": 30,
-        "I": 18,
-        "J": 20,
-        "K": 12,
-    }
-
-    for coluna, largura in larguras.items():
-        sheet.column_dimensions[coluna].width = largura
-
-    sheet.row_dimensions[1].height = 32
-
-    return workbook
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_modelo_escolas(request):
-    workbook = criar_modelo_escolas_workbook()
-    arquivo = BytesIO()
-    workbook.save(arquivo)
-    arquivo.seek(0)
-
-    response = HttpResponse(
-        arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(1, 1),
+        fornecedor.cnpj,
     )
-    response["Content-Disposition"] = 'attachment; filename="modelo_importacao_escolas.xlsx"'
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(2, 1),
+        fornecedor.endereco,
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(3, 1),
+        fornecedor.representante_legal,
+        "NOME:",
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(4, 1),
+        fornecedor.cpf_representante,
+        "CPF:",
+    )
+    identidade = fornecedor.rg_representante or ""
+    orgao = fornecedor.orgao_expedidor_representante or ""
 
-    return response
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def importar_escolas(request):
-    linhas = []
-    resumo = None
-
-    if request.method == "POST":
-        acao = request.POST.get("acao")
-
-        if acao == "validar":
-            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
-
-            if form.is_valid():
-                arquivo = form.cleaned_data["arquivo"]
-                atualizar_existentes = form.cleaned_data["atualizar_existentes"]
-
-                try:
-                    linhas = ler_planilha_escolas(
-                        arquivo,
-                        atualizar_existentes=atualizar_existentes,
-                    )
-                except Exception as erro:
-                    messages.error(request, str(erro))
-                    linhas = []
-
-                if linhas:
-                    validos = [linha for linha in linhas if linha["valido"]]
-                    erros = [linha for linha in linhas if not linha["valido"]]
-
-                    request.session["importacao_escolas_linhas"] = linhas
-                    request.session["importacao_escolas_atualizar"] = atualizar_existentes
-
-                    resumo = {
-                        "total": len(linhas),
-                        "validos": len(validos),
-                        "erros": len(erros),
-                        "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                        "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                    }
-
-                    if erros:
-                        messages.warning(
-                            request,
-                            "A planilha possui erros. Corrija as linhas inválidas antes de confirmar a importação.",
-                        )
-                    else:
-                        messages.success(
-                            request,
-                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
-                        )
-
-        elif acao == "confirmar":
-            linhas = request.session.get("importacao_escolas_linhas", [])
-
-            if not linhas:
-                messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
-                return redirect("importacoes:escolas")
-
-            # Permite corrigir município diretamente na tela de prévia,
-            # sem precisar editar e reenviar a planilha.
-            for linha in linhas:
-                if linha.get("erro_municipio"):
-                    municipio_corrigido = obter_municipio_por_correcao(request, linha["linha"])
-
-                    if municipio_corrigido:
-                        erros_restantes = [
-                            erro for erro in linha.get("erros", [])
-                            if "Município não encontrado" not in erro
-                        ]
-
-                        linha["erros"] = erros_restantes
-                        linha["erro_municipio"] = False
-                        linha["dados"]["municipio_corrigido_id"] = municipio_corrigido.id
-                        linha["dados"]["municipio_corrigido_nome"] = municipio_corrigido.nome
-                        linha["dados"]["municipio_corrigido_uf"] = municipio_corrigido.uf
-                        linha["dados"]["municipio_nome"] = municipio_corrigido.nome
-                        linha["dados"]["uf"] = municipio_corrigido.uf
-
-                        if not erros_restantes:
-                            linha["valido"] = True
-                            if linha.get("acao") == "Erro":
-                                linha["acao"] = "Atualizar" if buscar_escola_por_cnpj(linha["dados"]["cnpj"]) else "Criar"
-
-            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
-
-            if linhas_invalidas:
-                request.session["importacao_escolas_linhas"] = linhas
-                messages.error(
-                    request,
-                    "Ainda existem linhas inválidas. Se o erro for município, selecione o município correto na coluna Correção e confirme novamente.",
-                )
-
-                ignorados_lista = [
-                    linha for linha in linhas if linha.get("ignorar")
-                ]
-                validos = [
-                    linha for linha in linhas
-                    if linha.get("valido") and not linha.get("ignorar")
-                ]
-                erros = [
-                    linha for linha in linhas
-                    if not linha.get("valido") and not linha.get("ignorar")
-                ]
-                resumo = {
-                    "total": len(linhas),
-                    "validos": len(validos),
-                    "erros": len(erros),
-                    "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                    "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                    "ignorados": len(ignorados_lista),
-                }
-
-                form = ImportacaoPlanilhaForm()
-                return render(
-                    request,
-                    "importacoes/escolas.html",
-                    {
-                        "form": form,
-                        "linhas": linhas,
-                        "resumo": resumo,
-                    },
-                )
-
-            criadas = 0
-            atualizadas = 0
-
-            for linha in linhas:
-                dados = linha["dados"]
-
-                municipio = None
-
-                if dados.get("municipio_corrigido_id"):
-                    municipio = Municipio.objects.filter(id=dados["municipio_corrigido_id"]).first()
-
-                if not municipio:
-                    municipio = buscar_municipio_cadastrado(
-                        dados["municipio_nome"],
-                        dados["uf"],
-                    )
-
-                if not municipio:
-                    messages.error(
-                        request,
-                        f"Município não encontrado para a escola {dados['nome_escola']}. "
-                        "Selecione o município correto na prévia ou corrija a planilha.",
-                    )
-                    return redirect("importacoes:escolas")
-
-                escola = buscar_escola_por_cnpj(dados["cnpj"])
-
-                dados_escola = {
-                    "nome_escola": dados["nome_escola"],
-                    "cnpj": dados["cnpj"],
-                    "endereco": dados["endereco"],
-                    "numero": dados["numero"],
-                    "bairro": dados["bairro"],
-                    "municipio": municipio,
-                    "presidente_cdce": dados["presidente_cdce"],
-                    "rg_presidente": dados["rg_presidente"],
-                    "cpf_presidente": dados["cpf_presidente"],
-                    "ativo": dados["ativo"],
-                }
-
-                if escola:
-                    for campo, valor in dados_escola.items():
-                        setattr(escola, campo, valor)
-                    escola.save()
-                    atualizadas += 1
-                else:
-                    Escola.objects.create(**dados_escola)
-                    criadas += 1
-
-            request.session.pop("importacao_escolas_linhas", None)
-            request.session.pop("importacao_escolas_atualizar", None)
-
-            messages.success(
-                request,
-                f"Importação concluída. Escolas criadas: {criadas}. "
-                f"Escolas atualizadas: {atualizadas}.",
-            )
-            return redirect("cadastros:escolas")
+    if identidade and orgao:
+        identidade_completa = f"{identidade} - {orgao}"
     else:
-        form = ImportacaoPlanilhaForm()
+        identidade_completa = identidade or orgao
 
-    if request.method == "POST" and "form" not in locals():
-        form = ImportacaoPlanilhaForm()
-
-    return render(
-        request,
-        "importacoes/escolas.html",
-        {
-            "form": form,
-            "linhas": linhas,
-            "resumo": resumo,
-        },
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(5, 1),
+        identidade_completa,
+        "IDENTIDADE:",
+    )
+    _substituir_texto_celula_preservando_rotulo(
+        table.cell(6, 1),
+        fornecedor.telefone,
     )
 
 
-CABECALHOS_ITENS = [
-    "NOME DO ITEM",
-    "UNIDADE DE MEDIDA",
-    "DESCRIÇÃO",
-    "ATIVO",
-]
+def relacao_fornecedores_word(request, pregao_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
 
-
-def validar_cabecalho_planilha_itens(linha):
-    encontrados = cabecalhos_normalizados(linha)
-
-    return encontrados[:len(CABECALHOS_ITENS)] == CABECALHOS_ITENS
-
-
-# Equivalências comuns usadas nas planilhas. A chave representa a unidade
-# canônica e os valores aceitam nomes, siglas e formas usuais de escrita.
-EQUIVALENCIAS_UNIDADE_MEDIDA = {
-    "quilograma": {"quilograma", "quilogramas", "kg", "quilo", "quilos", "kilograma", "kilogramas"},
-    "grama": {"grama", "gramas", "g", "gr"},
-    "miligrama": {"miligrama", "miligramas", "mg"},
-    "litro": {"litro", "litros", "l"},
-    "mililitro": {"mililitro", "mililitros", "ml"},
-    "duzia": {"duzia", "duzias", "dz"},
-    "unidade": {"unidade", "unidades", "un", "und", "unid"},
-    "pacote": {"pacote", "pacotes", "pct"},
-    "caixa": {"caixa", "caixas", "cx"},
-    "fardo": {"fardo", "fardos", "fd"},
-    "saco": {"saco", "sacos", "sc"},
-    "bandeja": {"bandeja", "bandejas", "bdj"},
-    "garrafa": {"garrafa", "garrafas", "gf"},
-}
-
-
-def chave_equivalencia_unidade(texto):
-    """
-    Converte variações usuais da unidade para uma chave comum.
-
-    Exemplos:
-    - "Quilograma (KG)", "KG" e "Quilo" -> "quilograma"
-    - "Dúzia (DZ)", "DZ" e "Duzia" -> "duzia"
-
-    A normalização também ignora acentos, pontuação e espaços extras.
-    """
-    normalizado = normalizar_texto_comparacao(texto)
-
-    if not normalizado:
-        return ""
-
-    tokens = normalizado.split()
-
-    for chave, equivalencias in EQUIVALENCIAS_UNIDADE_MEDIDA.items():
-        equivalencias_normalizadas = {
-            normalizar_texto_comparacao(valor)
-            for valor in equivalencias
-        }
-
-        # Correspondência direta: KG, quilo, dúzia, DZ etc.
-        if normalizado in equivalencias_normalizadas:
-            return chave
-
-        # Correspondência composta: "Quilograma (KG)" -> "quilograma kg".
-        for equivalencia in equivalencias_normalizadas:
-            if not equivalencia:
-                continue
-
-            if " " in equivalencia:
-                if equivalencia in normalizado:
-                    return chave
-            elif equivalencia in tokens:
-                return chave
-
-    return normalizado
-
-
-def buscar_unidade_medida_cadastrada(texto_unidade):
-    texto_unidade = texto_celula(texto_unidade)
-
-    if not texto_unidade:
-        return None
-
-    texto_normalizado = normalizar_texto_comparacao(texto_unidade)
-    chave_entrada = chave_equivalencia_unidade(texto_unidade)
-
-    # 1) Código interno exatamente igual.
-    unidade = UnidadeMedida.objects.filter(codigo__iexact=texto_unidade).first()
-    if unidade:
-        return unidade
-
-    unidades = list(UnidadeMedida.objects.all().order_by("nome"))
-
-    # 2) Nome, sigla, código ou exibição equivalentes após normalização.
-    for unidade in unidades:
-        possibilidades = [
-            unidade.codigo,
-            unidade.nome,
-            unidade.sigla,
-            str(unidade),
-        ]
-
-        for possibilidade in possibilidades:
-            if not possibilidade:
-                continue
-
-            if normalizar_texto_comparacao(possibilidade) == texto_normalizado:
-                return unidade
-
-            if chave_equivalencia_unidade(possibilidade) == chave_entrada:
-                return unidade
-
-    # 3) Pequenos erros de digitação. Só considera textos com 4 ou mais
-    # caracteres e exige uma única unidade claramente mais próxima.
-    if len(texto_normalizado) >= 4:
-        pontuacoes = []
-
-        for unidade in unidades:
-            melhor = 0.0
-
-            for possibilidade in [unidade.codigo, unidade.nome, unidade.sigla, str(unidade)]:
-                if not possibilidade:
-                    continue
-
-                candidato = normalizar_texto_comparacao(possibilidade)
-
-                if len(candidato) < 4:
-                    continue
-
-                pontuacao = SequenceMatcher(
-                    None,
-                    texto_normalizado,
-                    candidato,
-                ).ratio()
-
-                if pontuacao >= 0.88:
-                    melhor = max(melhor, pontuacao)
-
-            if melhor > 0:
-                pontuacoes.append((melhor, unidade))
-
-        pontuacoes.sort(key=lambda item: item[0], reverse=True)
-
-        if pontuacoes:
-            melhor_pontuacao, melhor_unidade = pontuacoes[0]
-            segunda_pontuacao = pontuacoes[1][0] if len(pontuacoes) > 1 else 0
-
-            # Margem mínima evita escolher automaticamente quando houver ambiguidade.
-            if melhor_pontuacao >= 0.88 and (melhor_pontuacao - segunda_pontuacao >= 0.05 or segunda_pontuacao == 0):
-                return melhor_unidade
-
-    return None
-
-
-def sugerir_unidades_medida(texto_unidade, limite=5):
-    texto_normalizado = normalizar_texto_comparacao(texto_unidade)
-
-    unidades = list(UnidadeMedida.objects.filter(ativo=True).order_by("nome"))
-
-    mapa_normalizado = {}
-
-    for unidade in unidades:
-        rotulo = unidade.nome
-        if unidade.sigla:
-            rotulo = f"{unidade.nome} ({unidade.sigla})"
-
-        for possibilidade in [unidade.codigo, unidade.nome, unidade.sigla, str(unidade)]:
-            if possibilidade:
-                mapa_normalizado[normalizar_texto_comparacao(possibilidade)] = rotulo
-
-    sugestoes_normalizadas = get_close_matches(
-        texto_normalizado,
-        list(mapa_normalizado.keys()),
-        n=limite,
-        cutoff=0.60,
-    )
-
-    sugestoes = []
-
-    for item in sugestoes_normalizadas:
-        rotulo = mapa_normalizado[item]
-        if rotulo not in sugestoes:
-            sugestoes.append(rotulo)
-
-    return sugestoes
-
-
-def opcoes_unidade_para_correcao(texto_unidade):
-    unidades = list(UnidadeMedida.objects.filter(ativo=True).order_by("nome"))
-
-    sugestoes = sugerir_unidades_medida(texto_unidade, limite=5)
-    sugestoes_normalizadas = {
-        normalizar_texto_comparacao(sugestao)
-        for sugestao in sugestoes
-    }
-
-    unidades_ordenadas = sorted(
-        unidades,
-        key=lambda unidade: (
-            0 if normalizar_texto_comparacao(unidade.nome) in sugestoes_normalizadas
-            or normalizar_texto_comparacao(str(unidade)) in sugestoes_normalizadas else 1,
-            unidade.nome,
-        ),
-    )
-
-    opcoes = []
-
-    for unidade in unidades_ordenadas:
-        rotulo = unidade.nome
-        if unidade.sigla:
-            rotulo = f"{unidade.nome} ({unidade.sigla})"
-
-        opcoes.append(
-            {
-                "id": unidade.id,
-                "codigo": unidade.codigo,
-                "nome": unidade.nome,
-                "rotulo": rotulo,
-            }
+    # Este documento é exclusivo dos Pregões Presenciais.
+    if not pregao.eh_pregao_presencial:
+        messages.error(
+            request,
+            "A Relação de Fornecedores está disponível somente para Pregões Presenciais.",
         )
+        return redirect("pregoes:pregoes")
 
-    return opcoes
-
-
-def obter_unidade_por_correcao(request, numero_linha):
-    unidade_id = request.POST.get(f"unidade_corrigida_{numero_linha}")
-
-    if not unidade_id:
-        return None
-
-    return UnidadeMedida.objects.filter(id=unidade_id).first()
-
-
-def buscar_item_existente(nome_item):
-    nome_normalizado = normalizar_texto_comparacao(nome_item)
-
-    if not nome_normalizado:
-        return None
-
-    item = Item.objects.filter(nome_item__iexact=nome_item).first()
-
-    if item:
-        return item
-
-    for item in Item.objects.all():
-        if normalizar_texto_comparacao(item.nome_item) == nome_normalizado:
-            return item
-
-    return None
-
-
-def montar_linha_item(numero_linha, valores, atualizar_existentes):
-    dados = dict(zip(CABECALHOS_ITENS, valores))
-
-    nome_item = texto_celula(dados.get("NOME DO ITEM"))
-    unidade_texto = texto_celula(dados.get("UNIDADE DE MEDIDA"))
-    descricao = texto_celula(dados.get("DESCRIÇÃO"))
-    ativo = texto_ativo(dados.get("ATIVO"))
-
-    erros = []
-
-    if not nome_item:
-        erros.append("Nome do item é obrigatório.")
-
-    if not unidade_texto:
-        erros.append("Unidade de medida é obrigatória.")
-
-    erro_unidade = False
-    unidade_opcoes = []
-    unidade = None
-
-    if unidade_texto:
-        unidade = buscar_unidade_medida_cadastrada(unidade_texto)
-
-        if not unidade:
-            erro_unidade = True
-            unidade_opcoes = opcoes_unidade_para_correcao(unidade_texto)
-            sugestoes = sugerir_unidades_medida(unidade_texto)
-
-            if sugestoes:
-                erros.append(
-                    "Unidade de medida não encontrada no sistema. "
-                    f"Selecione a unidade correta na coluna Correção. Sugestões: {', '.join(sugestoes)}."
-                )
-            else:
-                erros.append(
-                    "Unidade de medida não encontrada no sistema. "
-                    "Selecione a unidade correta na coluna Correção ou cadastre a unidade antes de importar."
-                )
-
-    if not descricao:
-        erros.append("Descrição é obrigatória.")
-
-    item_existente = buscar_item_existente(nome_item)
-
-    acao = "Criar"
-
-    if item_existente:
-        if atualizar_existentes:
-            acao = "Atualizar"
-        else:
-            acao = "Ignorar"
-            erros.append("Já existe um item cadastrado com este nome.")
-
-    valido = not erros
-
-    return {
-        "linha": numero_linha,
-        "valido": valido,
-        "acao": acao if valido else "Erro",
-        "erros": erros,
-        "erro_unidade": erro_unidade,
-        "unidade_opcoes": unidade_opcoes,
-        "dados": {
-            "nome_item": nome_item,
-            "unidade_texto": unidade_texto,
-            "unidade_medida": unidade.codigo if unidade else "",
-            "unidade_corrigida_id": "",
-            "unidade_corrigida_nome": "",
-            "descricao": descricao,
-            "ativo": ativo,
-        },
-    }
-
-
-def ler_planilha_itens(arquivo, atualizar_existentes=True):
-    workbook = load_workbook(arquivo, data_only=True)
-    sheet = workbook.active
-
-    primeira_linha = [cell.value for cell in sheet[1]]
-
-    if not validar_cabecalho_planilha_itens(primeira_linha):
-        raise ValueError(
-            "O cabeçalho da planilha não corresponde ao modelo esperado. "
-            "Baixe o modelo novamente e mantenha os nomes das colunas."
-        )
-
-    linhas = []
-    nomes_lidos = set()
-
-    for numero_linha in range(2, sheet.max_row + 1):
-        valores = [
-            sheet.cell(row=numero_linha, column=coluna).value
-            for coluna in range(1, len(CABECALHOS_ITENS) + 1)
-        ]
-
-        if all(texto_celula(valor) == "" for valor in valores):
-            continue
-
-        linha = montar_linha_item(
-            numero_linha,
-            valores,
-            atualizar_existentes,
-        )
-
-        nome_normalizado = normalizar_texto_comparacao(linha["dados"]["nome_item"])
-
-        if nome_normalizado:
-            if nome_normalizado in nomes_lidos:
-                linha["valido"] = False
-                linha["acao"] = "Erro"
-                linha["erros"].append("Nome do item duplicado dentro da própria planilha.")
-            else:
-                nomes_lidos.add(nome_normalizado)
-
-        linhas.append(linha)
-
-    return linhas
-
-
-def criar_modelo_itens_workbook():
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Itens"
-
-    sheet.append(CABECALHOS_ITENS)
-    sheet.append([
-        "ARROZ TIPO 1",
-        "Quilograma",
-        "Arroz tipo 1, classe longo fino, pacote de 5kg, conforme especificação do edital.",
-        "Sim",
-    ])
-
-    sheet.freeze_panes = "A2"
-
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
-    )
-
-    for cell in sheet[1]:
-        cell.fill = fill_header
-        cell.font = font_header
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    for row in sheet.iter_rows(min_row=2, max_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-    larguras = {
-        "A": 34,
-        "B": 24,
-        "C": 70,
-        "D": 12,
-    }
-
-    for coluna, largura in larguras.items():
-        sheet.column_dimensions[coluna].width = largura
-
-    sheet.row_dimensions[1].height = 32
-    sheet.row_dimensions[2].height = 46
-
-    return workbook
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_modelo_itens(request):
-    workbook = criar_modelo_itens_workbook()
-    arquivo = BytesIO()
-    workbook.save(arquivo)
-    arquivo.seek(0)
-
-    response = HttpResponse(
-        arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    response["Content-Disposition"] = 'attachment; filename="modelo_importacao_itens.xlsx"'
-
-    return response
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def importar_itens(request):
-    linhas = []
-    resumo = None
-
-    if request.method == "POST":
-        acao = request.POST.get("acao")
-
-        if acao == "validar":
-            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
-
-            if form.is_valid():
-                arquivo = form.cleaned_data["arquivo"]
-                atualizar_existentes = form.cleaned_data["atualizar_existentes"]
-
-                try:
-                    linhas = ler_planilha_itens(
-                        arquivo,
-                        atualizar_existentes=atualizar_existentes,
-                    )
-                except Exception as erro:
-                    messages.error(request, str(erro))
-                    linhas = []
-
-                if linhas:
-                    validos = [linha for linha in linhas if linha["valido"]]
-                    erros = [linha for linha in linhas if not linha["valido"]]
-
-                    request.session["importacao_itens_linhas"] = linhas
-                    request.session["importacao_itens_atualizar"] = atualizar_existentes
-
-                    resumo = {
-                        "total": len(linhas),
-                        "validos": len(validos),
-                        "erros": len(erros),
-                        "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                        "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                    }
-
-                    if erros:
-                        messages.warning(
-                            request,
-                            "A planilha possui erros. Corrija as linhas inválidas antes de confirmar a importação.",
-                        )
-                    else:
-                        messages.success(
-                            request,
-                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
-                        )
-
-        elif acao == "confirmar":
-            linhas = request.session.get("importacao_itens_linhas", [])
-
-            if not linhas:
-                messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
-                return redirect("importacoes:itens")
-
-            # Permite corrigir a unidade de medida diretamente na prévia.
-            for linha in linhas:
-                if linha.get("erro_unidade"):
-                    unidade_corrigida = obter_unidade_por_correcao(request, linha["linha"])
-
-                    if unidade_corrigida:
-                        erros_restantes = [
-                            erro for erro in linha.get("erros", [])
-                            if "Unidade de medida não encontrada" not in erro
-                        ]
-
-                        linha["erros"] = erros_restantes
-                        linha["erro_unidade"] = False
-                        linha["dados"]["unidade_corrigida_id"] = unidade_corrigida.id
-                        linha["dados"]["unidade_corrigida_nome"] = unidade_corrigida.nome
-                        linha["dados"]["unidade_medida"] = unidade_corrigida.codigo
-                        linha["dados"]["unidade_texto"] = unidade_corrigida.nome
-
-                        if not erros_restantes:
-                            linha["valido"] = True
-                            if linha.get("acao") == "Erro":
-                                linha["acao"] = "Atualizar" if buscar_item_existente(linha["dados"]["nome_item"]) else "Criar"
-
-            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
-
-            if linhas_invalidas:
-                request.session["importacao_itens_linhas"] = linhas
-                messages.error(
-                    request,
-                    "Ainda existem linhas inválidas. Se o erro for unidade de medida, selecione a unidade correta na coluna Correção e confirme novamente.",
-                )
-
-                validos = [linha for linha in linhas if linha.get("valido")]
-                erros = [linha for linha in linhas if not linha.get("valido")]
-                resumo = {
-                    "total": len(linhas),
-                    "validos": len(validos),
-                    "erros": len(erros),
-                    "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                    "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                }
-
-                form = ImportacaoPlanilhaForm()
-                return render(
-                    request,
-                    "importacoes/itens.html",
-                    {
-                        "form": form,
-                        "linhas": linhas,
-                        "resumo": resumo,
-                    },
-                )
-
-            criados = 0
-            atualizados = 0
-
-            for linha in linhas:
-                dados = linha["dados"]
-
-                unidade = None
-
-                if dados.get("unidade_corrigida_id"):
-                    unidade = UnidadeMedida.objects.filter(id=dados["unidade_corrigida_id"]).first()
-
-                if not unidade and dados.get("unidade_medida"):
-                    unidade = UnidadeMedida.objects.filter(codigo=dados["unidade_medida"]).first()
-
-                if not unidade:
-                    unidade = buscar_unidade_medida_cadastrada(dados["unidade_texto"])
-
-                if not unidade:
-                    messages.error(
-                        request,
-                        f"Unidade de medida não encontrada para o item {dados['nome_item']}. "
-                        "Selecione a unidade correta na prévia ou corrija a planilha.",
-                    )
-                    return redirect("importacoes:itens")
-
-                item = buscar_item_existente(dados["nome_item"])
-
-                dados_item = {
-                    "nome_item": dados["nome_item"],
-                    "unidade_medida": unidade.codigo,
-                    "descricao": dados["descricao"],
-                    "ativo": dados["ativo"],
-                }
-
-                if item:
-                    for campo, valor in dados_item.items():
-                        setattr(item, campo, valor)
-                    item.save()
-                    atualizados += 1
-                else:
-                    Item.objects.create(**dados_item)
-                    criados += 1
-
-            request.session.pop("importacao_itens_linhas", None)
-            request.session.pop("importacao_itens_atualizar", None)
-
-            messages.success(
-                request,
-                f"Importação concluída. Itens criados: {criados}. "
-                f"Itens atualizados: {atualizados}.",
-            )
-            return redirect("cadastros:itens")
-    else:
-        form = ImportacaoPlanilhaForm()
-
-    if request.method == "POST" and "form" not in locals():
-        form = ImportacaoPlanilhaForm()
-
-    return render(
-        request,
-        "importacoes/itens.html",
-        {
-            "form": form,
-            "linhas": linhas,
-            "resumo": resumo,
-        },
-    )
-
-
-CABECALHOS_QUANTITATIVO_PREGAO = [
-    "ITEM",
-    "UNIDADE DE MEDIDA",
-    "QUANTIDADE DO MUNICÍPIO",
-]
-
-
-def validar_cabecalho_planilha_quantitativo_pregao(linha):
-    encontrados = cabecalhos_normalizados(linha)
-
-    return encontrados[:len(CABECALHOS_QUANTITATIVO_PREGAO)] == CABECALHOS_QUANTITATIVO_PREGAO
-
-
-def decimal_planilha(valor):
-    texto = texto_celula(valor)
-
-    if not texto:
-        return None
-
-    texto = texto.replace(".", "").replace(",", ".") if "," in texto else texto
-
-    try:
-        return Decimal(texto)
-    except InvalidOperation:
-        return None
-
-
-def opcoes_item_para_correcao(texto_item):
-    itens = list(Item.objects.filter(ativo=True).order_by("nome_item"))
-
-    sugestoes_normalizadas = set()
-    texto_normalizado = normalizar_texto_comparacao(texto_item)
-
-    mapa_normalizado = {
-        normalizar_texto_comparacao(item.nome_item): item.nome_item
-        for item in itens
-    }
-
-    sugestoes = get_close_matches(
-        texto_normalizado,
-        list(mapa_normalizado.keys()),
-        n=8,
-        cutoff=0.45,
-    )
-
-    for sugestao in sugestoes:
-        sugestoes_normalizadas.add(sugestao)
-
-    itens_ordenados = sorted(
-        itens,
-        key=lambda item: (
-            0 if normalizar_texto_comparacao(item.nome_item) in sugestoes_normalizadas else 1,
-            item.nome_item,
-        ),
-    )
-
-    return [
-        {
-            "id": item.id,
-            "nome": item.nome_item,
-            "unidade": item.get_unidade_medida_display(),
-        }
-        for item in itens_ordenados
-    ]
-
-
-def opcoes_item_quantitativo_pregao_para_correcao(texto_item, pregao):
-    """
-    Retorna somente sugestões de itens que possuem QuantitativoPregao no certame
-    selecionado e cujo nome tenha similaridade com o texto informado na planilha.
-
-    Essa função é exclusiva da importação de Quantitativo por Escola. Assim ela
-    não conflita com outras rotinas que trabalham com PregaoItem.
-    """
-    if not pregao:
-        return []
-
-    quantitativos = (
-        QuantitativoPregao.objects.filter(pregao=pregao)
-        .select_related("item")
-        .order_by("item__nome_item")
-    )
-    itens = [quantitativo.item for quantitativo in quantitativos]
-
-    texto_normalizado = normalizar_texto_comparacao(texto_item)
-    if not texto_normalizado or not itens:
-        return []
-
-    mapa_itens = {
-        normalizar_texto_comparacao(item.nome_item): item
-        for item in itens
-    }
-
-    # Primeiro considera os nomes mais próximos. Um cutoff moderado permite
-    # casos como "BANANA" -> "BANANA DA TERRA", sem listar todo o certame.
-    nomes_sugeridos = get_close_matches(
-        texto_normalizado,
-        list(mapa_itens.keys()),
-        n=8,
-        cutoff=0.45,
-    )
-
-    # Complementa com comparação por inclusão de palavras. Isso ajuda em nomes
-    # compostos quando o Excel traz apenas parte do nome cadastrado.
-    tokens_entrada = set(texto_normalizado.split())
-    for nome_normalizado in mapa_itens:
-        tokens_item = set(nome_normalizado.split())
-        if tokens_entrada and tokens_item and (
-            tokens_entrada.issubset(tokens_item)
-            or tokens_item.issubset(tokens_entrada)
-        ):
-            if nome_normalizado not in nomes_sugeridos:
-                nomes_sugeridos.append(nome_normalizado)
-
-    sugestoes = []
-    ids_adicionados = set()
-
-    for nome_normalizado in nomes_sugeridos:
-        item = mapa_itens.get(nome_normalizado)
-        if not item or item.id in ids_adicionados:
-            continue
-
-        ids_adicionados.add(item.id)
-        sugestoes.append(
-            {
-                "id": item.id,
-                "nome": item.nome_item,
-                "unidade": item.get_unidade_medida_display(),
-            }
-        )
-
-    return sugestoes
-
-
-def obter_item_por_correcao(request, numero_linha):
-    item_id = request.POST.get(f"item_corrigido_{numero_linha}")
-
-    if not item_id:
-        return None
-
-    return Item.objects.filter(id=item_id).first()
-
-
-def validar_item_unidade_quantitativo(item, unidade):
-    if not item or not unidade:
-        return False
-
-    return item.unidade_medida == unidade.codigo
-
-
-def montar_linha_quantitativo_pregao(numero_linha, valores, pregao, atualizar_existentes):
-    dados = dict(zip(CABECALHOS_QUANTITATIVO_PREGAO, valores))
-
-    item_texto = texto_celula(dados.get("ITEM"))
-    unidade_texto = texto_celula(dados.get("UNIDADE DE MEDIDA"))
-    quantidade = decimal_planilha(dados.get("QUANTIDADE DO MUNICÍPIO"))
-
-    erros = []
-
-    if not item_texto:
-        erros.append("Item é obrigatório.")
-
-    if not unidade_texto:
-        erros.append("Unidade de medida é obrigatória.")
-
-    if quantidade is None:
-        erros.append("Quantidade do município é obrigatória e deve ser numérica.")
-    elif quantidade <= 0:
-        erros.append("Quantidade do município deve ser maior que zero.")
-
-    item = None
-    unidade = None
-    erro_item = False
-    erro_unidade = False
-    item_opcoes = []
-    unidade_opcoes = []
-
-    if item_texto:
-        item = buscar_item_existente(item_texto)
-
-        if not item:
-            erro_item = True
-            item_opcoes = opcoes_item_para_correcao(item_texto)
-
-            sugestoes_normalizadas = get_close_matches(
-                normalizar_texto_comparacao(item_texto),
-                [normalizar_texto_comparacao(i.nome_item) for i in Item.objects.filter(ativo=True)],
-                n=5,
-                cutoff=0.45,
-            )
-
-            if sugestoes_normalizadas:
-                erros.append("Item não encontrado no sistema. Selecione o item correto na coluna Correção.")
-            else:
-                erros.append("Item não encontrado no sistema. Cadastre o item antes de importar ou selecione o item correto na coluna Correção.")
-
-    if unidade_texto:
-        unidade = buscar_unidade_medida_cadastrada(unidade_texto)
-
-        if not unidade:
-            erro_unidade = True
-            unidade_opcoes = opcoes_unidade_para_correcao(unidade_texto)
-            erros.append("Unidade de medida não encontrada no sistema. Selecione a unidade correta na coluna Correção.")
-
-    if item and unidade and not validar_item_unidade_quantitativo(item, unidade):
-        erro_unidade = True
-        unidade_opcoes = opcoes_unidade_para_correcao(unidade_texto)
-        erros.append(
-            f"Unidade de medida não corresponde ao item cadastrado. "
-            f"Unidade correta do item: {item.get_unidade_medida_display()}."
-        )
-
-    quantitativo_existente = None
-
-    if pregao and item:
-        quantitativo_existente = QuantitativoPregao.objects.filter(
+    fornecedores_pregao = list(
+        PregaoFornecedor.objects.filter(
             pregao=pregao,
-            item=item,
-        ).first()
-
-    acao = "Criar"
-
-    if quantitativo_existente:
-        if atualizar_existentes:
-            acao = "Atualizar"
-        else:
-            acao = "Ignorar"
-            erros.append("Este item já possui quantitativo cadastrado para o pregão selecionado.")
-
-    valido = not erros
-
-    return {
-        "linha": numero_linha,
-        "valido": valido,
-        "acao": acao if valido else "Erro",
-        "erros": erros,
-        "erro_item": erro_item,
-        "erro_unidade": erro_unidade,
-        "ignorar": False,
-        "item_opcoes": item_opcoes,
-        "unidade_opcoes": unidade_opcoes,
-        "dados": {
-            "item_texto": item_texto,
-            "item_id": item.id if item else "",
-            "item_corrigido_id": "",
-            "item_corrigido_nome": "",
-            "unidade_texto": unidade_texto,
-            "unidade_medida": unidade.codigo if unidade else "",
-            "unidade_corrigida_id": "",
-            "unidade_corrigida_nome": "",
-            "quantidade": str(quantidade) if quantidade is not None else "",
-        },
-    }
-
-
-def ler_planilha_quantitativo_pregao(arquivo, pregao, atualizar_existentes=True):
-    workbook = load_workbook(arquivo, data_only=True)
-    sheet = workbook.active
-
-    primeira_linha = [cell.value for cell in sheet[1]]
-
-    if not validar_cabecalho_planilha_quantitativo_pregao(primeira_linha):
-        raise ValueError(
-            "O cabeçalho da planilha não corresponde ao modelo esperado. "
-            "Baixe o modelo novamente e mantenha os nomes das colunas."
+            ativo_no_pregao=True,
         )
-
-    linhas = []
-    itens_lidos = set()
-
-    for numero_linha in range(2, sheet.max_row + 1):
-        valores = [
-            sheet.cell(row=numero_linha, column=coluna).value
-            for coluna in range(1, len(CABECALHOS_QUANTITATIVO_PREGAO) + 1)
-        ]
-
-        if all(texto_celula(valor) == "" for valor in valores):
-            continue
-
-        linha = montar_linha_quantitativo_pregao(
-            numero_linha,
-            valores,
-            pregao,
-            atualizar_existentes,
-        )
-
-        item_chave = linha["dados"].get("item_id") or normalizar_texto_comparacao(linha["dados"].get("item_texto"))
-
-        if item_chave:
-            if item_chave in itens_lidos:
-                linha["valido"] = False
-                linha["acao"] = "Erro"
-                linha["erros"].append("Item duplicado dentro da própria planilha.")
-            else:
-                itens_lidos.add(item_chave)
-
-        linhas.append(linha)
-
-    return linhas
-
-
-def criar_modelo_quantitativo_pregao_workbook():
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Quantitativo Pregão"
-
-    sheet.append(CABECALHOS_QUANTITATIVO_PREGAO)
-    sheet.append([
-        "ARROZ TIPO 1",
-        "Quilograma",
-        "1000,000",
-    ])
-
-    sheet.freeze_panes = "A2"
-
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
+        .select_related("fornecedor")
+        .order_by("ordem_inicial", "fornecedor__razao_social")
     )
 
-    for cell in sheet[1]:
-        cell.fill = fill_header
-        cell.font = font_header
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    if not fornecedores_pregao:
+        messages.warning(
+            request,
+            "Não há fornecedores cadastrados para este pregão.",
+        )
+        return redirect("pregoes:pregoes")
 
-    for row in sheet.iter_rows(min_row=2, max_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    caminho_modelo = (
+        Path(settings.BASE_DIR)
+        / "templates"
+        / "documentos"
+        / "modelo_relacao_fornecedores_pregao.docx"
+    )
 
-    larguras = {
-        "A": 44,
-        "B": 24,
-        "C": 24,
-    }
+    if not caminho_modelo.exists():
+        messages.error(
+            request,
+            "O modelo Word da Relação de Fornecedores não foi encontrado no servidor.",
+        )
+        return redirect("pregoes:pregoes")
 
-    for coluna, largura in larguras.items():
-        sheet.column_dimensions[coluna].width = largura
+    document = Document(caminho_modelo)
 
-    sheet.row_dimensions[1].height = 32
+    if not document.tables:
+        messages.error(
+            request,
+            "O modelo Word da Relação de Fornecedores não possui a tabela esperada.",
+        )
+        return redirect("pregoes:pregoes")
 
-    return workbook
+    tabela_modelo = document.tables[0]
 
+    # Guarda uma cópia da tabela original antes do preenchimento.
+    tabela_xml_modelo = deepcopy(tabela_modelo._tbl)
 
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_modelo_quantitativo_pregao(request):
-    workbook = criar_modelo_quantitativo_pregao_workbook()
+    # Primeiro fornecedor usa a própria tabela existente no modelo.
+    _preencher_tabela_fornecedor(
+        tabela_modelo,
+        fornecedores_pregao[0].fornecedor,
+    )
+
+    # Os demais fornecedores recebem uma cópia idêntica da tabela do modelo.
+    elemento_anterior = tabela_modelo._tbl
+
+    for vinculo in fornecedores_pregao[1:]:
+        # Espaço entre as tabelas.
+        paragrafo_espaco = document.add_paragraph()
+        elemento_anterior.addnext(paragrafo_espaco._p)
+        elemento_anterior = paragrafo_espaco._p
+
+        nova_tabela_xml = deepcopy(tabela_xml_modelo)
+        elemento_anterior.addnext(nova_tabela_xml)
+        elemento_anterior = nova_tabela_xml
+
+        # Localiza a tabela recém-inserida para preencher seus dados.
+        nova_tabela = document.tables[-1]
+        _preencher_tabela_fornecedor(
+            nova_tabela,
+            vinculo.fornecedor,
+        )
+
     arquivo = BytesIO()
-    workbook.save(arquivo)
+    document.save(arquivo)
     arquivo.seek(0)
+
+    nome_arquivo = (
+        f"Relacao_Fornecedores_Pregao_{pregao.numero}_{pregao.ano}.docx"
+        .replace("/", "-")
+        .replace("\\", "-")
+    )
 
     response = HttpResponse(
         arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
     )
-    response["Content-Disposition"] = 'attachment; filename="modelo_importacao_quantitativo_pregao.xlsx"'
+    response["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
 
     return response
 
 
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def importar_quantitativo_pregao(request):
-    linhas = []
-    resumo = None
-    pregoes = (
-        Pregao.objects.filter(
-            status=Pregao.STATUS_NAO_INICIADO,
-        )
-        .prefetch_related("municipios")
+
+def pregoes(request):
+    if request.method == "POST":
+        form = PregaoForm(request.POST)
+
+        if form.is_valid():
+            form.save(user=request.user)
+            messages.success(request, "Certame cadastrado com sucesso.")
+            return redirect("pregoes:pregoes")
+
+        messages.error(request, "Verifique os dados informados no formulário.")
+    else:
+        form = PregaoForm()
+
+    pregoes_queryset = (
+        Pregao.objects.all()
+        .prefetch_related("municipios", "fornecedores")
         .order_by("-ano", "-numero")
     )
-    pregao = None
-
-    pregao_id = request.POST.get("pregao") or request.GET.get("pregao")
-
-    if pregao_id:
-        pregao = Pregao.objects.filter(id=pregao_id).first()
-
-    if request.method == "POST":
-        acao = request.POST.get("acao")
-
-        if not pregao:
-            messages.error(request, "Selecione um pregão válido.")
-            return redirect("importacoes:quantitativo_pregao")
-
-        if pregao.status != Pregao.STATUS_NAO_INICIADO:
-            messages.error(
-                request,
-                "Não é permitido importar quantitativos em pregão já iniciado ou finalizado.",
-            )
-            return redirect("importacoes:quantitativo_pregao")
-
-        if acao == "validar":
-            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
-
-            if form.is_valid():
-                arquivo = form.cleaned_data["arquivo"]
-                atualizar_existentes = form.cleaned_data["atualizar_existentes"]
-
-                try:
-                    linhas = ler_planilha_quantitativo_pregao(
-                        arquivo,
-                        pregao,
-                        atualizar_existentes=atualizar_existentes,
-                    )
-                except Exception as erro:
-                    messages.error(request, str(erro))
-                    linhas = []
-
-                if linhas:
-                    validos = [linha for linha in linhas if linha["valido"]]
-                    erros = [linha for linha in linhas if not linha["valido"]]
-
-                    request.session["importacao_quantitativo_pregao_linhas"] = linhas
-                    request.session["importacao_quantitativo_pregao_pregao_id"] = pregao.id
-                    request.session["importacao_quantitativo_pregao_atualizar"] = atualizar_existentes
-
-                    resumo = {
-                        "total": len(linhas),
-                        "validos": len(validos),
-                        "erros": len(erros),
-                        "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                        "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                    }
-
-                    if erros:
-                        messages.warning(
-                            request,
-                            "A planilha possui erros. Corrija as linhas inválidas antes de confirmar a importação.",
-                        )
-                    else:
-                        messages.success(
-                            request,
-                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
-                        )
-
-        elif acao == "confirmar":
-            linhas = request.session.get("importacao_quantitativo_pregao_linhas", [])
-            pregao_sessao_id = request.session.get("importacao_quantitativo_pregao_pregao_id")
-
-            if not linhas or not pregao_sessao_id:
-                messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
-                return redirect("importacoes:quantitativo_pregao")
-
-            pregao = Pregao.objects.filter(id=pregao_sessao_id).first()
-
-            if not pregao:
-                messages.error(request, "Pregão da importação não encontrado.")
-                return redirect("importacoes:quantitativo_pregao")
-
-            if pregao.status != Pregao.STATUS_NAO_INICIADO:
-                messages.error(
-                    request,
-                    "Não é permitido importar quantitativos em pregão já iniciado ou finalizado.",
-                )
-                return redirect("importacoes:quantitativo_pregao")
-
-            # Aplica correções de item e unidade feitas na tela de prévia.
-            # Linhas marcadas como "Não importar" não bloqueiam a confirmação
-            # e não serão gravadas no banco.
-            for linha in linhas:
-                linha["ignorar"] = (
-                    request.POST.get(f"nao_importar_{linha['linha']}") == "1"
-                )
-
-                if linha["ignorar"]:
-                    linha["valido"] = True
-                    linha["acao"] = "Não importar"
-                    continue
-
-                if linha.get("erro_item"):
-                    item_corrigido = obter_item_por_correcao(request, linha["linha"])
-
-                    if item_corrigido:
-                        erros_restantes = [
-                            erro for erro in linha.get("erros", [])
-                            if "Item não encontrado" not in erro
-                        ]
-
-                        linha["erros"] = erros_restantes
-                        linha["erro_item"] = False
-                        linha["dados"]["item_id"] = item_corrigido.id
-                        linha["dados"]["item_corrigido_id"] = item_corrigido.id
-                        linha["dados"]["item_corrigido_nome"] = item_corrigido.nome_item
-                        linha["dados"]["item_texto"] = item_corrigido.nome_item
-
-                if linha.get("erro_unidade"):
-                    unidade_corrigida = obter_unidade_por_correcao(request, linha["linha"])
-
-                    if unidade_corrigida:
-                        erros_restantes = [
-                            erro for erro in linha.get("erros", [])
-                            if "Unidade de medida não encontrada" not in erro
-                            and "Unidade de medida não corresponde" not in erro
-                        ]
-
-                        linha["erros"] = erros_restantes
-                        linha["erro_unidade"] = False
-                        linha["dados"]["unidade_corrigida_id"] = unidade_corrigida.id
-                        linha["dados"]["unidade_corrigida_nome"] = unidade_corrigida.nome
-                        linha["dados"]["unidade_medida"] = unidade_corrigida.codigo
-                        linha["dados"]["unidade_texto"] = unidade_corrigida.nome
-
-                item = Item.objects.filter(id=linha["dados"].get("item_id")).first()
-                unidade = None
-
-                if linha["dados"].get("unidade_corrigida_id"):
-                    unidade = UnidadeMedida.objects.filter(id=linha["dados"]["unidade_corrigida_id"]).first()
-
-                if not unidade and linha["dados"].get("unidade_medida"):
-                    unidade = UnidadeMedida.objects.filter(codigo=linha["dados"]["unidade_medida"]).first()
-
-                if item and unidade:
-                    erros_unidade_atuais = [
-                        erro for erro in linha.get("erros", [])
-                        if "Unidade de medida não corresponde" not in erro
-                    ]
-
-                    if validar_item_unidade_quantitativo(item, unidade):
-                        linha["erros"] = erros_unidade_atuais
-                        linha["erro_unidade"] = False
-                    else:
-                        linha["erros"] = erros_unidade_atuais + [
-                            f"Unidade de medida não corresponde ao item cadastrado. Unidade correta do item: {item.get_unidade_medida_display()}."
-                        ]
-                        linha["erro_unidade"] = True
-
-                if not linha.get("erros"):
-                    linha["valido"] = True
-                    linha["acao"] = "Atualizar" if QuantitativoPregao.objects.filter(
-                        pregao=pregao,
-                        item_id=linha["dados"].get("item_id"),
-                    ).exists() else "Criar"
-                else:
-                    linha["valido"] = False
-                    linha["acao"] = "Erro"
-
-            # Verifica duplicidade após as correções.
-            itens_finais = set()
-
-            for linha in linhas:
-                if linha.get("ignorar"):
-                    continue
-
-                item_id = linha["dados"].get("item_id")
-
-                if item_id:
-                    if item_id in itens_finais:
-                        linha["valido"] = False
-                        linha["acao"] = "Erro"
-                        linha["erros"].append("Item duplicado dentro da própria planilha após correção.")
-                    else:
-                        itens_finais.add(item_id)
-
-            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
-
-            if linhas_invalidas:
-                request.session["importacao_quantitativo_pregao_linhas"] = linhas
-
-                messages.error(
-                    request,
-                    "Ainda existem linhas inválidas. Corrija a planilha ou selecione item/unidade correta na prévia e confirme novamente.",
-                )
-
-                validos = [linha for linha in linhas if linha.get("valido")]
-                erros = [linha for linha in linhas if not linha.get("valido")]
-                resumo = {
-                    "total": len(linhas),
-                    "validos": len(validos),
-                    "erros": len(erros),
-                    "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                    "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                }
-
-                form = ImportacaoPlanilhaForm()
-                return render(
-                    request,
-                    "importacoes/quantitativo_pregao.html",
-                    {
-                        "form": form,
-                        "linhas": linhas,
-                        "resumo": resumo,
-                        "pregoes": pregoes,
-                        "pregao": pregao,
-                    },
-                )
-
-            criados = 0
-            atualizados = 0
-
-            for linha in linhas:
-                dados = linha["dados"]
-                item = Item.objects.get(id=dados["item_id"])
-                quantidade = Decimal(str(dados["quantidade"]))
-
-                quantitativo = QuantitativoPregao.objects.filter(
-                    pregao=pregao,
-                    item=item,
-                ).first()
-
-                if quantitativo:
-                    quantitativo.quantidade = quantidade
-                    quantitativo.full_clean()
-                    quantitativo.save()
-                    atualizados += 1
-                else:
-                    quantitativo = QuantitativoPregao(
-                        pregao=pregao,
-                        item=item,
-                        quantidade=quantidade,
-                    )
-                    quantitativo.full_clean()
-                    quantitativo.save()
-                    criados += 1
-
-            request.session.pop("importacao_quantitativo_pregao_linhas", None)
-            request.session.pop("importacao_quantitativo_pregao_pregao_id", None)
-            request.session.pop("importacao_quantitativo_pregao_atualizar", None)
-
-            messages.success(
-                request,
-                f"Importação concluída para o Pregão {pregao.numero}/{pregao.ano}. "
-                f"Itens criados: {criados}. Itens atualizados: {atualizados}. "
-                f"Linhas não importadas: {ignorados}.",
-            )
-            return redirect(f"/pregoes/quantitativo-pregao/?pregao={pregao.id}")
-    else:
-        form = ImportacaoPlanilhaForm()
-
-    if request.method == "POST" and "form" not in locals():
-        form = ImportacaoPlanilhaForm()
+    pregoes_pagina = paginar_queryset(request, pregoes_queryset)
 
     return render(
         request,
-        "importacoes/quantitativo_pregao.html",
+        "pregoes/pregoes.html",
         {
             "form": form,
-            "linhas": linhas,
-            "resumo": resumo,
-            "pregoes": pregoes,
+            "pregoes": pregoes_pagina,
+            "modo_edicao": False,
+            "pregao_edicao": None,
+        },
+    )
+
+
+def editar_pregao(request, pregao_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
+    if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        messages.error(
+            request,
+            "Este certame não pode ser editado porque já está em andamento ou finalizado.",
+        )
+        return redirect("pregoes:pregoes")
+
+    if request.method == "POST":
+        form = PregaoForm(request.POST, instance=pregao)
+
+        if form.is_valid():
+            form.save(user=request.user)
+            messages.success(request, "Certame atualizado com sucesso.")
+            return redirect("pregoes:pregoes")
+
+        messages.error(request, "Verifique os dados informados no formulário.")
+    else:
+        form = PregaoForm(instance=pregao)
+
+    pregoes_queryset = (
+        Pregao.objects.all()
+        .prefetch_related("municipios", "fornecedores")
+        .order_by("-ano", "-numero")
+    )
+    pregoes_pagina = paginar_queryset(request, pregoes_queryset)
+
+    return render(
+        request,
+        "pregoes/pregoes.html",
+        {
+            "form": form,
+            "pregoes": pregoes_pagina,
+            "modo_edicao": True,
+            "pregao_edicao": pregao,
+        },
+    )
+
+
+
+def editar_ordenador_despesas(request, pregao_id):
+    """
+    Permite cadastrar/alterar somente Nome, RG e CPF do ordenador de despesas.
+
+    Esta edição permanece disponível para certames em qualquer status porque
+    não altera dados da disputa, quantitativos, fornecedores, municípios ou
+    resultados do certame.
+    """
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
+    if request.method == "POST":
+        form = OrdenadorDespesasForm(request.POST, instance=pregao)
+
+        if form.is_valid():
+            form.save()
+            messages.success(
+                request,
+                "Dados do ordenador de despesas atualizados com sucesso.",
+            )
+            return redirect("pregoes:pregoes")
+
+        messages.error(
+            request,
+            "Verifique os dados informados para o ordenador de despesas.",
+        )
+    else:
+        form = OrdenadorDespesasForm(instance=pregao)
+
+    return render(
+        request,
+        "pregoes/ordenador_despesas.html",
+        {
+            "form": form,
             "pregao": pregao,
         },
     )
 
 
-CABECALHOS_QUANTITATIVO_ESCOLA = [
-    "ESCOLA",
-    "ITEM",
-    "UNIDADE DE MEDIDA",
-    "QUANTIDADE DA ESCOLA",
-]
+def _converter_quantidade_digitada(valor, valor_atual=None):
+    """
+    Converte quantidades digitadas aceitando padrão brasileiro e o formato
+    técnico usado pelo próprio SIGA.
+
+    Exemplos:
+    1442 -> 1442
+    1.442 -> 1442
+    1.442,500 -> 1442.500
+    1442,500 -> 1442.500
+    1,442 -> 1.442
+    1442.500 -> 1442.500
+
+    Se o valor já veio preenchido pelo próprio sistema e não foi alterado,
+    preserva exatamente o Decimal existente.
+    """
+    texto = str(valor or "").strip()
+    texto = texto.replace("\xa0", "").replace(" ", "")
+
+    if not texto:
+        return None
+
+    if valor_atual is not None:
+        try:
+            atual = Decimal(str(valor_atual))
+            if texto in {str(atual), format(atual, "f")}:
+                return atual
+        except (InvalidOperation, ValueError, TypeError):
+            pass
+
+    if not re.fullmatch(r"[+-]?[0-9][0-9.,]*", texto):
+        raise InvalidOperation
+
+    sinal = ""
+    if texto[0] in "+-":
+        sinal = texto[0]
+        texto = texto[1:]
+
+    if "," in texto:
+        # Padrão brasileiro: ponto = milhar, vírgula = decimal.
+        if texto.count(",") > 1:
+            raise InvalidOperation
+
+        parte_inteira, parte_decimal = texto.split(",", 1)
+
+        if "." in parte_decimal:
+            raise InvalidOperation
+
+        parte_inteira = parte_inteira.replace(".", "") or "0"
+        normalizado = parte_inteira
+
+        if parte_decimal:
+            normalizado += "." + parte_decimal
+
+    elif "." in texto:
+        partes = texto.split(".")
+
+        if len(partes) > 2:
+            # Ex.: 1.234.567
+            if not partes[0] or not all(
+                grupo.isdigit() and len(grupo) == 3
+                for grupo in partes[1:]
+            ):
+                raise InvalidOperation
+            normalizado = "".join(partes)
+
+        else:
+            esquerda, direita = partes
+
+            if not esquerda or not direita:
+                raise InvalidOperation
+
+            # Ex.: 1.442 / 12.345 / 123.456 = separador de milhar.
+            # Ex.: 1442.500 = representação decimal técnica.
+            if len(esquerda) <= 3 and len(direita) == 3:
+                normalizado = esquerda + direita
+            else:
+                normalizado = texto
+
+    else:
+        normalizado = texto
+
+    return Decimal(sinal + normalizado)
 
 
-def validar_cabecalho_planilha_quantitativo_escola(linha):
-    encontrados = cabecalhos_normalizados(linha)
+def quantitativo_pregao(request):
+    pregoes_lista = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_NAO_INICIADO
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
 
-    return encontrados[:len(CABECALHOS_QUANTITATIVO_ESCOLA)] == CABECALHOS_QUANTITATIVO_ESCOLA
+    pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
+    pregao = None
+    itens = Item.objects.filter(ativo=True).order_by("nome_item")
+    quantitativos_salvos = {}
+
+    if pregao_id:
+        pregao = get_object_or_404(Pregao, id=pregao_id)
+
+        quantitativos_salvos = {
+            q.item_id: q.quantidade
+            for q in QuantitativoPregao.objects.filter(pregao=pregao)
+        }
+
+    if request.method == "POST":
+        if not pregao:
+            messages.error(request, "Selecione um pregão.")
+            return redirect("pregoes:quantitativo_pregao")
+
+        if pregao.status != Pregao.STATUS_NAO_INICIADO:
+            messages.error(
+                request,
+                "Não é permitido alterar quantitativos de pregão já iniciado ou finalizado.",
+            )
+            return redirect("pregoes:quantitativo_pregao")
+
+        quantidades_digitadas = {}
+        erros_validacao = []
+
+        for item in itens:
+            quantidade_texto = request.POST.get(
+                f"quantidade_{item.id}",
+                "",
+            ).strip()
+
+            if not quantidade_texto:
+                continue
+
+            try:
+                quantidade = _converter_quantidade_digitada(
+                    quantidade_texto,
+                    valor_atual=quantitativos_salvos.get(item.id),
+                )
+            except (InvalidOperation, ValueError, TypeError):
+                erros_validacao.append(
+                    f"A quantidade informada para o item '{item.nome_item}' é inválida."
+                )
+                continue
+
+            if quantidade is not None and quantidade > 0:
+                quantidades_digitadas[item.id] = quantidade
+
+        if erros_validacao:
+            for erro in erros_validacao:
+                messages.error(request, erro)
+
+            quantitativos_salvos = {
+                **quantitativos_salvos,
+                **quantidades_digitadas,
+            }
+
+            return render(
+                request,
+                "pregoes/quantitativo_pregao.html",
+                {
+                    "pregoes": pregoes_lista,
+                    "pregao": pregao,
+                    "itens": itens,
+                    "quantitativos_salvos": quantitativos_salvos,
+                },
+            )
+
+        with transaction.atomic():
+            QuantitativoPregao.objects.filter(pregao=pregao).delete()
+
+            for item_id, quantidade in quantidades_digitadas.items():
+                QuantitativoPregao.objects.create(
+                    pregao=pregao,
+                    item_id=item_id,
+                    quantidade=quantidade,
+                )
+
+        total_salvos = len(quantidades_digitadas)
+
+        messages.success(
+            request,
+            f"Quantitativos salvos com sucesso. Itens gravados: {total_salvos}.",
+        )
+        return redirect(f"{request.path}?pregao={pregao.id}")
+
+    return render(
+        request,
+        "pregoes/quantitativo_pregao.html",
+        {
+            "pregoes": pregoes_lista,
+            "pregao": pregao,
+            "itens": itens,
+            "quantitativos_salvos": quantitativos_salvos,
+        },
+    )
 
 
-def escolas_do_pregao(pregao):
+def quantitativo_escola(request):
+    pregoes_lista = (
+        Pregao.objects.filter(
+            status=Pregao.STATUS_NAO_INICIADO
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
+
+    pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
+    escola_id = request.GET.get("escola") or request.POST.get("escola")
+
+    pregao = None
+    escola = None
+    escolas = Escola.objects.none()
+    itens_pregao = []
+    quantitativos_salvos = {}
+    resumo_itens = []
+
+    if pregao_id:
+        pregao = get_object_or_404(Pregao, id=pregao_id)
+
+        municipios_ids = pregao.municipios.values_list("id", flat=True)
+
+        escolas = (
+            Escola.objects.filter(
+                ativo=True,
+                municipio_id__in=municipios_ids,
+            )
+            .select_related("municipio")
+            .order_by("nome_escola")
+        )
+
+    if escola_id:
+        escola = get_object_or_404(Escola, id=escola_id)
+
+    if pregao and escola:
+        if not pregao.municipios.filter(id=escola.municipio_id).exists():
+            messages.error(
+                request,
+                "A escola selecionada não pertence aos municípios vinculados a este pregão.",
+            )
+            return redirect("pregoes:quantitativo_escola")
+
+    if pregao:
+        itens_pregao = (
+            QuantitativoPregao.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("item__nome_item")
+        )
+
+    if pregao and escola:
+        quantitativos_salvos = {
+            q.item_id: q.quantidade
+            for q in QuantitativoEscola.objects.filter(
+                pregao=pregao,
+                escola=escola,
+            )
+        }
+
+        for qp in itens_pregao:
+            item = qp.item
+            quantidade_total_pregao = qp.quantidade
+
+            quantidade_escola_atual = quantitativos_salvos.get(
+                item.id,
+                Decimal("0"),
+            )
+
+            distribuido_todas_escolas = (
+                QuantitativoEscola.objects.filter(
+                    pregao=pregao,
+                    item=item,
+                )
+                .aggregate(total=Sum("quantidade"))
+                .get("total")
+            )
+
+            if distribuido_todas_escolas is None:
+                distribuido_todas_escolas = Decimal("0")
+
+            saldo_restante_real = quantidade_total_pregao - distribuido_todas_escolas
+
+            resumo_itens.append(
+                {
+                    "item": item,
+                    "quantidade_total_pregao": quantidade_total_pregao,
+                    "quantidade_escola_atual": quantidade_escola_atual,
+                    "distribuido_todas_escolas": distribuido_todas_escolas,
+                    "saldo_restante_real": saldo_restante_real,
+                }
+            )
+
+    if request.method == "POST":
+        if not pregao or not escola:
+            messages.error(request, "Selecione o pregão e a escola.")
+            return redirect("pregoes:quantitativo_escola")
+
+        if pregao.status != Pregao.STATUS_NAO_INICIADO:
+            messages.error(
+                request,
+                "Não é permitido alterar quantitativos de escola em pregão já iniciado ou finalizado.",
+            )
+            return redirect("pregoes:quantitativo_escola")
+
+        if not pregao.municipios.filter(id=escola.municipio_id).exists():
+            messages.error(
+                request,
+                "A escola selecionada não pertence aos municípios vinculados a este pregão.",
+            )
+            return redirect("pregoes:quantitativo_escola")
+
+        quantidades_digitadas = {}
+        erros_validacao = []
+
+        for qp in itens_pregao:
+            item = qp.item
+            quantidade_texto = request.POST.get(
+                f"quantidade_{item.id}",
+                "",
+            ).strip()
+
+            if not quantidade_texto:
+                continue
+
+            try:
+                quantidade_nova = _converter_quantidade_digitada(
+                    quantidade_texto,
+                    valor_atual=quantitativos_salvos.get(item.id),
+                )
+            except (InvalidOperation, ValueError, TypeError):
+                erros_validacao.append(
+                    f"A quantidade informada para o item '{item.nome_item}' é inválida."
+                )
+                continue
+
+            if quantidade_nova is None or quantidade_nova <= 0:
+                continue
+
+            quantidade_total_pregao = qp.quantidade
+
+            soma_outras_escolas = (
+                QuantitativoEscola.objects.filter(
+                    pregao=pregao,
+                    item=item,
+                )
+                .exclude(escola=escola)
+                .aggregate(total=Sum("quantidade"))
+                .get("total")
+            )
+
+            if soma_outras_escolas is None:
+                soma_outras_escolas = Decimal("0")
+
+            soma_final = soma_outras_escolas + quantidade_nova
+
+            if soma_final > quantidade_total_pregao:
+                saldo_permitido_para_esta_escola = (
+                    quantidade_total_pregao - soma_outras_escolas
+                )
+
+                erros_validacao.append(
+                    f"O item '{item.nome_item}' ultrapassou o total do pregão. "
+                    f"Total do pregão: {quantidade_total_pregao}. "
+                    f"Quantidade máxima permitida para esta escola: "
+                    f"{saldo_permitido_para_esta_escola}."
+                )
+            else:
+                quantidades_digitadas[item.id] = quantidade_nova
+
+        if erros_validacao:
+            for erro in erros_validacao:
+                messages.error(request, erro)
+
+            resumo_itens = []
+
+            for qp in itens_pregao:
+                item = qp.item
+                quantidade_total_pregao = qp.quantidade
+
+                quantidade_escola_atual = quantidades_digitadas.get(
+                    item.id,
+                    quantitativos_salvos.get(item.id, Decimal("0")),
+                )
+
+                distribuido_todas_escolas = (
+                    QuantitativoEscola.objects.filter(
+                        pregao=pregao,
+                        item=item,
+                    )
+                    .exclude(escola=escola)
+                    .aggregate(total=Sum("quantidade"))
+                    .get("total")
+                )
+
+                if distribuido_todas_escolas is None:
+                    distribuido_todas_escolas = Decimal("0")
+
+                distribuido_todas_escolas = (
+                    distribuido_todas_escolas + quantidade_escola_atual
+                )
+                saldo_restante_real = (
+                    quantidade_total_pregao - distribuido_todas_escolas
+                )
+
+                resumo_itens.append(
+                    {
+                        "item": item,
+                        "quantidade_total_pregao": quantidade_total_pregao,
+                        "quantidade_escola_atual": quantidade_escola_atual,
+                        "distribuido_todas_escolas": distribuido_todas_escolas,
+                        "saldo_restante_real": saldo_restante_real,
+                    }
+                )
+
+            return render(
+                request,
+                "pregoes/quantitativo_escola.html",
+                {
+                    "pregoes": pregoes_lista,
+                    "escolas": escolas,
+                    "pregao": pregao,
+                    "escola": escola,
+                    "itens_pregao": itens_pregao,
+                    "quantitativos_salvos": quantidades_digitadas,
+                    "resumo_itens": resumo_itens,
+                },
+            )
+
+        with transaction.atomic():
+            QuantitativoEscola.objects.filter(
+                pregao=pregao,
+                escola=escola,
+            ).delete()
+
+            for item_id, quantidade in quantidades_digitadas.items():
+                QuantitativoEscola.objects.create(
+                    pregao=pregao,
+                    escola=escola,
+                    item_id=item_id,
+                    quantidade=quantidade,
+                )
+
+        total_salvos = len(quantidades_digitadas)
+
+        messages.success(
+            request,
+            f"Quantitativos da escola salvos com sucesso. Itens gravados: {total_salvos}.",
+        )
+
+        return redirect(
+            f"{request.path}?pregao={pregao.id}&escola={escola.id}"
+        )
+
+    return render(
+        request,
+        "pregoes/quantitativo_escola.html",
+        {
+            "pregoes": pregoes_lista,
+            "escolas": escolas,
+            "pregao": pregao,
+            "escola": escola,
+            "itens_pregao": itens_pregao,
+            "quantitativos_salvos": quantitativos_salvos,
+            "resumo_itens": resumo_itens,
+        },
+    )
+
+
+def usuario_eh_consulta_escola(request):
+    perfil = getattr(request.user, "perfil_acesso", None)
+
+    return bool(
+        request.user.is_authenticated
+        and perfil
+        and perfil.perfil == "consulta_escola"
+    )
+
+
+def obter_escola_consulta_usuario(request):
+    perfil = getattr(request.user, "perfil_acesso", None)
+
+    if not perfil:
+        return None
+
+    return perfil.escola
+
+
+def relatorio_distribuicao(request):
+    consulta_escola = usuario_eh_consulta_escola(request)
+    escola_consulta = obter_escola_consulta_usuario(request) if consulta_escola else None
+
+    if consulta_escola:
+        if escola_consulta:
+            pregoes_ids = (
+                QuantitativoEscola.objects.filter(
+                    escola=escola_consulta,
+                    quantidade__gt=0,
+                )
+                .values_list("pregao_id", flat=True)
+                .distinct()
+            )
+
+            pregoes_lista = Pregao.objects.filter(
+                id__in=pregoes_ids,
+            ).order_by("-ano", "-numero")
+        else:
+            pregoes_lista = Pregao.objects.none()
+
+            messages.warning(
+                request,
+                "Seu usuário está com o perfil Consulta/Escola, mas não possui escola vinculada. "
+                "Solicite ao administrador que vincule seu usuário a uma escola.",
+            )
+    else:
+        pregoes_lista = Pregao.objects.all().order_by("-ano", "-numero")
+
+    pregao_id = request.GET.get("pregao")
+    pregao = None
+    relatorio = []
+
+    total_itens = 0
+    itens_fechados = 0
+    itens_com_saldo = 0
+    itens_excedidos = 0
+
+    if pregao_id:
+        # Segurança: usuário Consulta/Escola só pode abrir relatório de pregões
+        # que possuam quantitativo vinculado à sua própria escola.
+        if consulta_escola:
+            if not escola_consulta:
+                messages.error(
+                    request,
+                    "Seu usuário não possui escola vinculada para consultar relatórios.",
+                )
+                return redirect("pregoes:relatorio_distribuicao")
+
+            pregao_permitido = QuantitativoEscola.objects.filter(
+                pregao_id=pregao_id,
+                escola=escola_consulta,
+                quantidade__gt=0,
+            ).exists()
+
+            if not pregao_permitido:
+                messages.error(
+                    request,
+                    "Você não tem permissão para consultar relatórios deste pregão.",
+                )
+                return redirect("pregoes:relatorio_distribuicao")
+
+        pregao = get_object_or_404(Pregao, id=pregao_id)
+
+        itens_pregao = (
+            QuantitativoPregao.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("item__nome_item")
+        )
+
+        for qp in itens_pregao:
+            item = qp.item
+            total_pregao = qp.quantidade
+
+            distribuicoes_todas = (
+                QuantitativoEscola.objects.filter(
+                    pregao=pregao,
+                    item=item,
+                )
+                .select_related("escola", "escola__municipio")
+                .order_by("escola__nome_escola")
+            )
+
+            total_distribuido = distribuicoes_todas.aggregate(
+                total=Sum("quantidade")
+            ).get("total")
+
+            if total_distribuido is None:
+                total_distribuido = Decimal("0")
+
+            # Para Consulta/Escola, exibe somente a linha da escola vinculada.
+            # O total/status do item continua considerando a distribuição geral do pregão,
+            # mas a lista detalhada não mostra outras escolas.
+            if consulta_escola and escola_consulta:
+                distribuicoes = distribuicoes_todas.filter(escola=escola_consulta)
+
+                # Se a escola não possui este item, não mostra o item no relatório dela.
+                if not distribuicoes.exists():
+                    continue
+            else:
+                distribuicoes = distribuicoes_todas
+
+            saldo = total_pregao - total_distribuido
+
+            total_itens += 1
+
+            if saldo == 0:
+                status = "Fechado"
+                status_classe = "badge-success"
+                status_linha = "status-fechado"
+                itens_fechados += 1
+            elif saldo > 0:
+                status = "Com saldo"
+                status_classe = "badge-warning"
+                status_linha = "status-saldo"
+                itens_com_saldo += 1
+            else:
+                status = "Excedido"
+                status_classe = "badge-danger"
+                status_linha = "status-excedido"
+                itens_excedidos += 1
+
+            relatorio.append(
+                {
+                    "item": item,
+                    "total_pregao": total_pregao,
+                    "distribuicoes": distribuicoes,
+                    "total_distribuido": total_distribuido,
+                    "saldo": saldo,
+                    "status": status,
+                    "status_classe": status_classe,
+                    "status_linha": status_linha,
+                }
+            )
+
+    return render(
+        request,
+        "pregoes/relatorio_distribuicao.html",
+        {
+            "pregoes": pregoes_lista,
+            "pregao": pregao,
+            "relatorio": relatorio,
+            "total_itens": total_itens,
+            "itens_fechados": itens_fechados,
+            "itens_com_saldo": itens_com_saldo,
+            "itens_excedidos": itens_excedidos,
+            "consulta_escola": consulta_escola,
+            "escola_consulta": escola_consulta,
+        },
+    )
+
+def escolas_por_pregao(request, pregao_id):
+    pregao = get_object_or_404(Pregao, id=pregao_id)
+
     municipios_ids = pregao.municipios.values_list("id", flat=True)
 
-    return (
+    escolas = (
         Escola.objects.filter(
             ativo=True,
             municipio_id__in=municipios_ids,
@@ -2351,1630 +991,106 @@ def escolas_do_pregao(pregao):
         .order_by("nome_escola")
     )
 
+    dados = []
 
-def buscar_escola_cadastrada_quantitativo(nome_escola, pregao):
-    nome_escola = texto_celula(nome_escola)
-
-    if not nome_escola or not pregao:
-        return None
-
-    escola = escolas_do_pregao(pregao).filter(nome_escola__iexact=nome_escola).first()
-
-    if escola:
-        return escola
-
-    nome_normalizado = normalizar_texto_comparacao(nome_escola)
-
-    for escola in escolas_do_pregao(pregao):
-        if normalizar_texto_comparacao(escola.nome_escola) == nome_normalizado:
-            return escola
-
-    return None
-
-
-def opcoes_escola_para_correcao(nome_escola, pregao):
-    escolas = list(escolas_do_pregao(pregao))
-
-    texto_normalizado = normalizar_texto_comparacao(nome_escola)
-
-    mapa_normalizado = {
-        normalizar_texto_comparacao(escola.nome_escola): escola.nome_escola
-        for escola in escolas
-    }
-
-    sugestoes = get_close_matches(
-        texto_normalizado,
-        list(mapa_normalizado.keys()),
-        n=8,
-        cutoff=0.45,
-    )
-
-    sugestoes_normalizadas = set(sugestoes)
-
-    escolas_ordenadas = sorted(
-        escolas,
-        key=lambda escola: (
-            0 if normalizar_texto_comparacao(escola.nome_escola) in sugestoes_normalizadas else 1,
-            escola.nome_escola,
-        ),
-    )
-
-    return [
-        {
-            "id": escola.id,
-            "nome": escola.nome_escola,
-            "municipio": escola.municipio.nome if escola.municipio else "",
-            "uf": escola.municipio.uf if escola.municipio else "",
-        }
-        for escola in escolas_ordenadas
-    ]
-
-
-def obter_escola_por_correcao(request, numero_linha):
-    escola_id = request.POST.get(f"escola_corrigida_{numero_linha}")
-
-    if not escola_id:
-        return None
-
-    return Escola.objects.filter(id=escola_id).first()
-
-
-def item_existe_no_quantitativo_pregao(pregao, item):
-    if not pregao or not item:
-        return False
-
-    return QuantitativoPregao.objects.filter(
-        pregao=pregao,
-        item=item,
-    ).exists()
-
-
-def obter_quantitativo_pregao(pregao, item):
-    if not pregao or not item:
-        return None
-
-    return QuantitativoPregao.objects.filter(
-        pregao=pregao,
-        item=item,
-    ).first()
-
-
-def saldo_disponivel_quantitativo_escola(pregao, escola, item):
-    quantitativo_pregao = obter_quantitativo_pregao(pregao, item)
-
-    if not quantitativo_pregao:
-        return Decimal("0")
-
-    total_pregao = quantitativo_pregao.quantidade
-
-    total_outras_escolas = (
-        QuantitativoEscola.objects.filter(
-            pregao=pregao,
-            item=item,
-        )
-        .exclude(escola=escola)
-        .aggregate(total=Sum("quantidade"))
-        .get("total")
-    )
-
-    if total_outras_escolas is None:
-        total_outras_escolas = Decimal("0")
-
-    return total_pregao - total_outras_escolas
-
-
-def validar_escola_pertence_pregao(pregao, escola):
-    if not pregao or not escola:
-        return False
-
-    return pregao.municipios.filter(id=escola.municipio_id).exists()
-
-
-def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_existentes):
-    dados = dict(zip(CABECALHOS_QUANTITATIVO_ESCOLA, valores))
-
-    escola_texto = texto_celula(dados.get("ESCOLA"))
-    item_texto = texto_celula(dados.get("ITEM"))
-    unidade_texto = texto_celula(dados.get("UNIDADE DE MEDIDA"))
-    quantidade = decimal_planilha(dados.get("QUANTIDADE DA ESCOLA"))
-
-    erros = []
-
-    if not escola_texto:
-        erros.append("Escola é obrigatória.")
-
-    if not item_texto:
-        erros.append("Item é obrigatório.")
-
-    if not unidade_texto:
-        erros.append("Unidade de medida é obrigatória.")
-
-    if quantidade is None:
-        erro_quantidade = True
-        erros.append("Quantidade da escola é obrigatória e deve ser numérica.")
-    elif quantidade <= 0:
-        erro_quantidade = True
-        erros.append("Quantidade da escola deve ser maior que zero.")
-
-    escola = None
-    item = None
-    unidade = None
-
-    erro_escola = False
-    erro_item = False
-    erro_unidade = False
-    erro_quantidade = False
-    saldo_maximo = ""
-
-    escola_opcoes = []
-    item_opcoes = []
-    unidade_opcoes = []
-
-    if escola_texto:
-        escola = buscar_escola_cadastrada_quantitativo(escola_texto, pregao)
-
-        if not escola:
-            erro_escola = True
-            escola_opcoes = opcoes_escola_para_correcao(escola_texto, pregao)
-            erros.append(
-                "Escola não encontrada entre as escolas dos municípios vinculados ao pregão. "
-                "Selecione a escola correta na coluna Correção."
-            )
-        elif not validar_escola_pertence_pregao(pregao, escola):
-            erro_escola = True
-            escola_opcoes = opcoes_escola_para_correcao(escola_texto, pregao)
-            erros.append("A escola informada não pertence aos municípios vinculados ao pregão selecionado.")
-
-    if item_texto:
-        item = buscar_item_existente(item_texto)
-
-        if not item:
-            erro_item = True
-            item_opcoes = opcoes_item_quantitativo_pregao_para_correcao(item_texto, pregao)
-            erros.append("Item não encontrado no sistema. Selecione o item correto na coluna Correção.")
-        elif not item_existe_no_quantitativo_pregao(pregao, item):
-            erro_item = True
-            item_opcoes = opcoes_item_quantitativo_pregao_para_correcao(item_texto, pregao)
-            erros.append("Este item não existe no quantitativo do pregão selecionado.")
-
-    if unidade_texto:
-        unidade = buscar_unidade_medida_cadastrada(unidade_texto)
-
-        if not unidade:
-            erro_unidade = True
-            unidade_opcoes = opcoes_unidade_para_correcao(unidade_texto)
-            erros.append("Unidade de medida não encontrada no sistema. Selecione a unidade correta na coluna Correção.")
-
-    if item and unidade and not validar_item_unidade_quantitativo(item, unidade):
-        erro_unidade = True
-        unidade_opcoes = opcoes_unidade_para_correcao(unidade_texto)
-        erros.append(
-            f"Unidade de medida não corresponde ao item cadastrado. "
-            f"Unidade correta do item: {item.get_unidade_medida_display()}."
+    for escola in escolas:
+        dados.append(
+            {
+                "id": escola.id,
+                "nome": escola.nome_escola,
+                "municipio": escola.municipio.nome if escola.municipio else "",
+                "uf": escola.municipio.uf if escola.municipio and escola.municipio.uf else "",
+            }
         )
 
-    if pregao and escola and item and item_existe_no_quantitativo_pregao(pregao, item) and quantidade and quantidade > 0:
-        saldo = saldo_disponivel_quantitativo_escola(pregao, escola, item)
+    return JsonResponse({"escolas": dados})
 
-        if quantidade > saldo:
-            erro_quantidade = True
-            saldo_maximo = str(saldo)
-            erros.append(
-                f"Quantidade da escola ultrapassa o saldo disponível para este item. "
-                f"Saldo máximo permitido: {saldo}."
-            )
-
-    quantitativo_existente = None
-
-    if pregao and escola and item:
-        quantitativo_existente = QuantitativoEscola.objects.filter(
-            pregao=pregao,
-            escola=escola,
-            item=item,
-        ).first()
-
-    acao = "Criar"
-
-    if quantitativo_existente:
-        if atualizar_existentes:
-            acao = "Atualizar"
-        else:
-            acao = "Ignorar"
-            erros.append("Esta escola já possui quantitativo cadastrado para este item no pregão selecionado.")
-
-    valido = not erros
-
-    return {
-        "linha": numero_linha,
-        "valido": valido,
-        "acao": acao if valido else "Erro",
-        "erros": erros,
-        "erro_escola": erro_escola,
-        "erro_item": erro_item,
-        "erro_unidade": erro_unidade,
-        "erro_quantidade": erro_quantidade,
-        "saldo_maximo": saldo_maximo,
-        "ignorar": False,
-        "escola_opcoes": escola_opcoes,
-        "item_opcoes": item_opcoes,
-        "unidade_opcoes": unidade_opcoes,
-        "dados": {
-            "escola_texto": escola_texto,
-            "escola_id": escola.id if escola else "",
-            "escola_corrigida_id": "",
-            "escola_corrigida_nome": "",
-            "item_texto": item_texto,
-            "item_id": item.id if item else "",
-            "item_corrigido_id": "",
-            "item_corrigido_nome": "",
-            "unidade_texto": unidade_texto,
-            "unidade_medida": unidade.codigo if unidade else "",
-            "unidade_corrigida_id": "",
-            "unidade_corrigida_nome": "",
-            "quantidade": str(quantidade) if quantidade is not None else "",
-        },
-    }
-
-
-def ler_planilha_quantitativo_escola(arquivo, pregao, atualizar_existentes=True):
-    workbook = load_workbook(arquivo, data_only=True)
-    sheet = workbook.active
-
-    primeira_linha = [cell.value for cell in sheet[1]]
-
-    if not validar_cabecalho_planilha_quantitativo_escola(primeira_linha):
-        raise ValueError(
-            "O cabeçalho da planilha não corresponde ao modelo esperado. "
-            "Baixe o modelo novamente e mantenha os nomes das colunas."
-        )
-
-    linhas = []
-    chaves_lidas = set()
-
-    for numero_linha in range(2, sheet.max_row + 1):
-        valores = [
-            sheet.cell(row=numero_linha, column=coluna).value
-            for coluna in range(1, len(CABECALHOS_QUANTITATIVO_ESCOLA) + 1)
-        ]
-
-        if all(texto_celula(valor) == "" for valor in valores):
-            continue
-
-        linha = montar_linha_quantitativo_escola(
-            numero_linha,
-            valores,
-            pregao,
-            atualizar_existentes,
-        )
-
-        escola_chave = linha["dados"].get("escola_id") or normalizar_texto_comparacao(linha["dados"].get("escola_texto"))
-        item_chave = linha["dados"].get("item_id") or normalizar_texto_comparacao(linha["dados"].get("item_texto"))
-        chave = f"{escola_chave}|{item_chave}"
-
-        if escola_chave and item_chave:
-            if chave in chaves_lidas:
-                linha["valido"] = False
-                linha["acao"] = "Erro"
-                linha["erros"].append("Combinação escola/item duplicada dentro da própria planilha.")
-            else:
-                chaves_lidas.add(chave)
-
-        linhas.append(linha)
-
-    return linhas
-
-
-def criar_modelo_quantitativo_escola_workbook():
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Quantitativo Escola"
-
-    sheet.append(CABECALHOS_QUANTITATIVO_ESCOLA)
-    sheet.append([
-        "EE EXEMPLO",
-        "ARROZ TIPO 1",
-        "Quilograma",
-        "100,000",
-    ])
-
-    sheet.freeze_panes = "A2"
-
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
+def itens_por_pregao(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
     )
 
-    for cell in sheet[1]:
-        cell.fill = fill_header
-        cell.font = font_header
-        cell.border = border
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    # Mantém a relação de itens sincronizada com o quantitativo atual.
+    garantir_itens_pregao_para_propostas(pregao)
 
-    for row in sheet.iter_rows(min_row=2, max_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-    larguras = {
-        "A": 44,
-        "B": 44,
-        "C": 24,
-        "D": 24,
-    }
-
-    for coluna, largura in larguras.items():
-        sheet.column_dimensions[coluna].width = largura
-
-    sheet.row_dimensions[1].height = 32
-
-    return workbook
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_modelo_quantitativo_escola(request):
-    workbook = criar_modelo_quantitativo_escola_workbook()
-    arquivo = BytesIO()
-    workbook.save(arquivo)
-    arquivo.seek(0)
-
-    response = HttpResponse(
-        arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    response["Content-Disposition"] = 'attachment; filename="modelo_importacao_quantitativo_escola.xlsx"'
-
-    return response
-
-
-def recalcular_linha_quantitativo_escola(linha, pregao):
-    if linha.get("ignorar"):
-        linha["valido"] = True
-        linha["acao"] = "Não importar"
-        linha["erros"] = []
-        linha["erro_escola"] = False
-        linha["erro_item"] = False
-        linha["erro_unidade"] = False
-        linha["erro_quantidade"] = False
-        linha["saldo_maximo"] = ""
-        return linha
-
-    erros = linha.get("erros", [])
-
-    escola = Escola.objects.filter(id=linha["dados"].get("escola_id")).first()
-    item = Item.objects.filter(id=linha["dados"].get("item_id")).first()
-    unidade = None
-
-    if linha["dados"].get("unidade_corrigida_id"):
-        unidade = UnidadeMedida.objects.filter(id=linha["dados"]["unidade_corrigida_id"]).first()
-
-    if not unidade and linha["dados"].get("unidade_medida"):
-        unidade = UnidadeMedida.objects.filter(codigo=linha["dados"]["unidade_medida"]).first()
-
-    erros_filtrados = []
-    for erro in erros:
-        if "Escola não encontrada" in erro:
-            continue
-        if "escola informada não pertence" in erro:
-            continue
-        if "Item não encontrado" in erro:
-            continue
-        if "não existe no quantitativo do pregão" in erro:
-            continue
-        if "Unidade de medida não encontrada" in erro:
-            continue
-        if "Unidade de medida não corresponde" in erro:
-            continue
-        if "Quantidade da escola ultrapassa" in erro:
-            continue
-        if "Quantidade da escola é obrigatória" in erro:
-            continue
-        if "Quantidade da escola deve ser maior que zero" in erro:
-            continue
-        if "já possui quantitativo cadastrado" in erro:
-            continue
-        erros_filtrados.append(erro)
-
-    if escola:
-        if not validar_escola_pertence_pregao(pregao, escola):
-            linha["erro_escola"] = True
-            linha["escola_opcoes"] = opcoes_escola_para_correcao(linha["dados"].get("escola_texto"), pregao)
-            erros_filtrados.append("A escola selecionada não pertence aos municípios vinculados ao pregão selecionado.")
-        else:
-            linha["erro_escola"] = False
-    else:
-        linha["erro_escola"] = True
-        erros_filtrados.append("Escola não encontrada entre as escolas dos municípios vinculados ao pregão.")
-
-    if item:
-        if not item_existe_no_quantitativo_pregao(pregao, item):
-            linha["erro_item"] = True
-            linha["item_opcoes"] = opcoes_item_quantitativo_pregao_para_correcao(linha["dados"].get("item_texto"), pregao)
-            erros_filtrados.append("Este item não existe no quantitativo do pregão selecionado.")
-        else:
-            linha["erro_item"] = False
-    else:
-        linha["erro_item"] = True
-        erros_filtrados.append("Item não encontrado no sistema.")
-
-    if unidade:
-        if item and not validar_item_unidade_quantitativo(item, unidade):
-            linha["erro_unidade"] = True
-            linha["unidade_opcoes"] = opcoes_unidade_para_correcao(linha["dados"].get("unidade_texto"))
-            erros_filtrados.append(
-                f"Unidade de medida não corresponde ao item cadastrado. "
-                f"Unidade correta do item: {item.get_unidade_medida_display()}."
-            )
-        else:
-            linha["erro_unidade"] = False
-    else:
-        linha["erro_unidade"] = True
-        erros_filtrados.append("Unidade de medida não encontrada no sistema.")
-
-    quantidade = decimal_planilha(linha["dados"].get("quantidade"))
-    linha["erro_quantidade"] = False
-    linha["saldo_maximo"] = ""
-
-    if quantidade is None:
-        linha["erro_quantidade"] = True
-        erros_filtrados.append("Quantidade da escola é obrigatória e deve ser numérica.")
-    elif quantidade <= 0:
-        linha["erro_quantidade"] = True
-        erros_filtrados.append("Quantidade da escola deve ser maior que zero.")
-    elif pregao and escola and item and item_existe_no_quantitativo_pregao(pregao, item):
-        saldo = saldo_disponivel_quantitativo_escola(pregao, escola, item)
-
-        if quantidade > saldo:
-            linha["erro_quantidade"] = True
-            linha["saldo_maximo"] = str(saldo)
-            erros_filtrados.append(
-                f"Quantidade da escola ultrapassa o saldo disponível para este item. "
-                f"Saldo máximo permitido: {saldo}."
-            )
-
-    quantitativo_existente = None
-
-    if pregao and escola and item:
-        quantitativo_existente = QuantitativoEscola.objects.filter(
-            pregao=pregao,
-            escola=escola,
-            item=item,
-        ).first()
-
-    if quantitativo_existente:
-        linha["acao"] = "Atualizar"
-    else:
-        linha["acao"] = "Criar"
-
-    linha["erros"] = erros_filtrados
-    linha["valido"] = not erros_filtrados
-    if not linha["valido"]:
-        linha["acao"] = "Erro"
-
-    return linha
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def importar_quantitativo_escola(request):
-    linhas = []
-    resumo = None
-    pregoes = (
-        Pregao.objects.filter(
-            status=Pregao.STATUS_NAO_INICIADO,
-        )
-        .prefetch_related("municipios")
-        .order_by("-ano", "-numero")
-    )
-    pregao = None
-
-    pregao_id = request.POST.get("pregao") or request.GET.get("pregao")
-
-    if pregao_id:
-        pregao = Pregao.objects.filter(id=pregao_id).first()
-
-    if request.method == "POST":
-        acao = request.POST.get("acao")
-
-        if not pregao:
-            messages.error(request, "Selecione um pregão válido.")
-            return redirect("importacoes:quantitativo_escola")
-
-        if pregao.status != Pregao.STATUS_NAO_INICIADO:
-            messages.error(
-                request,
-                "Não é permitido importar quantitativos de escola em pregão já iniciado ou finalizado.",
-            )
-            return redirect("importacoes:quantitativo_escola")
-
-        if acao == "validar":
-            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
-
-            if form.is_valid():
-                arquivo = form.cleaned_data["arquivo"]
-                atualizar_existentes = form.cleaned_data["atualizar_existentes"]
-
-                try:
-                    linhas = ler_planilha_quantitativo_escola(
-                        arquivo,
-                        pregao,
-                        atualizar_existentes=atualizar_existentes,
-                    )
-                except Exception as erro:
-                    messages.error(request, str(erro))
-                    linhas = []
-
-                if linhas:
-                    validos = [linha for linha in linhas if linha["valido"]]
-                    erros = [linha for linha in linhas if not linha["valido"]]
-
-                    request.session["importacao_quantitativo_escola_linhas"] = linhas
-                    request.session["importacao_quantitativo_escola_pregao_id"] = pregao.id
-                    request.session["importacao_quantitativo_escola_atualizar"] = atualizar_existentes
-
-                    resumo = {
-                        "total": len(linhas),
-                        "validos": len(validos),
-                        "erros": len(erros),
-                        "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                        "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                        "ignorados": 0,
-                    }
-
-                    if erros:
-                        messages.warning(
-                            request,
-                            "A planilha possui erros. Corrija as linhas inválidas antes de confirmar a importação.",
-                        )
-                    else:
-                        messages.success(
-                            request,
-                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
-                        )
-
-        elif acao == "confirmar":
-            linhas = request.session.get("importacao_quantitativo_escola_linhas", [])
-            pregao_sessao_id = request.session.get("importacao_quantitativo_escola_pregao_id")
-
-            if not linhas or not pregao_sessao_id:
-                messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
-                return redirect("importacoes:quantitativo_escola")
-
-            pregao = Pregao.objects.filter(id=pregao_sessao_id).first()
-
-            if not pregao:
-                messages.error(request, "Pregão da importação não encontrado.")
-                return redirect("importacoes:quantitativo_escola")
-
-            if pregao.status != Pregao.STATUS_NAO_INICIADO:
-                messages.error(
-                    request,
-                    "Não é permitido importar quantitativos de escola em pregão já iniciado ou finalizado.",
-                )
-                return redirect("importacoes:quantitativo_escola")
-
-            for linha in linhas:
-                # Quando o usuário marca "Não importar", a linha inteira é ignorada:
-                # não bloqueia a confirmação e não será gravada no banco.
-                linha["ignorar"] = request.POST.get(f"nao_importar_{linha['linha']}") == "1"
-
-                if linha["ignorar"]:
-                    linha = recalcular_linha_quantitativo_escola(linha, pregao)
-                    continue
-
-                if linha.get("erro_escola"):
-                    escola_corrigida = obter_escola_por_correcao(request, linha["linha"])
-
-                    if escola_corrigida:
-                        linha["dados"]["escola_id"] = escola_corrigida.id
-                        linha["dados"]["escola_corrigida_id"] = escola_corrigida.id
-                        linha["dados"]["escola_corrigida_nome"] = escola_corrigida.nome_escola
-                        linha["dados"]["escola_texto"] = escola_corrigida.nome_escola
-
-                if linha.get("erro_item"):
-                    item_corrigido = obter_item_por_correcao(request, linha["linha"])
-
-                    # Aceita a correção somente se o item realmente possuir
-                    # quantitativo no certame selecionado.
-                    if item_corrigido and item_existe_no_quantitativo_pregao(pregao, item_corrigido):
-                        linha["dados"]["item_id"] = item_corrigido.id
-                        linha["dados"]["item_corrigido_id"] = item_corrigido.id
-                        linha["dados"]["item_corrigido_nome"] = item_corrigido.nome_item
-                        linha["dados"]["item_texto"] = item_corrigido.nome_item
-
-                if linha.get("erro_unidade"):
-                    unidade_corrigida = obter_unidade_por_correcao(request, linha["linha"])
-
-                    if unidade_corrigida:
-                        linha["dados"]["unidade_corrigida_id"] = unidade_corrigida.id
-                        linha["dados"]["unidade_corrigida_nome"] = unidade_corrigida.nome
-                        linha["dados"]["unidade_medida"] = unidade_corrigida.codigo
-                        linha["dados"]["unidade_texto"] = unidade_corrigida.nome
-
-                quantidade_corrigida = request.POST.get(
-                    f"quantidade_corrigida_{linha['linha']}",
-                    "",
-                ).strip()
-
-                if quantidade_corrigida:
-                    linha["dados"]["quantidade"] = quantidade_corrigida
-
-                linha = recalcular_linha_quantitativo_escola(linha, pregao)
-
-            # Verifica duplicidade depois das correções.
-            chaves_finais = set()
-
-            for linha in linhas:
-                if linha.get("ignorar"):
-                    continue
-
-                escola_id = linha["dados"].get("escola_id")
-                item_id = linha["dados"].get("item_id")
-
-                if escola_id and item_id:
-                    chave = f"{escola_id}|{item_id}"
-
-                    if chave in chaves_finais:
-                        linha["valido"] = False
-                        linha["acao"] = "Erro"
-                        linha["erros"].append("Combinação escola/item duplicada dentro da própria planilha após correção.")
-                    else:
-                        chaves_finais.add(chave)
-
-            linhas_invalidas = [
-                linha for linha in linhas
-                if not linha.get("ignorar") and not linha.get("valido")
-            ]
-
-            if linhas_invalidas:
-                request.session["importacao_quantitativo_escola_linhas"] = linhas
-
-                # Informa exatamente quais linhas ainda precisam de decisão do usuário.
-                linhas_item_pendente = [
-                    linha for linha in linhas_invalidas
-                    if linha.get("erro_item")
-                ]
-                linhas_quantidade_pendente = [
-                    linha for linha in linhas_invalidas
-                    if linha.get("erro_quantidade")
-                ]
-                linhas_outros_erros = [
-                    linha for linha in linhas_invalidas
-                    if not linha.get("erro_item")
-                    and not linha.get("erro_quantidade")
-                ]
-
-                partes_mensagem = []
-
-                if linhas_item_pendente:
-                    numeros = ", ".join(str(linha["linha"]) for linha in linhas_item_pendente)
-                    partes_mensagem.append(
-                        f"Itens ainda não resolvidos nas linhas: {numeros}. "
-                        "Selecione um item sugerido na coluna Correção do Item ou marque Não importar esta linha."
-                    )
-
-                if linhas_quantidade_pendente:
-                    numeros = ", ".join(
-                        str(linha["linha"]) for linha in linhas_quantidade_pendente
-                    )
-                    partes_mensagem.append(
-                        f"Quantidades ainda não resolvidas nas linhas: {numeros}. "
-                        "Corrija a quantidade na própria prévia ou marque Não importar esta linha."
-                    )
-
-                if linhas_outros_erros:
-                    numeros = ", ".join(str(linha["linha"]) for linha in linhas_outros_erros)
-                    partes_mensagem.append(
-                        f"Também existem outros erros pendentes nas linhas: {numeros}. "
-                        "Revise escola ou unidade antes de confirmar."
-                    )
-
-                messages.error(request, " ".join(partes_mensagem))
-
-                ignorados = [linha for linha in linhas if linha.get("ignorar")]
-                validos = [
-                    linha for linha in linhas
-                    if linha.get("valido") and not linha.get("ignorar")
-                ]
-                erros = [
-                    linha for linha in linhas
-                    if not linha.get("valido") and not linha.get("ignorar")
-                ]
-                resumo = {
-                    "total": len(linhas),
-                    "validos": len(validos),
-                    "erros": len(erros),
-                    "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
-                    "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                    "ignorados": len(ignorados),
-                }
-
-                form = ImportacaoPlanilhaForm()
-                return render(
-                    request,
-                    "importacoes/quantitativo_escola.html",
-                    {
-                        "form": form,
-                        "linhas": linhas,
-                        "resumo": resumo,
-                        "pregoes": pregoes,
-                        "pregao": pregao,
-                    },
-                )
-
-            criados = 0
-            atualizados = 0
-            ignorados = 0
-            linha_em_processamento = None
-
-            try:
-                # A importação inteira é atômica: se qualquer linha falhar,
-                # nenhuma alteração desta confirmação permanece no banco.
-                with transaction.atomic():
-                    for linha in linhas:
-                        if linha.get("ignorar"):
-                            ignorados += 1
-                            continue
-
-                        linha_em_processamento = linha
-                        dados = linha["dados"]
-
-                        escola = Escola.objects.filter(
-                            id=dados.get("escola_id")
-                        ).first()
-                        item = Item.objects.filter(
-                            id=dados.get("item_id")
-                        ).first()
-
-                        if not escola:
-                            raise ValidationError(
-                                "Escola não encontrada no momento da gravação."
-                            )
-
-                        if not item:
-                            raise ValidationError(
-                                "Item não encontrado no momento da gravação."
-                            )
-
-                        if not item_existe_no_quantitativo_pregao(pregao, item):
-                            raise ValidationError(
-                                "O item selecionado não possui quantitativo no certame."
-                            )
-
-                        quantidade = decimal_planilha(dados.get("quantidade"))
-
-                        if quantidade is None:
-                            raise ValidationError(
-                                "Quantidade inválida no momento da gravação."
-                            )
-
-                        quantitativo = QuantitativoEscola.objects.filter(
-                            pregao=pregao,
-                            escola=escola,
-                            item=item,
-                        ).first()
-
-                        if quantitativo:
-                            quantitativo.quantidade = quantidade
-                            quantitativo.full_clean()
-                            quantitativo.save()
-                            atualizados += 1
-                        else:
-                            quantitativo = QuantitativoEscola(
-                                pregao=pregao,
-                                escola=escola,
-                                item=item,
-                                quantidade=quantidade,
-                            )
-                            quantitativo.full_clean()
-                            quantitativo.save()
-                            criados += 1
-
-            except Exception as erro:
-                logger.exception(
-                    "Erro ao confirmar importação de quantitativo por escola. Pregão=%s",
-                    getattr(pregao, "id", None),
-                )
-
-                # A exceção sai do bloco atomic, portanto todas as gravações
-                # desta tentativa já foram revertidas automaticamente.
-                numero_linha = (
-                    linha_em_processamento.get("linha")
-                    if linha_em_processamento
-                    else "não identificada"
-                )
-
-                if isinstance(erro, ValidationError):
-                    if hasattr(erro, "message_dict"):
-                        partes = []
-                        for campo, mensagens_campo in erro.message_dict.items():
-                            partes.append(
-                                f"{campo}: {', '.join(str(m) for m in mensagens_campo)}"
-                            )
-                        detalhe_erro = "; ".join(partes)
-                    else:
-                        detalhe_erro = "; ".join(str(m) for m in erro.messages)
-                else:
-                    detalhe_erro = str(erro).strip() or erro.__class__.__name__
-
-                if linha_em_processamento:
-                    linha_em_processamento["valido"] = False
-                    linha_em_processamento["acao"] = "Erro"
-                    mensagem_linha = (
-                        f"Falha ao gravar esta linha: {detalhe_erro}"
-                    )
-                    if mensagem_linha not in linha_em_processamento.get("erros", []):
-                        linha_em_processamento.setdefault("erros", []).append(
-                            mensagem_linha
-                        )
-
-                request.session["importacao_quantitativo_escola_linhas"] = linhas
-
-                ignorados_lista = [
-                    linha for linha in linhas if linha.get("ignorar")
-                ]
-                validos = [
-                    linha for linha in linhas
-                    if linha.get("valido") and not linha.get("ignorar")
-                ]
-                erros = [
-                    linha for linha in linhas
-                    if not linha.get("valido") and not linha.get("ignorar")
-                ]
-
-                resumo = {
-                    "total": len(linhas),
-                    "validos": len(validos),
-                    "erros": len(erros),
-                    "criar": len([
-                        linha for linha in validos if linha.get("acao") == "Criar"
-                    ]),
-                    "atualizar": len([
-                        linha for linha in validos if linha.get("acao") == "Atualizar"
-                    ]),
-                    "ignorados": len(ignorados_lista),
-                }
-
-                messages.error(
-                    request,
-                    f"A importação não foi gravada. Erro na linha {numero_linha}: "
-                    f"{detalhe_erro}. Nenhuma linha desta tentativa foi salva.",
-                )
-
-                form = ImportacaoPlanilhaForm()
-                return render(
-                    request,
-                    "importacoes/quantitativo_escola.html",
-                    {
-                        "form": form,
-                        "linhas": linhas,
-                        "resumo": resumo,
-                        "pregoes": pregoes,
-                        "pregao": pregao,
-                    },
-                )
-
-            request.session.pop("importacao_quantitativo_escola_linhas", None)
-            request.session.pop("importacao_quantitativo_escola_pregao_id", None)
-            request.session.pop("importacao_quantitativo_escola_atualizar", None)
-
-            messages.success(
-                request,
-                f"Importação concluída para o Pregão {pregao.numero}/{pregao.ano}. "
-                f"Quantitativos criados: {criados}. Quantitativos atualizados: {atualizados}. "
-                f"Linhas não importadas: {ignorados}.",
-            )
-            return redirect("pregoes:quantitativo_escola")
-    else:
-        form = ImportacaoPlanilhaForm()
-
-    if request.method == "POST" and "form" not in locals():
-        form = ImportacaoPlanilhaForm()
-
-    return render(
-        request,
-        "importacoes/quantitativo_escola.html",
-        {
-            "form": form,
-            "linhas": linhas,
-            "resumo": resumo,
-            "pregoes": pregoes,
-            "pregao": pregao,
-        },
-    )
-
-
-# ============================================================
-# ETAPA 75 — EXPORTAÇÃO / BACKUP DE DADOS
-# ============================================================
-
-def valor_sim_nao(valor):
-    return "Sim" if valor else "Não"
-
-
-def texto_data(valor):
-    if not valor:
-        return ""
-
-    try:
-        return valor.strftime("%d/%m/%Y")
-    except Exception:
-        return str(valor)
-
-
-def texto_data_hora(valor):
-    if not valor:
-        return ""
-
-    try:
-        return timezone.localtime(valor).strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        return str(valor)
-
-
-def formatar_numero_decimal(valor):
-    if valor is None:
-        return ""
-
-    return str(valor).replace(".", ",")
-
-
-def aplicar_estilo_backup(sheet):
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
-    )
-
-    if sheet.max_row >= 1:
-        for cell in sheet[1]:
-            cell.fill = fill_header
-            cell.font = font_header
-            cell.border = border
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-    for row in sheet.iter_rows(min_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-    sheet.freeze_panes = "A2"
-
-    for coluna in range(1, sheet.max_column + 1):
-        letra = get_column_letter(coluna)
-        largura = 12
-
-        for cell in sheet[letra]:
-            valor = "" if cell.value is None else str(cell.value)
-            largura = max(largura, min(len(valor) + 3, 55))
-
-        sheet.column_dimensions[letra].width = largura
-
-    sheet.row_dimensions[1].height = 32
-
-
-def adicionar_aba(workbook, titulo, cabecalhos, linhas):
-    sheet = workbook.create_sheet(title=titulo)
-    sheet.append(cabecalhos)
-
-    for linha in linhas:
-        sheet.append(linha)
-
-    aplicar_estilo_backup(sheet)
-
-    return sheet
-
-
-def criar_backup_completo_workbook(usuario=None):
-    workbook = Workbook()
-
-    # Remove a aba padrão para criar tudo em ordem.
-    aba_padrao = workbook.active
-    workbook.remove(aba_padrao)
-
-    agora = timezone.localtime()
-
-    resumo = workbook.create_sheet(title="Resumo")
-    resumo.append(["Informação", "Valor"])
-    resumo.append(["Gerado em", agora.strftime("%d/%m/%Y %H:%M")])
-    nome_usuario = ""
-    if usuario:
-        nome_usuario = usuario.get_full_name() or usuario.username
-
-    resumo.append(["Gerado por", nome_usuario])
-    resumo.append(["Municípios", Municipio.objects.count()])
-    resumo.append(["Unidades de Medida", UnidadeMedida.objects.count()])
-    resumo.append(["Fornecedores", Fornecedor.objects.count()])
-    resumo.append(["Escolas", Escola.objects.count()])
-    resumo.append(["Itens", Item.objects.count()])
-    resumo.append(["Pregões", Pregao.objects.count()])
-    resumo.append(["Quantitativos por Pregão", QuantitativoPregao.objects.count()])
-    resumo.append(["Quantitativos por Escola", QuantitativoEscola.objects.count()])
-    aplicar_estilo_backup(resumo)
-
-    adicionar_aba(
-        workbook,
-        "Municípios",
-        ["ID", "Nome", "UF", "Ativo", "Criado em", "Atualizado em"],
-        [
-            [
-                municipio.id,
-                municipio.nome,
-                municipio.uf,
-                valor_sim_nao(municipio.ativo),
-                texto_data_hora(municipio.criado_em),
-                texto_data_hora(municipio.atualizado_em),
-            ]
-            for municipio in Municipio.objects.all().order_by("nome", "uf")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Unidades de Medida",
-        ["ID", "Nome", "Sigla", "Código", "Ativo", "Criado em", "Atualizado em"],
-        [
-            [
-                unidade.id,
-                unidade.nome,
-                unidade.sigla,
-                unidade.codigo,
-                valor_sim_nao(unidade.ativo),
-                texto_data_hora(unidade.criado_em),
-                texto_data_hora(unidade.atualizado_em),
-            ]
-            for unidade in UnidadeMedida.objects.all().order_by("nome")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Fornecedores",
-        [
-            "ID",
-            "Razão Social",
-            "CNPJ",
-            "Endereço",
-            "Telefone",
-            "Representante Legal",
-            "RG Representante",
-            "Órgão Expedidor",
-            "CPF Representante",
-            "E-mail",
-            "Banco",
-            "Agência",
-            "Conta Corrente",
-            "PIX",
-            "Ativo",
-            "Criado em",
-            "Atualizado em",
-        ],
-        [
-            [
-                fornecedor.id,
-                fornecedor.razao_social,
-                fornecedor.cnpj,
-                fornecedor.endereco,
-                fornecedor.telefone,
-                fornecedor.representante_legal,
-                fornecedor.rg_representante,
-                fornecedor.orgao_expedidor_representante,
-                fornecedor.cpf_representante,
-                fornecedor.email,
-                fornecedor.nome_banco,
-                fornecedor.agencia,
-                fornecedor.conta_corrente,
-                fornecedor.pix,
-                valor_sim_nao(fornecedor.ativo),
-                texto_data_hora(fornecedor.criado_em),
-                texto_data_hora(fornecedor.atualizado_em),
-            ]
-            for fornecedor in Fornecedor.objects.all().order_by("razao_social")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Escolas",
-        [
-            "ID",
-            "Nome da Escola",
-            "CNPJ",
-            "Endereço",
-            "Número",
-            "Bairro",
-            "Município",
-            "UF",
-            "Presidente CDCE",
-            "RG Presidente",
-            "CPF Presidente",
-            "Ativo",
-            "Criado em",
-            "Atualizado em",
-        ],
-        [
-            [
-                escola.id,
-                escola.nome_escola,
-                escola.cnpj,
-                escola.endereco,
-                escola.numero,
-                escola.bairro,
-                escola.municipio.nome if escola.municipio else "",
-                escola.municipio.uf if escola.municipio else "",
-                escola.presidente_cdce,
-                escola.rg_presidente,
-                escola.cpf_presidente,
-                valor_sim_nao(escola.ativo),
-                texto_data_hora(escola.criado_em),
-                texto_data_hora(escola.atualizado_em),
-            ]
-            for escola in Escola.objects.select_related("municipio").all().order_by("nome_escola")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Itens",
-        [
-            "ID",
-            "Nome do Item",
-            "Unidade Código",
-            "Unidade",
-            "Descrição",
-            "Ativo",
-            "Criado em",
-            "Atualizado em",
-        ],
-        [
-            [
-                item.id,
-                item.nome_item,
-                item.unidade_medida,
-                item.get_unidade_medida_display(),
-                item.descricao,
-                valor_sim_nao(item.ativo),
-                texto_data_hora(item.criado_em),
-                texto_data_hora(item.atualizado_em),
-            ]
-            for item in Item.objects.all().order_by("nome_item")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Pregões",
-        [
-            "ID",
-            "Número",
-            "Ano",
-            "Municípios",
-            "Fornecedores",
-            "Pregoeiro",
-            "CPF Pregoeiro",
-            "Local",
-            "Data",
-            "Status",
-            "Criado por",
-            "Finalizado em",
-            "Criado em",
-            "Atualizado em",
-        ],
-        [
-            [
-                pregao.id,
-                pregao.numero,
-                pregao.ano,
-                ", ".join(str(municipio) for municipio in pregao.municipios.all().order_by("nome")),
-                ", ".join(fornecedor.razao_social for fornecedor in pregao.fornecedores.all().order_by("razao_social")),
-                pregao.nome_pregoeiro,
-                pregao.cpf_pregoeiro,
-                pregao.local_pregao,
-                texto_data(pregao.data_pregao),
-                pregao.get_status_display(),
-                pregao.criado_por.get_full_name() or pregao.criado_por.username if pregao.criado_por else "",
-                texto_data_hora(pregao.finalizado_em),
-                texto_data_hora(pregao.criado_em),
-                texto_data_hora(pregao.atualizado_em),
-            ]
-            for pregao in Pregao.objects.all().prefetch_related("municipios", "fornecedores").select_related("criado_por").order_by("-ano", "-numero")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Quantitativo Pregão",
-        [
-            "ID",
-            "Pregão",
-            "Ano",
-            "Item",
-            "Unidade",
-            "Quantidade",
-            "Criado em",
-            "Atualizado em",
-        ],
-        [
-            [
-                quantitativo.id,
-                quantitativo.pregao.numero,
-                quantitativo.pregao.ano,
-                quantitativo.item.nome_item,
-                quantitativo.item.get_unidade_medida_display(),
-                formatar_numero_decimal(quantitativo.quantidade),
-                texto_data_hora(quantitativo.criado_em),
-                texto_data_hora(quantitativo.atualizado_em),
-            ]
-            for quantitativo in QuantitativoPregao.objects.select_related("pregao", "item").all().order_by("-pregao__ano", "-pregao__numero", "item__nome_item")
-        ],
-    )
-
-    adicionar_aba(
-        workbook,
-        "Quantitativo Escola",
-        [
-            "ID",
-            "Pregão",
-            "Ano",
-            "Escola",
-            "Município",
-            "Item",
-            "Unidade",
-            "Quantidade",
-            "Criado em",
-            "Atualizado em",
-        ],
-        [
-            [
-                quantitativo.id,
-                quantitativo.pregao.numero,
-                quantitativo.pregao.ano,
-                quantitativo.escola.nome_escola,
-                str(quantitativo.escola.municipio) if quantitativo.escola and quantitativo.escola.municipio else "",
-                quantitativo.item.nome_item,
-                quantitativo.item.get_unidade_medida_display(),
-                formatar_numero_decimal(quantitativo.quantidade),
-                texto_data_hora(quantitativo.criado_em),
-                texto_data_hora(quantitativo.atualizado_em),
-            ]
-            for quantitativo in QuantitativoEscola.objects.select_related("pregao", "escola", "escola__municipio", "item").all().order_by("-pregao__ano", "-pregao__numero", "escola__nome_escola", "item__nome_item")
-        ],
-    )
-
-    workbook.active = 0
-
-    return workbook
-
-
-# ============================================================
-# IMPORTAÇÃO DE MÉDIA DE PREÇOS
-# ============================================================
-
-CABECALHOS_MEDIA_PRECOS = [
-    "ITEM",
-    "MÉDIA DE PREÇO",
-]
-
-
-def validar_cabecalho_planilha_media_precos(linha):
-    encontrados = cabecalhos_normalizados(linha)
-    return encontrados[:len(CABECALHOS_MEDIA_PRECOS)] == CABECALHOS_MEDIA_PRECOS
-
-
-def garantir_itens_pregao_para_importacao_media(pregao):
-    """
-    Garante que os PregaoItem existam antes da importação das médias,
-    usando a mesma regra da tela manual de Média de Preços:
-    só cria os itens se houver quantitativo por escola para o certame.
-    """
-    if PregaoItem.objects.filter(pregao=pregao).exists():
-        return True
-
-    existe_quantitativo_escola = QuantitativoEscola.objects.filter(
-        pregao=pregao
-    ).exists()
-
-    if not existe_quantitativo_escola:
-        return False
-
-    quantitativos_pregao = (
-        QuantitativoPregao.objects.filter(pregao=pregao)
-        .select_related("item")
-        .order_by("item__nome_item")
-    )
-
-    ordem = 1
-
-    for qp in quantitativos_pregao:
-        PregaoItem.objects.get_or_create(
-            pregao=pregao,
-            item=qp.item,
-            defaults={
-                "ordem": ordem,
-                "quantidade_total": qp.quantidade,
-            },
-        )
-        ordem += 1
-
-    return PregaoItem.objects.filter(pregao=pregao).exists()
-
-
-def opcoes_item_certame_para_correcao(texto_item, pregao):
-    """
-    Retorna somente itens que pertencem ao certame selecionado.
-    Mantém os itens mais parecidos com o texto informado no topo da lista.
-    """
-    itens_pregao = (
+    itens = (
         PregaoItem.objects.filter(pregao=pregao)
         .select_related("item")
         .order_by("ordem", "item__nome_item")
     )
 
-    itens = [registro.item for registro in itens_pregao]
+    dados = []
 
-    texto_normalizado = normalizar_texto_comparacao(texto_item)
-
-    mapa_normalizado = {
-        normalizar_texto_comparacao(item.nome_item): item
-        for item in itens
-    }
-
-    sugestoes = set(
-        get_close_matches(
-            texto_normalizado,
-            list(mapa_normalizado.keys()),
-            n=8,
-            cutoff=0.45,
+    for item_pregao in itens:
+        dados.append(
+            {
+                "id": item_pregao.id,
+                "ordem": item_pregao.ordem,
+                "nome": item_pregao.item.nome_item,
+            }
         )
+
+    return JsonResponse({"itens": dados})
+
+def garantir_itens_pregao_para_propostas(pregao):
+    """
+    Sincroniza PregaoItem com o QuantitativoPregao atual.
+
+    Regras:
+    - não exige QuantitativoEscola;
+    - cria itens novos adicionados depois ao quantitativo do certame;
+    - atualiza quantidade_total dos itens já existentes;
+    - preserva os PregaoItem existentes e seus IDs;
+    - itens novos recebem ordem após a maior ordem já existente.
+    """
+    quantitativos_pregao = list(
+        QuantitativoPregao.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("item__nome_item")
     )
 
-    itens_ordenados = sorted(
-        itens,
-        key=lambda item: (
-            0 if normalizar_texto_comparacao(item.nome_item) in sugestoes else 1,
-            item.nome_item,
-        ),
-    )
+    with transaction.atomic():
+        itens_existentes = list(
+            PregaoItem.objects.select_for_update()
+            .filter(pregao=pregao)
+            .order_by("ordem", "id")
+        )
 
-    return [
-        {
-            "id": item.id,
-            "nome": item.nome_item,
-            "unidade": item.get_unidade_medida_display(),
+        existentes_por_item = {
+            item_pregao.item_id: item_pregao
+            for item_pregao in itens_existentes
         }
-        for item in itens_ordenados
-    ]
 
+        ultima_ordem = max(
+            (item_pregao.ordem for item_pregao in itens_existentes),
+            default=0,
+        )
 
-def montar_linha_media_precos(numero_linha, valores, pregao):
-    dados = dict(zip(CABECALHOS_MEDIA_PRECOS, valores))
+        for quantitativo in quantitativos_pregao:
+            item_pregao = existentes_por_item.get(quantitativo.item_id)
 
-    item_texto = texto_celula(dados.get("ITEM"))
-    media_preco = decimal_planilha(dados.get("MÉDIA DE PREÇO"))
+            if item_pregao:
+                if item_pregao.quantidade_total != quantitativo.quantidade:
+                    item_pregao.quantidade_total = quantitativo.quantidade
+                    item_pregao.save(update_fields=["quantidade_total"])
+                continue
 
-    erros = []
-    erro_item = False
-    item_opcoes = []
-    item = None
-    item_pregao = None
-
-    if not item_texto:
-        erros.append("Item é obrigatório.")
-
-    if media_preco is None:
-        erros.append("Média de preço é obrigatória e deve ser numérica.")
-    elif media_preco <= 0:
-        erros.append("Média de preço deve ser maior que zero.")
-
-    if item_texto:
-        item = buscar_item_existente(item_texto)
-
-        if not item:
-            erro_item = True
-            item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
-            erros.append(
-                "Item não encontrado no sistema. Selecione o item correto na coluna Correção."
-            )
-        else:
-            item_pregao = PregaoItem.objects.filter(
+            ultima_ordem += 1
+            novo_item = PregaoItem.objects.create(
                 pregao=pregao,
-                item=item,
-            ).first()
+                item=quantitativo.item,
+                ordem=ultima_ordem,
+                quantidade_total=quantitativo.quantidade,
+            )
+            existentes_por_item[quantitativo.item_id] = novo_item
 
-            if not item_pregao:
-                erro_item = True
-                item_opcoes = opcoes_item_certame_para_correcao(item_texto, pregao)
-                erros.append(
-                    "O item existe no cadastro, mas não pertence ao certame selecionado. "
-                    "Selecione um item correto do certame na coluna Correção ou marque Não importar."
-                )
-
-    acao = "Atualizar" if item_pregao else "Erro"
-    valido = not erros
-
-    return {
-        "linha": numero_linha,
-        "valido": valido,
-        "acao": acao if valido else "Erro",
-        "erros": erros,
-        "erro_item": erro_item,
-        "item_opcoes": item_opcoes,
-        "dados": {
-            "item_texto": item_texto,
-            "item_id": item.id if item else "",
-            "item_pregao_id": item_pregao.id if item_pregao else "",
-            "item_corrigido_id": "",
-            "item_corrigido_nome": "",
-            "media_preco": str(media_preco) if media_preco is not None else "",
-        },
-    }
+    return len(quantitativos_pregao)
 
 
-def ler_planilha_media_precos(arquivo, pregao):
-    workbook = load_workbook(arquivo, data_only=True)
-    sheet = workbook.active
-
-    primeira_linha = [cell.value for cell in sheet[1]]
-
-    if not validar_cabecalho_planilha_media_precos(primeira_linha):
-        raise ValueError(
-            "O cabeçalho da planilha não corresponde ao modelo esperado. "
-            "Baixe o modelo novamente e mantenha as colunas ITEM e MÉDIA DE PREÇO."
-        )
-
-    linhas = []
-    itens_lidos = set()
-
-    for numero_linha in range(2, sheet.max_row + 1):
-        valores = [
-            sheet.cell(row=numero_linha, column=coluna).value
-            for coluna in range(1, len(CABECALHOS_MEDIA_PRECOS) + 1)
-        ]
-
-        if all(texto_celula(valor) == "" for valor in valores):
-            continue
-
-        linha = montar_linha_media_precos(
-            numero_linha,
-            valores,
-            pregao,
-        )
-
-        item_chave = (
-            linha["dados"].get("item_id")
-            or normalizar_texto_comparacao(linha["dados"].get("item_texto"))
-        )
-
-        if item_chave:
-            if item_chave in itens_lidos:
-                linha["valido"] = False
-                linha["acao"] = "Erro"
-                linha["erros"].append(
-                    "Item duplicado dentro da própria planilha."
-                )
-            else:
-                itens_lidos.add(item_chave)
-
-        linhas.append(linha)
-
-    return linhas
-
-
-def criar_modelo_media_precos_workbook(pregao=None):
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Média de Preços"
-
-    sheet.append(CABECALHOS_MEDIA_PRECOS)
-
-    if pregao:
-        garantir_itens_pregao_para_importacao_media(pregao)
-
-        itens_pregao = (
-            PregaoItem.objects.filter(pregao=pregao)
-            .select_related("item")
-            .order_by("ordem", "item__nome_item")
-        )
-
-        for item_pregao in itens_pregao:
-            sheet.append([
-                item_pregao.item.nome_item,
-                (
-                    float(item_pregao.media_preco)
-                    if item_pregao.media_preco is not None
-                    else None
-                ),
-            ])
-    else:
-        sheet.append([
-            "ARROZ BRANCO",
-            7.50,
-        ])
-
-    sheet.freeze_panes = "A2"
-
-    fill_header = PatternFill("solid", fgColor="0F2F57")
-    font_header = Font(color="FFFFFF", bold=True)
-    border = Border(
-        left=Side(style="thin", color="CBD5E1"),
-        right=Side(style="thin", color="CBD5E1"),
-        top=Side(style="thin", color="CBD5E1"),
-        bottom=Side(style="thin", color="CBD5E1"),
-    )
-
-    for cell in sheet[1]:
-        cell.fill = fill_header
-        cell.font = font_header
-        cell.border = border
-        cell.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-            wrap_text=True,
-        )
-
-    for row in sheet.iter_rows(min_row=2):
-        for cell in row:
-            cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-    sheet.column_dimensions["A"].width = 48
-    sheet.column_dimensions["B"].width = 22
-    sheet.row_dimensions[1].height = 32
-
-    for cell in sheet["B"][1:]:
-        cell.number_format = 'R$ #,##0.00'
-
-    return workbook
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_modelo_media_precos(request):
-    pregao = None
-    pregao_id = request.GET.get("pregao")
-
-    if pregao_id:
-        pregao = Pregao.objects.filter(id=pregao_id).first()
-
-    workbook = criar_modelo_media_precos_workbook(pregao)
-    arquivo = BytesIO()
-    workbook.save(arquivo)
-    arquivo.seek(0)
-
-    nome_arquivo = "modelo_importacao_media_precos.xlsx"
-
-    if pregao:
-        nome_arquivo = (
-            f"media_precos_{pregao.numero}_{pregao.ano}.xlsx"
-            .replace("/", "-")
-            .replace("\\", "-")
-        )
-
-    response = HttpResponse(
-        arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    response["Content-Disposition"] = (
-        f'attachment; filename="{nome_arquivo}"'
-    )
-
-    return response
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def importar_media_precos(request):
-    linhas = []
-    resumo = None
-
-    pregoes = (
+def media_precos(request):
+    pregoes_lista = (
         Pregao.objects.filter(
             status__in=[
                 Pregao.STATUS_NAO_INICIADO,
@@ -3985,18 +1101,12 @@ def importar_media_precos(request):
         .order_by("-ano", "-numero")
     )
 
+    pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
     pregao = None
-    pregao_id = request.POST.get("pregao") or request.GET.get("pregao")
+    itens_pregao = []
 
     if pregao_id:
-        pregao = Pregao.objects.filter(id=pregao_id).first()
-
-    if request.method == "POST":
-        acao = request.POST.get("acao")
-
-        if not pregao:
-            messages.error(request, "Selecione um certame válido.")
-            return redirect("importacoes:media_precos")
+        pregao = get_object_or_404(Pregao, id=pregao_id)
 
         if pregao.status not in [
             Pregao.STATUS_NAO_INICIADO,
@@ -4004,405 +1114,1887 @@ def importar_media_precos(request):
         ]:
             messages.error(
                 request,
-                "Só é possível importar médias em certames não iniciados ou em andamento.",
+                "Só é possível cadastrar médias de preços em certames não iniciados ou em andamento.",
             )
-            return redirect("importacoes:media_precos")
+            return redirect("pregoes:media_precos")
 
-        if not garantir_itens_pregao_para_importacao_media(pregao):
+        garantir_itens_pregao_para_propostas(pregao)
+
+        itens_pregao = (
+            PregaoItem.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("ordem", "item__nome_item")
+        )
+
+    if request.method == "POST":
+        if not pregao:
+            messages.error(request, "Selecione um certame.")
+            return redirect("pregoes:media_precos")
+
+        if pregao.status not in [
+            Pregao.STATUS_NAO_INICIADO,
+            Pregao.STATUS_EM_ANDAMENTO,
+        ]:
             messages.error(
                 request,
-                "Não foi possível localizar itens para este certame. "
-                "Cadastre primeiro o quantitativo do certame e o quantitativo por escola.",
+                "Só é possível alterar médias de preços em certames não iniciados ou em andamento.",
             )
-            return redirect(
-                f"{request.path}?pregao={pregao.id}"
-            )
+            return redirect("pregoes:media_precos")
 
-        if acao == "validar":
-            form = ImportacaoPlanilhaForm(request.POST, request.FILES)
+        erros = []
+        atualizados = 0
 
-            if form.is_valid():
-                arquivo = form.cleaned_data["arquivo"]
+        # Percentual único do certame
+        percentual_texto = request.POST.get("percentual_alerta_media", "").strip()
+
+        if percentual_texto:
+            percentual_texto = percentual_texto.replace(",", ".")
+
+            try:
+                percentual_alerta = Decimal(percentual_texto)
+            except InvalidOperation:
+                erros.append("O percentual de alerta do certame é inválido.")
+                percentual_alerta = None
+
+            if percentual_alerta is not None:
+                if percentual_alerta < 0:
+                    erros.append("O percentual de alerta do certame não pode ser negativo.")
+                elif percentual_alerta > 100:
+                    erros.append("O percentual de alerta do certame não pode ser maior que 100%.")
+        else:
+            percentual_alerta = Decimal("50")
+
+        # Médias continuam sendo individuais por item
+        for item_pregao in itens_pregao:
+            media_texto = request.POST.get(f"media_preco_{item_pregao.id}", "").strip()
+            media_preco = None
+
+            if media_texto:
+                media_texto = media_texto.replace(".", "").replace(",", ".")
 
                 try:
-                    linhas = ler_planilha_media_precos(
-                        arquivo,
-                        pregao,
-                    )
-                except Exception as erro:
-                    messages.error(request, str(erro))
-                    linhas = []
-
-                if linhas:
-                    validos = [
-                        linha for linha in linhas if linha["valido"]
-                    ]
-                    erros = [
-                        linha for linha in linhas if not linha["valido"]
-                    ]
-
-                    request.session["importacao_media_precos_linhas"] = linhas
-                    request.session["importacao_media_precos_pregao_id"] = pregao.id
-
-                    resumo = {
-                        "total": len(linhas),
-                        "validos": len(validos),
-                        "erros": len(erros),
-                        "atualizar": len(validos),
-                        "ignorados": 0,
-                    }
-
-                    if erros:
-                        messages.warning(
-                            request,
-                            "A planilha possui erros. Corrija os itens indicados antes de confirmar a importação.",
-                        )
-                    else:
-                        messages.success(
-                            request,
-                            "Planilha validada com sucesso. Confira a prévia e confirme a importação.",
-                        )
-
-        elif acao == "confirmar":
-            linhas = request.session.get(
-                "importacao_media_precos_linhas",
-                [],
-            )
-            pregao_sessao_id = request.session.get(
-                "importacao_media_precos_pregao_id"
-            )
-
-            if not linhas or not pregao_sessao_id:
-                messages.error(
-                    request,
-                    "Nenhuma importação validada foi encontrada. Envie a planilha novamente.",
-                )
-                return redirect("importacoes:media_precos")
-
-            pregao = Pregao.objects.filter(
-                id=pregao_sessao_id
-            ).first()
-
-            if not pregao:
-                messages.error(
-                    request,
-                    "Certame da importação não encontrado.",
-                )
-                return redirect("importacoes:media_precos")
-
-            # Marca as linhas que o usuário escolheu não importar.
-            for linha in linhas:
-                linha["ignorar"] = (
-                    request.POST.get(f"ignorar_linha_{linha['linha']}") == "on"
-                )
-
-            # Revalida cada linha a partir do estado atual da prévia.
-            # Isso evita manter erros antigos depois que o usuário corrige um item.
-            for linha in linhas:
-                if linha.get("ignorar"):
-                    linha["valido"] = True
-                    linha["acao"] = "Ignorar"
-                    continue
-
-                dados = linha.get("dados", {})
-                erros_novos = []
-
-                # Mantém somente erros de média, pois os erros de item serão
-                # recalculados abaixo com base na correção escolhida.
-                for erro in linha.get("erros", []):
-                    if (
-                        "Média de preço" in erro
-                        or "média de preço" in erro
-                        or "MÉDIA DE PREÇO" in erro
-                    ):
-                        erros_novos.append(erro)
-
-                item_corrigido = obter_item_por_correcao(
-                    request,
-                    linha["linha"],
-                )
-
-                item = None
-                item_pregao = None
-
-                if item_corrigido:
-                    item = item_corrigido
-                else:
-                    item_id = dados.get("item_id")
-                    if item_id:
-                        item = Item.objects.filter(id=item_id, ativo=True).first()
-
-                if not item:
-                    erros_novos.append(
-                        "Item não encontrado no sistema. "
-                        "Selecione o item correto na coluna Correção ou marque Não importar."
-                    )
-                    linha["erro_item"] = True
-                    linha["item_opcoes"] = opcoes_item_certame_para_correcao(
-                        dados.get("item_texto", ""),
-                        pregao,
-                    )
-                    dados["item_pregao_id"] = ""
-                    dados["item_corrigido_id"] = ""
-                    dados["item_corrigido_nome"] = ""
-                else:
-                    item_pregao = PregaoItem.objects.filter(
-                        pregao=pregao,
-                        item=item,
-                    ).first()
-
-                    if not item_pregao:
-                        erros_novos.append(
-                            "O item selecionado não pertence ao certame. "
-                            "Selecione outro item na coluna Correção ou marque Não importar."
-                        )
-                        linha["erro_item"] = True
-                        linha["item_opcoes"] = opcoes_item_para_correcao(
-                            dados.get("item_texto", "")
-                        )
-                        dados["item_pregao_id"] = ""
-                    else:
-                        linha["erro_item"] = False
-                        dados["item_id"] = item.id
-                        dados["item_pregao_id"] = item_pregao.id
-
-                        if item_corrigido:
-                            dados["item_corrigido_id"] = item.id
-                            dados["item_corrigido_nome"] = item.nome_item
-                            dados["item_texto"] = item.nome_item
-
-                linha["dados"] = dados
-                linha["erros"] = erros_novos
-                linha["valido"] = not erros_novos
-                linha["acao"] = "Atualizar" if linha["valido"] else "Erro"
-
-            # Verifica duplicidade somente após aplicar todas as correções e ignorados.
-            # Assim, duplicidades antigas não ficam "presas" depois de uma correção.
-            itens_confirmacao = {}
-
-            for linha in linhas:
-                if linha.get("ignorar") or not linha.get("valido"):
-                    continue
-
-                item_pregao_id = linha["dados"].get("item_pregao_id")
-
-                if not item_pregao_id:
-                    linha["valido"] = False
-                    linha["acao"] = "Erro"
-                    linha["erros"].append(
-                        "Não foi possível identificar o item do certame."
+                    media_preco = Decimal(media_texto)
+                except InvalidOperation:
+                    erros.append(
+                        f"A média de preço do item '{item_pregao.item.nome_item}' é inválida."
                     )
                     continue
 
-                if item_pregao_id in itens_confirmacao:
-                    primeira_linha = itens_confirmacao[item_pregao_id]
-                    linha["valido"] = False
-                    linha["acao"] = "Erro"
-                    linha["erros"].append(
-                        f"O mesmo item também foi informado na linha {primeira_linha}. "
-                        "Marque uma das linhas como Não importar."
+                if media_preco <= 0:
+                    erros.append(
+                        f"A média de preço do item '{item_pregao.item.nome_item}' deve ser maior que zero."
                     )
-                else:
-                    itens_confirmacao[item_pregao_id] = linha["linha"]
-
-            linhas_invalidas = [
-                linha
-                for linha in linhas
-                if not linha.get("ignorar") and not linha.get("valido")
-            ]
-
-            if linhas_invalidas:
-                request.session["importacao_media_precos_linhas"] = linhas
-
-                validos = [
-                    linha
-                    for linha in linhas
-                    if not linha.get("ignorar") and linha.get("valido")
-                ]
-                ignorados = [
-                    linha for linha in linhas if linha.get("ignorar")
-                ]
-
-                resumo = {
-                    "total": len(linhas),
-                    "validos": len(validos),
-                    "erros": len(linhas_invalidas),
-                    "atualizar": len(validos),
-                    "ignorados": len(ignorados),
-                }
-
-                linhas_com_erro = ", ".join(
-                    str(linha["linha"]) for linha in linhas_invalidas
-                )
-
-                messages.error(
-                    request,
-                    f"Ainda existem linhas inválidas: {linhas_com_erro}. "
-                    "Corrija o item indicado ou marque Não importar e confirme novamente.",
-                )
-
-                form = ImportacaoPlanilhaForm()
-                return render(
-                    request,
-                    "importacoes/media_precos.html",
-                    {
-                        "form": form,
-                        "pregoes": pregoes,
-                        "pregao": pregao,
-                        "linhas": linhas,
-                        "resumo": resumo,
-                    },
-                )
-
-            atualizados = 0
-
-            ignorados = 0
-
-            for linha in linhas:
-                if linha.get("ignorar"):
-                    ignorados += 1
                     continue
 
-                dados = linha["dados"]
+            item_pregao.media_preco = media_preco
+            item_pregao.save(update_fields=["media_preco"])
+            atualizados += 1
 
-                item_pregao = PregaoItem.objects.filter(
-                    id=dados["item_pregao_id"],
-                    pregao=pregao,
-                ).first()
+        if erros:
+            for erro in erros:
+                messages.error(request, erro)
 
-                if not item_pregao:
-                    continue
+            return redirect(f"{request.path}?pregao={pregao.id}")
 
-                item_pregao.media_preco = Decimal(
-                    dados["media_preco"]
-                )
-                item_pregao.save(
-                    update_fields=["media_preco"]
-                )
-                atualizados += 1
+        pregao.percentual_alerta_media = percentual_alerta
+        pregao.save(update_fields=["percentual_alerta_media", "atualizado_em"])
 
-            request.session.pop(
-                "importacao_media_precos_linhas",
-                None,
-            )
-            request.session.pop(
-                "importacao_media_precos_pregao_id",
-                None,
-            )
+        messages.success(
+            request,
+            f"Médias de preços salvas com sucesso. Itens atualizados: {atualizados}. "
+            f"Percentual de alerta do certame: {percentual_alerta:.2f}%.",
+        )
 
-            messages.success(
-                request,
-                f"Importação concluída. Médias atualizadas: {atualizados}. "
-                f"Itens ignorados: {ignorados}.",
-            )
-
-            return redirect(
-                f"/pregoes/media-precos/?pregao={pregao.id}"
-            )
-    else:
-        form = ImportacaoPlanilhaForm()
-
-    if request.method == "POST" and "form" not in locals():
-        form = ImportacaoPlanilhaForm()
+        return redirect(f"{request.path}?pregao={pregao.id}")
 
     return render(
         request,
-        "importacoes/media_precos.html",
+        "pregoes/media_precos.html",
         {
-            "form": form,
-            "pregoes": pregoes,
+            "pregoes": pregoes_lista,
             "pregao": pregao,
-            "linhas": linhas,
+            "itens_pregao": itens_pregao,
+        },
+    )
+
+
+
+# ============================================================
+# PROPOSTA DIGITAL - ETAPA 1
+# ============================================================
+
+PROPOSTA_DIGITAL_SIGNING_SALT = "siga-proposta-digital-cnpj-v1"
+PROPOSTA_DIGITAL_CONSULTA_MAX_AGE = 12 * 60 * 60
+PROPOSTA_DIGITAL_MAX_PACOTE_B64 = 2_000_000
+PROPOSTA_DIGITAL_IMPORTACAO_SALT = "siga-proposta-digital-importacao-v1"
+PROPOSTA_DIGITAL_IMPORTACAO_MAX_AGE = 2 * 60 * 60
+PROPOSTA_DIGITAL_ALGORITMO_V1 = "AES-256-GCM/PBKDF2-SHA256/200000"
+PROPOSTA_DIGITAL_ALFABETO_CODIGO = set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+
+
+def _normalizar_codigo_abertura_proposta_digital(valor):
+    texto = str(valor or "").strip().upper()
+
+    # Permite também colar o conteúdo integral do QR Code:
+    # SIGA-PROPOSTA|1|PX7K-....
+    if "|" in texto:
+        texto = texto.split("|")[-1]
+
+    codigo = re.sub(r"[^A-Z0-9]", "", texto)
+    if (
+        len(codigo) != 20
+        or any(caractere not in PROPOSTA_DIGITAL_ALFABETO_CODIGO for caractere in codigo)
+    ):
+        return ""
+
+    return codigo
+
+
+def _perfil_usuario_atual(user):
+    if not user.is_authenticated:
+        return None
+    if user.is_superuser:
+        return "administrador"
+    perfil_acesso = getattr(user, "perfil_acesso", None)
+    return getattr(perfil_acesso, "perfil", None)
+
+
+def _somente_digitos(valor):
+    return re.sub(r"\D", "", str(valor or ""))
+
+
+def _formatar_cnpj_publico(valor):
+    cnpj = _somente_digitos(valor)
+    if len(cnpj) != 14:
+        return str(valor or "")
+    return (
+        f"{cnpj[0:2]}.{cnpj[2:5]}.{cnpj[5:8]}/"
+        f"{cnpj[8:12]}-{cnpj[12:14]}"
+    )
+
+
+def _json_no_store(payload, status=200):
+    response = JsonResponse(payload, status=status)
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
+
+
+def _link_proposta_digital_aberto(link):
+    return (
+        link.ativo
+        and link.pregao.tipo_certame == Pregao.TIPO_PREGAO_PRESENCIAL
+        and link.pregao.status == Pregao.STATUS_NAO_INICIADO
+    )
+
+
+def _hash_estrutura_itens_proposta_digital(pregao):
+    # Novos quantitativos cadastrados depois da criação do link
+    # também passam a fazer parte da estrutura vigente.
+    garantir_itens_pregao_para_propostas(pregao)
+
+    partes = []
+    for item in (
+        PregaoItem.objects.filter(pregao=pregao)
+        .values_list("id", "item_id", "ordem", "quantidade_total")
+        .order_by("ordem", "id")
+    ):
+        partes.append("|".join(str(valor) for valor in item))
+    texto = ";".join(partes)
+    return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+@login_required
+@require_POST
+def gerar_link_proposta_digital(request):
+    """
+    Cria (ou reutiliza) um único link público por Pregão Presencial.
+    O mesmo link pode ser enviado a todos os fornecedores.
+    """
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Você não tem permissão para gerar este link."},
+            status=403,
+        )
+
+    pregao_id = request.POST.get("pregao_id")
+    if not pregao_id:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Selecione o pregão."},
+            status=400,
+        )
+
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "O link de proposta digital só pode ser gerado enquanto "
+                    "o pregão estiver com status Não iniciado."
+                ),
+            },
+            status=400,
+        )
+
+    # O link pode ser criado antes do cadastro dos quantitativos.
+    garantir_itens_pregao_para_propostas(pregao)
+    quantidade_itens = PregaoItem.objects.filter(pregao=pregao).count()
+
+    link, criado = PropostaDigitalLink.objects.get_or_create(
+        pregao=pregao,
+        defaults={
+            "criado_por": request.user,
+            "ativo": True,
+        },
+    )
+
+    if not link.ativo:
+        link.ativo = True
+        link.save(update_fields=["ativo", "atualizado_em"])
+
+    # O UUID continua existindo internamente, mas o endereço apresentado
+    # ao usuário é amigável e baseado no número/ano do pregão.
+    url_publica = request.build_absolute_uri(
+        reverse(
+            "pregoes:proposta_digital_publica_amigavel",
+            kwargs={
+                "numero": pregao.numero,
+                "ano": pregao.ano,
+            },
+        )
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "criado": criado,
+            "url": url_publica,
+            "pregao": f"{pregao.numero}/{pregao.ano}",
+            "quantidade_itens": quantidade_itens,
+        }
+    )
+
+
+@never_cache
+def proposta_digital_publica(request, token):
+    link = get_object_or_404(
+        PropostaDigitalLink.objects.select_related("pregao"),
+        token=token,
+        ativo=True,
+    )
+    pregao = link.pregao
+    link_aberto = _link_proposta_digital_aberto(link)
+
+    itens_pregao = []
+    if link_aberto:
+        garantir_itens_pregao_para_propostas(pregao)
+        itens_pregao = list(
+            PregaoItem.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("ordem", "item__nome_item")
+        )
+
+    tem_itens = bool(itens_pregao)
+    disponivel = link_aberto and tem_itens
+
+    response = render(
+        request,
+        "pregoes/proposta_digital_publica.html",
+        {
+            "link_proposta": link,
+            "pregao": pregao,
+            "itens_pregao": itens_pregao,
+            "disponivel": disponivel,
+            "aguardando_itens": link_aberto and not tem_itens,
+            "estrutura_hash": (
+                _hash_estrutura_itens_proposta_digital(pregao)
+                if disponivel
+                else ""
+            ),
+        },
+    )
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    return response
+
+
+@never_cache
+def proposta_digital_publica_amigavel(request, numero, ano):
+    """
+    Endereço público amigável, por exemplo:
+    /pregoes/proposta-digital/15-2027/
+
+    O link só funciona se já existir um PropostaDigitalLink ativo para
+    o Pregão Presencial informado. O UUID permanece sendo usado
+    internamente nas operações sensíveis da proposta.
+    """
+    pregao = get_object_or_404(
+        Pregao,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+        numero=numero,
+        ano=ano,
+    )
+
+    link = get_object_or_404(
+        PropostaDigitalLink,
+        pregao=pregao,
+        ativo=True,
+    )
+
+    # Reutiliza exatamente a mesma renderização e validações do link UUID.
+    # Não há redirect: o navegador permanece exibindo o endereço amigável.
+    return proposta_digital_publica(request, link.token)
+
+
+@never_cache
+@require_GET
+def consultar_cnpj_proposta_digital(request, token):
+    """
+    Consulta apenas CNPJ + Razão Social na BrasilAPI para conferência do fornecedor.
+    Não consulta cadastro de fornecedores nem vínculo com o pregão.
+    """
+    link = get_object_or_404(
+        PropostaDigitalLink.objects.select_related("pregao"),
+        token=token,
+        ativo=True,
+    )
+
+    if not _link_proposta_digital_aberto(link):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Este link não está mais aberto para recebimento de propostas.",
+            },
+            status=410,
+        )
+
+    cnpj = _somente_digitos(request.GET.get("cnpj"))
+    if len(cnpj) != 14:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Informe um CNPJ com 14 dígitos."},
+            status=400,
+        )
+
+    try:
+        validar_cnpj(cnpj)
+    except ValidationError:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "CNPJ inválido. Confira os números informados.",
+            },
+            status=400,
+        )
+
+    # Antes de consultar qualquer serviço externo, verifica se este CNPJ
+    # já possui uma proposta digital registrada para o mesmo pregão.
+    # O CNPJ continua sem ser armazenado em texto puro: a comparação é feita
+    # somente pelo SHA-256, exatamente como na finalização da proposta.
+    cnpj_hash_consulta = hashlib.sha256(cnpj.encode("utf-8")).hexdigest()
+
+    if PropostaDigital.objects.filter(
+        pregao=link.pregao,
+        cnpj_hash=cnpj_hash_consulta,
+        status__in=[
+            PropostaDigital.STATUS_FINALIZADA,
+            PropostaDigital.STATUS_IMPORTADA,
+        ],
+    ).exists():
+        return _json_no_store(
+            {
+                "ok": False,
+                "proposta_existente": True,
+                "permitir_razao_manual": False,
+                "mensagem": (
+                    "Já existe uma proposta finalizada para este CNPJ neste pregão. "
+                    "Não é necessário preencher uma nova proposta."
+                ),
+            },
+            status=409,
+        )
+
+    razao_social_manual = " ".join(
+        str(request.GET.get("razao_social_manual") or "").strip().split()
+    )
+
+    # Consulta com redundância:
+    # 1) BrasilAPI
+    # 2) Minha Receita
+    # 3) CNPJ.ws (API pública), como fallback adicional.
+    #
+    # Não há qualquer consulta ao cadastro de fornecedores do SIGA aqui.
+    provedores = [
+        (
+            "BrasilAPI",
+            f"https://brasilapi.com.br/api/cnpj/v1/{cnpj}",
+        ),
+        (
+            "Minha Receita",
+            f"https://minhareceita.org/{cnpj}",
+        ),
+        (
+            "CNPJ.ws",
+            f"https://publica.cnpj.ws/cnpj/{cnpj}",
+        ),
+    ]
+
+    dados = None
+    erros_provedores = []
+
+    for nome_provedor, url in provedores:
+        requisicao = Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/154.0 Safari/537.36 SIGA-Escolar/1.0"
+                ),
+            },
+        )
+
+        try:
+            with urlopen(requisicao, timeout=12) as resposta:
+                candidato = json.loads(resposta.read().decode("utf-8"))
+
+            # Os provedores utilizados devolvem "razao_social" no nível
+            # principal. Se houver resposta 200 sem esse campo, o SIGA tenta
+            # automaticamente o próximo serviço.
+            if isinstance(candidato, dict) and str(
+                candidato.get("razao_social") or ""
+            ).strip():
+                dados = candidato
+                break
+
+            erros_provedores.append(f"{nome_provedor}: resposta incompleta")
+
+        except HTTPError as erro:
+            erros_provedores.append(f"{nome_provedor}: HTTP {erro.code}")
+            continue
+
+        except (URLError, TimeoutError, json.JSONDecodeError) as erro:
+            erros_provedores.append(
+                f"{nome_provedor}: falha de conexão/resposta"
+            )
+            continue
+
+    if dados is None:
+        # Se todos os serviços responderam 404, não tratamos isso como
+        # indisponibilidade técnica: o CNPJ simplesmente não foi localizado.
+        if erros_provedores and all("HTTP 404" in erro for erro in erros_provedores):
+            return _json_no_store(
+                {
+                    "ok": False,
+                    "mensagem": "CNPJ não encontrado nas bases públicas de consulta.",
+                    "permitir_razao_manual": False,
+                },
+                status=404,
+            )
+
+        # A digitação manual só é aceita neste ponto: isto é, depois de as
+        # três fontes externas terem sido tentadas sem retornar Razão Social.
+        if razao_social_manual:
+            if len(razao_social_manual) < 3:
+                return _json_no_store(
+                    {
+                        "ok": False,
+                        "mensagem": "Informe uma Razão Social válida.",
+                        "permitir_razao_manual": True,
+                        "cnpj": _formatar_cnpj_publico(cnpj),
+                    },
+                    status=400,
+                )
+
+            if len(razao_social_manual) > 255:
+                return _json_no_store(
+                    {
+                        "ok": False,
+                        "mensagem": "A Razão Social deve possuir no máximo 255 caracteres.",
+                        "permitir_razao_manual": True,
+                        "cnpj": _formatar_cnpj_publico(cnpj),
+                    },
+                    status=400,
+                )
+
+            consulta_token = signing.dumps(
+                {
+                    "pregao_id": link.pregao_id,
+                    "cnpj": cnpj,
+                    "razao_social": razao_social_manual,
+                    "origem_razao_social": "manual",
+                },
+                salt=PROPOSTA_DIGITAL_SIGNING_SALT,
+                compress=True,
+            )
+
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "dados": {
+                        "cnpj": _formatar_cnpj_publico(cnpj),
+                        "razao_social": razao_social_manual,
+                    },
+                    "consulta_token": consulta_token,
+                    "origem_razao_social": "manual",
+                    "aviso": (
+                        "Razão Social informada manualmente porque os serviços "
+                        "públicos de consulta estavam indisponíveis."
+                    ),
+                }
+            )
+
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Os serviços públicos de consulta de CNPJ estão indisponíveis "
+                    "no momento. Informe a Razão Social manualmente para continuar."
+                ),
+                "permitir_razao_manual": True,
+                "cnpj": _formatar_cnpj_publico(cnpj),
+            },
+            status=502,
+        )
+
+    razao_social = str(dados.get("razao_social") or "").strip()
+    if not razao_social:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "A consulta não retornou a Razão Social deste CNPJ.",
+            },
+            status=502,
+        )
+
+    # Token assinado e temporário: comprova no POST final que este CNPJ foi
+    # efetivamente consultado em fonte pública, sem exigir cadastro prévio no SIGA.
+    consulta_token = signing.dumps(
+        {
+            "pregao_id": link.pregao_id,
+            "cnpj": cnpj,
+            "razao_social": razao_social,
+            "origem_razao_social": "consulta_publica",
+        },
+        salt=PROPOSTA_DIGITAL_SIGNING_SALT,
+        compress=True,
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "dados": {
+                "cnpj": _formatar_cnpj_publico(cnpj),
+                "razao_social": razao_social,
+            },
+            "consulta_token": consulta_token,
+            "origem_razao_social": "consulta_publica",
+        }
+    )
+
+
+@never_cache
+@require_POST
+def finalizar_proposta_digital(request, token):
+    link = get_object_or_404(
+        PropostaDigitalLink.objects.select_related("pregao"),
+        token=token,
+        ativo=True,
+    )
+    pregao = link.pregao
+
+    if not _link_proposta_digital_aberto(link):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Este link não está mais aberto para recebimento de propostas.",
+            },
+            status=410,
+        )
+
+    try:
+        dados = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Dados da proposta inválidos."},
+            status=400,
+        )
+
+    consulta_token = str(dados.get("consulta_token") or "")
+    try:
+        consulta = signing.loads(
+            consulta_token,
+            salt=PROPOSTA_DIGITAL_SIGNING_SALT,
+            max_age=PROPOSTA_DIGITAL_CONSULTA_MAX_AGE,
+        )
+    except signing.SignatureExpired:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A consulta do CNPJ expirou. Consulte o CNPJ novamente "
+                    "antes de finalizar a proposta."
+                ),
+            },
+            status=400,
+        )
+    except signing.BadSignature:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "A validação do CNPJ não pôde ser confirmada.",
+            },
+            status=400,
+        )
+
+    if str(consulta.get("pregao_id")) != str(pregao.id):
+        return _json_no_store(
+            {"ok": False, "mensagem": "A consulta do CNPJ pertence a outro pregão."},
+            status=400,
+        )
+
+    cnpj = _somente_digitos(consulta.get("cnpj"))
+    cnpj_hash_esperado = hashlib.sha256(cnpj.encode("utf-8")).hexdigest()
+    cnpj_hash = str(dados.get("cnpj_hash") or "").lower()
+
+    if not hmac.compare_digest(cnpj_hash, cnpj_hash_esperado):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O CNPJ da proposta não corresponde ao CNPJ consultado.",
+            },
+            status=400,
+        )
+
+    codigo_hash = str(dados.get("codigo_hash") or "").lower()
+    conteudo_hash = str(dados.get("conteudo_hash") or "").lower()
+    padrao_hash = re.compile(r"^[0-9a-f]{64}$")
+
+    if not padrao_hash.fullmatch(codigo_hash):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Código de abertura inválido."},
+            status=400,
+        )
+    if not padrao_hash.fullmatch(conteudo_hash):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Hash de integridade inválido."},
+            status=400,
+        )
+
+    pacote_b64 = str(dados.get("pacote_criptografado") or "")
+    iv_b64 = str(dados.get("iv_b64") or "")
+    salt_b64 = str(dados.get("salt_b64") or "")
+
+    if not pacote_b64 or len(pacote_b64) > PROPOSTA_DIGITAL_MAX_PACOTE_B64:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Tamanho do pacote da proposta inválido."},
+            status=400,
+        )
+
+    try:
+        pacote_bytes = base64.b64decode(pacote_b64, validate=True)
+        iv_bytes = base64.b64decode(iv_b64, validate=True)
+        salt_bytes = base64.b64decode(salt_b64, validate=True)
+    except (ValueError, TypeError, binascii.Error):
+        return _json_no_store(
+            {"ok": False, "mensagem": "Pacote criptografado inválido."},
+            status=400,
+        )
+
+    if len(iv_bytes) != 12 or len(salt_bytes) != 16 or len(pacote_bytes) <= 16:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Parâmetros criptográficos inválidos."},
+            status=400,
+        )
+
+    hash_real = hashlib.sha256(pacote_bytes).hexdigest()
+    if not hmac.compare_digest(hash_real, conteudo_hash):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Falha na verificação de integridade do pacote criptografado.",
+            },
+            status=400,
+        )
+
+    try:
+        quantidade_itens = int(dados.get("quantidade_itens"))
+    except (TypeError, ValueError):
+        quantidade_itens = -1
+
+    quantidade_esperada = PregaoItem.objects.filter(pregao=pregao).count()
+    estrutura_hash = str(dados.get("estrutura_hash") or "").lower()
+    estrutura_atual = _hash_estrutura_itens_proposta_digital(pregao)
+    if (
+        quantidade_itens != quantidade_esperada
+        or quantidade_esperada <= 0
+        or not padrao_hash.fullmatch(estrutura_hash)
+        or not hmac.compare_digest(estrutura_hash, estrutura_atual)
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A relação de itens do pregão foi alterada. Atualize a página "
+                    "e confira a proposta antes de finalizar."
+                ),
+            },
+            status=409,
+        )
+
+    # Finalização idempotente:
+    # se o navegador não recebeu a resposta anterior (queda de conexão,
+    # proxy retornando HTML, etc.), ele pode reenviar exatamente a mesma
+    # tentativa. Como o servidor só possui o hash do código, o mesmo
+    # codigo_hash identifica com segurança a mesma abertura.
+    proposta_mesmo_codigo = PropostaDigital.objects.filter(
+        codigo_hash=codigo_hash,
+    ).first()
+
+    if proposta_mesmo_codigo:
+        if (
+            proposta_mesmo_codigo.pregao_id == pregao.id
+            and hmac.compare_digest(
+                proposta_mesmo_codigo.cnpj_hash,
+                cnpj_hash,
+            )
+        ):
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "protocolo": str(proposta_mesmo_codigo.protocolo),
+                    "mensagem": "Proposta registrada com sucesso.",
+                    "ja_registrada": True,
+                },
+                status=200,
+            )
+
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O código de abertura informado não pode ser utilizado.",
+            },
+            status=409,
+        )
+
+    proposta_mesmo_cnpj = PropostaDigital.objects.filter(
+        pregao=pregao,
+        cnpj_hash=cnpj_hash,
+        status__in=[
+            PropostaDigital.STATUS_FINALIZADA,
+            PropostaDigital.STATUS_IMPORTADA,
+        ],
+    ).first()
+
+    if proposta_mesmo_cnpj:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Já existe uma proposta finalizada para este CNPJ neste pregão. "
+                    "Após a finalização, uma nova proposta não pode ser enviada pelo mesmo CNPJ."
+                ),
+            },
+            status=409,
+        )
+
+    try:
+        proposta = PropostaDigital.objects.create(
+            pregao=pregao,
+            link=link,
+            codigo_hash=codigo_hash,
+            cnpj_hash=cnpj_hash,
+            pacote_criptografado=pacote_b64,
+            iv_b64=iv_b64,
+            salt_b64=salt_b64,
+            conteudo_hash=conteudo_hash,
+            estrutura_hash=estrutura_hash,
+            quantidade_itens=quantidade_itens,
+        )
+    except IntegrityError:
+        # Proteção contra concorrência: outra requisição pode ter concluído
+        # entre as verificações acima e o INSERT.
+        proposta_mesmo_codigo = PropostaDigital.objects.filter(
+            codigo_hash=codigo_hash,
+        ).first()
+
+        if (
+            proposta_mesmo_codigo
+            and proposta_mesmo_codigo.pregao_id == pregao.id
+            and hmac.compare_digest(
+                proposta_mesmo_codigo.cnpj_hash,
+                cnpj_hash,
+            )
+        ):
+            return _json_no_store(
+                {
+                    "ok": True,
+                    "protocolo": str(proposta_mesmo_codigo.protocolo),
+                    "mensagem": "Proposta registrada com sucesso.",
+                    "ja_registrada": True,
+                },
+                status=200,
+            )
+
+        if PropostaDigital.objects.filter(
+            pregao=pregao,
+            cnpj_hash=cnpj_hash,
+            status__in=[
+                PropostaDigital.STATUS_FINALIZADA,
+                PropostaDigital.STATUS_IMPORTADA,
+            ],
+        ).exists():
+            mensagem = (
+                "Já existe uma proposta finalizada para este CNPJ neste pregão. "
+                "Após a finalização, uma nova proposta não pode ser enviada pelo mesmo CNPJ."
+            )
+        else:
+            mensagem = "Não foi possível registrar a proposta. Tente novamente sem fechar esta página."
+
+        return _json_no_store(
+            {"ok": False, "mensagem": mensagem},
+            status=409,
+        )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "protocolo": str(proposta.protocolo),
+            "mensagem": "Proposta registrada com sucesso.",
+            "ja_registrada": False,
+        },
+        status=201,
+    )
+
+
+@login_required
+@require_POST
+def localizar_proposta_digital(request):
+    """
+    Localiza uma Proposta Digital pelo código entregue pelo fornecedor.
+
+    O servidor:
+    - usa somente o hash do código para localizar a proposta;
+    - confere Pregão + CNPJ do fornecedor selecionado;
+    - não descriptografa marca ou preços;
+    - devolve o pacote criptografado para abertura no navegador.
+
+    A proposta somente é marcada como importada quando o usuário confirmar
+    o salvamento das Propostas Iniciais.
+    """
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        return _json_no_store(
+            {"ok": False, "mensagem": "Você não tem permissão para importar propostas digitais."},
+            status=403,
+        )
+
+    pregao_id = request.POST.get("pregao_id")
+    fornecedor_id = request.POST.get("fornecedor_id")
+    codigo = _normalizar_codigo_abertura_proposta_digital(
+        request.POST.get("codigo")
+    )
+
+    if not pregao_id or not fornecedor_id:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Selecione o pregão e o fornecedor antes de informar o código.",
+            },
+            status=400,
+        )
+
+    if not codigo:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Código inválido. Confira o código fornecido pelo fornecedor.",
+            },
+            status=400,
+        )
+
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if pregao.status not in [
+        Pregao.STATUS_NAO_INICIADO,
+        Pregao.STATUS_EM_ANDAMENTO,
+    ]:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Este pregão não está disponível para importação de propostas.",
+            },
+            status=409,
+        )
+
+    vinculo_fornecedor = (
+        PregaoFornecedor.objects.filter(
+            pregao=pregao,
+            fornecedor_id=fornecedor_id,
+            ativo_no_pregao=True,
+        )
+        .select_related("fornecedor")
+        .first()
+    )
+
+    if not vinculo_fornecedor:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O fornecedor selecionado não está ativo neste pregão.",
+            },
+            status=400,
+        )
+
+    fornecedor = vinculo_fornecedor.fornecedor
+    cnpj_fornecedor = _somente_digitos(fornecedor.cnpj)
+
+    if len(cnpj_fornecedor) != 14:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "O fornecedor selecionado não possui um CNPJ válido cadastrado. "
+                    "Confira o cadastro antes de importar a proposta."
+                ),
+            },
+            status=400,
+        )
+
+    codigo_hash = hashlib.sha256(codigo.encode("utf-8")).hexdigest()
+
+    proposta = (
+        PropostaDigital.objects.select_related("pregao")
+        .filter(codigo_hash=codigo_hash)
+        .first()
+    )
+
+    # Não revelamos a qual pregão ou fornecedor pertence um código que não confere.
+    mensagem_nao_confere = (
+        "O código informado não corresponde ao fornecedor selecionado "
+        "ou ao pregão atual. Nenhuma informação foi importada."
+    )
+
+    if not proposta or proposta.pregao_id != pregao.id:
+        return _json_no_store(
+            {"ok": False, "mensagem": mensagem_nao_confere},
+            status=404,
+        )
+
+    cnpj_hash_fornecedor = hashlib.sha256(
+        cnpj_fornecedor.encode("utf-8")
+    ).hexdigest()
+
+    if not hmac.compare_digest(
+        proposta.cnpj_hash,
+        cnpj_hash_fornecedor,
+    ):
+        return _json_no_store(
+            {"ok": False, "mensagem": mensagem_nao_confere},
+            status=409,
+        )
+
+    if proposta.status == PropostaDigital.STATUS_IMPORTADA:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Esta Proposta Digital já foi importada anteriormente.",
+            },
+            status=409,
+        )
+
+    if proposta.status != PropostaDigital.STATUS_FINALIZADA:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Esta Proposta Digital não está disponível para importação.",
+            },
+            status=409,
+        )
+
+    if proposta.algoritmo != PROPOSTA_DIGITAL_ALGORITMO_V1:
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "Esta proposta utiliza uma versão de criptografia não suportada "
+                    "por esta versão do SIGA."
+                ),
+            },
+            status=409,
+        )
+
+    estrutura_atual = _hash_estrutura_itens_proposta_digital(pregao)
+    quantidade_atual = PregaoItem.objects.filter(pregao=pregao).count()
+
+    if (
+        proposta.quantidade_itens != quantidade_atual
+        or not hmac.compare_digest(
+            proposta.estrutura_hash,
+            estrutura_atual,
+        )
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A relação de itens deste pregão foi alterada após o envio "
+                    "da proposta. A importação foi bloqueada para conferência."
+                ),
+            },
+            status=409,
+        )
+
+    try:
+        pacote_bytes = base64.b64decode(
+            proposta.pacote_criptografado,
+            validate=True,
+        )
+        iv_bytes = base64.b64decode(proposta.iv_b64, validate=True)
+        salt_bytes = base64.b64decode(proposta.salt_b64, validate=True)
+    except (ValueError, TypeError, binascii.Error):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "O pacote criptografado desta proposta está inválido.",
+            },
+            status=409,
+        )
+
+    if (
+        len(iv_bytes) != 12
+        or len(salt_bytes) != 16
+        or len(pacote_bytes) <= 16
+        or len(proposta.pacote_criptografado) > PROPOSTA_DIGITAL_MAX_PACOTE_B64
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": "Os parâmetros criptográficos desta proposta estão inválidos.",
+            },
+            status=409,
+        )
+
+    conteudo_hash_real = hashlib.sha256(pacote_bytes).hexdigest()
+    if not hmac.compare_digest(
+        conteudo_hash_real,
+        proposta.conteudo_hash,
+    ):
+        return _json_no_store(
+            {
+                "ok": False,
+                "mensagem": (
+                    "A verificação de integridade da Proposta Digital falhou. "
+                    "Nenhuma informação foi importada."
+                ),
+            },
+            status=409,
+        )
+
+    token_importacao = signing.dumps(
+        {
+            "proposta_digital_id": proposta.id,
+            "pregao_id": pregao.id,
+            "fornecedor_id": fornecedor.id,
+            "codigo_hash": proposta.codigo_hash,
+            "estrutura_hash": proposta.estrutura_hash,
+        },
+        salt=PROPOSTA_DIGITAL_IMPORTACAO_SALT,
+        compress=True,
+    )
+
+    return _json_no_store(
+        {
+            "ok": True,
+            "protocolo": str(proposta.protocolo),
+            "pacote_criptografado": proposta.pacote_criptografado,
+            "iv_b64": proposta.iv_b64,
+            "salt_b64": proposta.salt_b64,
+            "conteudo_hash": proposta.conteudo_hash,
+            "estrutura_hash": proposta.estrutura_hash,
+            "quantidade_itens": proposta.quantidade_itens,
+            "algoritmo": proposta.algoritmo,
+            "token_importacao": token_importacao,
+        }
+    )
+
+
+
+@login_required
+def controle_propostas_digitais(request):
+    """Acompanha Propostas Digitais sem quebrar o sigilo antes da importação."""
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        messages.error(
+            request,
+            "Você não tem permissão para acessar o Controle de Propostas Digitais.",
+        )
+        return redirect("pregoes:propostas_iniciais")
+
+    pregoes_lista = (
+        Pregao.objects.filter(tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL)
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
+    )
+
+    pregao_id = request.GET.get("pregao")
+    pregao = None
+    propostas = PropostaDigital.objects.none()
+    resumo = {"total": 0, "finalizadas": 0, "importadas": 0, "invalidadas": 0}
+
+    if pregao_id:
+        pregao = get_object_or_404(
+            Pregao,
+            id=pregao_id,
+            tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+        )
+        propostas = (
+            PropostaDigital.objects.filter(pregao=pregao)
+            .select_related(
+                "fornecedor_importado",
+                "importado_por",
+                "invalidada_por",
+            )
+            .order_by("-finalizada_em", "-id")
+        )
+        resumo = {
+            "total": propostas.count(),
+            "finalizadas": propostas.filter(
+                status=PropostaDigital.STATUS_FINALIZADA
+            ).count(),
+            "importadas": propostas.filter(
+                status=PropostaDigital.STATUS_IMPORTADA
+            ).count(),
+            "invalidadas": propostas.filter(
+                status=PropostaDigital.STATUS_INVALIDADA
+            ).count(),
+        }
+
+    return render(
+        request,
+        "pregoes/controle_propostas_digitais.html",
+        {
+            "pregoes": pregoes_lista,
+            "pregao": pregao,
+            "propostas": propostas,
             "resumo": resumo,
         },
     )
 
 
 @login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def exportacoes(request):
-    configuracao = ConfiguracaoBackup.obter()
-    form_configuracao = ConfiguracaoBackupForm(instance=configuracao)
-    historicos = HistoricoBackup.objects.select_related("solicitado_por").all()[:30]
-    status_integracao = status_integracao_backup()
+@require_POST
+def invalidar_proposta_digital(request, proposta_id):
+    """Invalida uma proposta ainda lacrada, preservando o histórico."""
+    perfil = _perfil_usuario_atual(request.user)
+    if perfil not in {"administrador", "pregoeiro"}:
+        messages.error(
+            request,
+            "Você não tem permissão para invalidar Propostas Digitais.",
+        )
+        return redirect("pregoes:controle_propostas_digitais")
 
-    ultimo_concluido = (
-        HistoricoBackup.objects
-        .filter(status=HistoricoBackup.STATUS_CONCLUIDO)
-        .order_by("-iniciado_em")
-        .first()
+    motivo = " ".join(str(request.POST.get("motivo") or "").strip().split())
+    pregao_retorno = request.POST.get("pregao_id")
+
+    if len(motivo) < 10:
+        messages.error(
+            request,
+            "Informe um motivo para a invalidação com pelo menos 10 caracteres.",
+        )
+        if pregao_retorno:
+            return redirect(
+                f"{reverse('pregoes:controle_propostas_digitais')}?pregao={pregao_retorno}"
+            )
+        return redirect("pregoes:controle_propostas_digitais")
+
+    if len(motivo) > 1000:
+        messages.error(
+            request,
+            "O motivo da invalidação deve possuir no máximo 1000 caracteres.",
+        )
+        if pregao_retorno:
+            return redirect(
+                f"{reverse('pregoes:controle_propostas_digitais')}?pregao={pregao_retorno}"
+            )
+        return redirect("pregoes:controle_propostas_digitais")
+
+    try:
+        with transaction.atomic():
+            proposta = (
+                PropostaDigital.objects.select_for_update()
+                .select_related("pregao")
+                .filter(id=proposta_id)
+                .first()
+            )
+
+            if not proposta:
+                raise ValidationError("A Proposta Digital não foi encontrada.")
+
+            pregao = proposta.pregao
+            pregao_retorno = pregao.id
+
+            if pregao.status != Pregao.STATUS_NAO_INICIADO:
+                raise ValidationError(
+                    "A proposta só pode ser invalidada enquanto o pregão estiver "
+                    "com situação Não iniciado."
+                )
+
+            if proposta.status == PropostaDigital.STATUS_IMPORTADA:
+                raise ValidationError(
+                    "Esta Proposta Digital já foi importada. Esta ação não desfaz "
+                    "propostas iniciais já gravadas."
+                )
+
+            if proposta.status == PropostaDigital.STATUS_INVALIDADA:
+                raise ValidationError("Esta Proposta Digital já está invalidada.")
+
+            if proposta.status != PropostaDigital.STATUS_FINALIZADA:
+                raise ValidationError(
+                    "Esta Proposta Digital não está disponível para invalidação."
+                )
+
+            proposta.status = PropostaDigital.STATUS_INVALIDADA
+            proposta.motivo_invalidacao = motivo
+            proposta.invalidada_por = request.user
+            proposta.invalidada_em = timezone.now()
+            proposta.save(
+                update_fields=[
+                    "status",
+                    "motivo_invalidacao",
+                    "invalidada_por",
+                    "invalidada_em",
+                ]
+            )
+
+    except ValidationError as erro:
+        messages.error(request, str(erro))
+    else:
+        messages.success(
+            request,
+            "Proposta Digital invalidada com sucesso. "
+            "O fornecedor poderá enviar uma nova proposta para este pregão.",
+        )
+
+    if pregao_retorno:
+        return redirect(
+            f"{reverse('pregoes:controle_propostas_digitais')}?pregao={pregao_retorno}"
+        )
+    return redirect("pregoes:controle_propostas_digitais")
+
+def propostas_iniciais(request):
+    pregoes_lista = (
+        Pregao.objects.filter(
+            tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+            status__in=[
+                Pregao.STATUS_NAO_INICIADO,
+                Pregao.STATUS_EM_ANDAMENTO,
+            ],
+        )
+        .prefetch_related("municipios")
+        .order_by("-ano", "-numero")
     )
+
+    modo = request.GET.get("modo") or request.POST.get("modo") or "item"
+    if modo not in ["item", "fornecedor"]:
+        modo = "item"
+
+    pregao_id = request.GET.get("pregao") or request.POST.get("pregao")
+    item_id = request.GET.get("item") or request.POST.get("item")
+    fornecedor_id = request.GET.get("fornecedor") or request.POST.get("fornecedor")
+
+    pregao = None
+    item_pregao = None
+    fornecedor_selecionado = None
+    itens_pregao = []
+    fornecedores = []
+    propostas_salvas = {}
+    pode_controlar_propostas_digitais = (
+        _perfil_usuario_atual(request.user) in {"administrador", "pregoeiro"}
+    )
+    proposta_digital_import_token = (
+        request.POST.get("proposta_digital_import_token", "").strip()
+        if request.method == "POST"
+        else ""
+    )
+
+    if pregao_id:
+        pregao = get_object_or_404(
+            Pregao,
+            id=pregao_id,
+            tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+        )
+
+        if pregao.status not in [
+            Pregao.STATUS_NAO_INICIADO,
+            Pregao.STATUS_EM_ANDAMENTO,
+        ]:
+            messages.error(
+                request,
+                "Só é possível cadastrar propostas iniciais em pregões não iniciados ou em andamento.",
+            )
+            return redirect("pregoes:propostas_iniciais")
+
+        garantir_itens_pregao_para_propostas(pregao)
+
+        itens_pregao = list(
+            PregaoItem.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("ordem", "item__nome_item")
+        )
+
+        fornecedores = [
+            vinculo.fornecedor
+            for vinculo in (
+                PregaoFornecedor.objects.filter(
+                    pregao=pregao,
+                    ativo_no_pregao=True,
+                )
+                .select_related("fornecedor")
+                .order_by("ordem_inicial", "fornecedor__razao_social")
+            )
+        ]
+
+    # ============================================================
+    # MODO 1: CADASTRO POR ITEM
+    # ============================================================
+    if modo == "item" and pregao and item_id:
+        item_pregao = get_object_or_404(
+            PregaoItem.objects.select_related("item"),
+            id=item_id,
+            pregao=pregao,
+        )
+
+        propostas_salvas = {
+            proposta.fornecedor_id: proposta
+            for proposta in PropostaInicialItem.objects.filter(
+                pregao=pregao,
+                pregao_item=item_pregao,
+            )
+        }
+
+    # ============================================================
+    # MODO 2: CADASTRO POR FORNECEDOR
+    # ============================================================
+    if modo == "fornecedor" and pregao and fornecedor_id:
+        fornecedor_selecionado = next(
+            (
+                fornecedor
+                for fornecedor in fornecedores
+                if str(fornecedor.id) == str(fornecedor_id)
+            ),
+            None,
+        )
+
+        if not fornecedor_selecionado:
+            messages.error(
+                request,
+                "O fornecedor selecionado não está ativo neste pregão.",
+            )
+            return redirect(
+                f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+            )
+
+        propostas_salvas = {
+            proposta.pregao_item_id: proposta
+            for proposta in PropostaInicialItem.objects.filter(
+                pregao=pregao,
+                fornecedor=fornecedor_selecionado,
+            )
+        }
+
+    if request.method == "POST":
+        if not pregao:
+            messages.error(request, "Selecione o pregão.")
+            return redirect("pregoes:propostas_iniciais")
+
+        if pregao.status not in [
+            Pregao.STATUS_NAO_INICIADO,
+            Pregao.STATUS_EM_ANDAMENTO,
+        ]:
+            messages.error(
+                request,
+                "Só é possível alterar propostas iniciais em pregões não iniciados ou em andamento.",
+            )
+            return redirect("pregoes:propostas_iniciais")
+
+        # --------------------------------------------------------
+        # SALVAR POR ITEM
+        # --------------------------------------------------------
+        if modo == "item":
+            if not item_pregao:
+                messages.error(request, "Selecione o pregão e o item.")
+                return redirect(
+                    f"{request.path}?modo=item&pregao={pregao.id}"
+                )
+
+            erros = []
+            salvos = 0
+
+            for fornecedor in fornecedores:
+                participa = request.POST.get(
+                    f"participa_{fornecedor.id}"
+                ) == "on"
+                marca = request.POST.get(
+                    f"marca_{fornecedor.id}",
+                    "",
+                ).strip()
+                preco_texto = request.POST.get(
+                    f"preco_inicial_{fornecedor.id}",
+                    "",
+                ).strip()
+
+                if not participa:
+                    PropostaInicialItem.objects.update_or_create(
+                        pregao=pregao,
+                        pregao_item=item_pregao,
+                        fornecedor=fornecedor,
+                        defaults={
+                            "participa": False,
+                            "marca": "",
+                            "preco_inicial": None,
+                        },
+                    )
+                    salvos += 1
+                    continue
+
+                if not marca:
+                    erros.append(
+                        f"Informe a marca para o fornecedor "
+                        f"{fornecedor.razao_social}, ou desmarque a opção Participa."
+                    )
+                    continue
+
+                if not preco_texto:
+                    erros.append(
+                        f"Informe o preço inicial para o fornecedor "
+                        f"{fornecedor.razao_social}, ou desmarque a opção Participa."
+                    )
+                    continue
+
+                preco_texto = preco_texto.replace(",", ".")
+
+                try:
+                    preco_inicial = Decimal(preco_texto)
+                except InvalidOperation:
+                    erros.append(
+                        f"Preço inicial inválido para o fornecedor "
+                        f"{fornecedor.razao_social}."
+                    )
+                    continue
+
+                if preco_inicial <= 0:
+                    erros.append(
+                        f"O preço inicial do fornecedor "
+                        f"{fornecedor.razao_social} deve ser maior que zero."
+                    )
+                    continue
+
+                PropostaInicialItem.objects.update_or_create(
+                    pregao=pregao,
+                    pregao_item=item_pregao,
+                    fornecedor=fornecedor,
+                    defaults={
+                        "participa": True,
+                        "marca": marca,
+                        "preco_inicial": preco_inicial,
+                    },
+                )
+                salvos += 1
+
+            if erros:
+                for erro in erros:
+                    messages.error(request, erro)
+
+                propostas_salvas = {
+                    proposta.fornecedor_id: proposta
+                    for proposta in PropostaInicialItem.objects.filter(
+                        pregao=pregao,
+                        pregao_item=item_pregao,
+                    )
+                }
+
+                return render(
+                    request,
+                    "pregoes/propostas_iniciais.html",
+                    {
+                        "pregoes": pregoes_lista,
+                        "modo": modo,
+                        "pregao": pregao,
+                        "itens_pregao": itens_pregao,
+                        "item_pregao": item_pregao,
+                        "fornecedores": fornecedores,
+                        "fornecedor_selecionado": None,
+                        "propostas_salvas": propostas_salvas,
+                        "proposta_digital_import_token": proposta_digital_import_token,
+            "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
+                    },
+                )
+
+            messages.success(
+                request,
+                f"Propostas iniciais salvas com sucesso. Registros salvos: {salvos}.",
+            )
+
+            acao = request.POST.get("acao")
+
+            if acao == "salvar_avancar":
+                proximo_item = (
+                    PregaoItem.objects.filter(
+                        pregao=pregao,
+                        ordem__gt=item_pregao.ordem,
+                    )
+                    .select_related("item")
+                    .order_by("ordem", "item__nome_item")
+                    .first()
+                )
+
+                if proximo_item:
+                    return redirect(
+                        f"{request.path}?modo=item&pregao={pregao.id}"
+                        f"&item={proximo_item.id}"
+                    )
+
+                messages.success(
+                    request,
+                    "Este era o último item do pregão. Não há próximo item para avançar.",
+                )
+
+            return redirect(
+                f"{request.path}?modo=item&pregao={pregao.id}"
+                f"&item={item_pregao.id}"
+            )
+
+        # --------------------------------------------------------
+        # SALVAR POR FORNECEDOR
+        # --------------------------------------------------------
+        if modo == "fornecedor":
+            if not fornecedor_selecionado:
+                messages.error(
+                    request,
+                    "Selecione o pregão e o fornecedor.",
+                )
+                return redirect(
+                    f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                )
+
+            erros = []
+            dados_validados = []
+            proposta_digital_para_importar_id = None
+
+            # Se a tela foi preenchida por uma Proposta Digital, o token assinado
+            # confirma que o código foi validado para este Pregão + Fornecedor.
+            if proposta_digital_import_token:
+                try:
+                    dados_importacao = signing.loads(
+                        proposta_digital_import_token,
+                        salt=PROPOSTA_DIGITAL_IMPORTACAO_SALT,
+                        max_age=PROPOSTA_DIGITAL_IMPORTACAO_MAX_AGE,
+                    )
+                except signing.SignatureExpired:
+                    erros.append(
+                        "A autorização da Proposta Digital expirou. "
+                        "Informe o código novamente antes de salvar."
+                    )
+                except signing.BadSignature:
+                    erros.append(
+                        "Não foi possível validar a Proposta Digital importada. "
+                        "Informe o código novamente."
+                    )
+                else:
+                    if (
+                        str(dados_importacao.get("pregao_id")) != str(pregao.id)
+                        or str(dados_importacao.get("fornecedor_id"))
+                        != str(fornecedor_selecionado.id)
+                    ):
+                        erros.append(
+                            "A Proposta Digital importada não corresponde ao "
+                            "pregão/fornecedor selecionado."
+                        )
+                    else:
+                        proposta_digital_para_importar_id = (
+                            dados_importacao.get("proposta_digital_id")
+                        )
+                        proposta_digital_validacao = (
+                            PropostaDigital.objects.filter(
+                                id=proposta_digital_para_importar_id,
+                                pregao=pregao,
+                                status=PropostaDigital.STATUS_FINALIZADA,
+                            )
+                            .first()
+                        )
+
+                        if not proposta_digital_validacao:
+                            erros.append(
+                                "Esta Proposta Digital não está mais disponível "
+                                "para importação."
+                            )
+                        else:
+                            cnpj_fornecedor = _somente_digitos(
+                                fornecedor_selecionado.cnpj
+                            )
+                            cnpj_hash_fornecedor = hashlib.sha256(
+                                cnpj_fornecedor.encode("utf-8")
+                            ).hexdigest()
+
+                            if (
+                                len(cnpj_fornecedor) != 14
+                                or not hmac.compare_digest(
+                                    proposta_digital_validacao.cnpj_hash,
+                                    cnpj_hash_fornecedor,
+                                )
+                                or not hmac.compare_digest(
+                                    proposta_digital_validacao.codigo_hash,
+                                    str(dados_importacao.get("codigo_hash") or ""),
+                                )
+                                or not hmac.compare_digest(
+                                    proposta_digital_validacao.estrutura_hash,
+                                    _hash_estrutura_itens_proposta_digital(pregao),
+                                )
+                            ):
+                                erros.append(
+                                    "A validação da Proposta Digital não confere. "
+                                    "Informe o código novamente."
+                                )
+
+            # Primeiro valida tudo. Só grava depois que todas as linhas
+            # selecionadas estiverem corretas.
+            for pi in itens_pregao:
+                participa = request.POST.get(
+                    f"participa_item_{pi.id}"
+                ) == "on"
+                marca = request.POST.get(
+                    f"marca_item_{pi.id}",
+                    "",
+                ).strip()
+                preco_texto = request.POST.get(
+                    f"preco_item_{pi.id}",
+                    "",
+                ).strip()
+
+                if not participa:
+                    dados_validados.append(
+                        {
+                            "pregao_item": pi,
+                            "participa": False,
+                            "marca": "",
+                            "preco_inicial": None,
+                        }
+                    )
+                    continue
+
+                if not marca:
+                    erros.append(
+                        f"Informe a marca do item {pi.ordem} - "
+                        f"{pi.item.nome_item}, ou desmarque a participação."
+                    )
+                    continue
+
+                if not preco_texto:
+                    erros.append(
+                        f"Informe o preço inicial do item {pi.ordem} - "
+                        f"{pi.item.nome_item}, ou desmarque a participação."
+                    )
+                    continue
+
+                preco_normalizado = preco_texto.replace(",", ".")
+
+                try:
+                    preco_inicial = Decimal(preco_normalizado)
+                except InvalidOperation:
+                    erros.append(
+                        f"Preço inicial inválido para o item {pi.ordem} - "
+                        f"{pi.item.nome_item}."
+                    )
+                    continue
+
+                if preco_inicial <= 0:
+                    erros.append(
+                        f"O preço inicial do item {pi.ordem} - "
+                        f"{pi.item.nome_item} deve ser maior que zero."
+                    )
+                    continue
+
+                dados_validados.append(
+                    {
+                        "pregao_item": pi,
+                        "participa": True,
+                        "marca": marca,
+                        "preco_inicial": preco_inicial,
+                    }
+                )
+
+            if erros:
+                for erro in erros:
+                    messages.error(request, erro)
+
+                # Mantém na tela exatamente o que o usuário acabou de digitar.
+                propostas_digitadas = {}
+                for pi in itens_pregao:
+                    participa = request.POST.get(
+                        f"participa_item_{pi.id}"
+                    ) == "on"
+
+                    propostas_digitadas[pi.id] = {
+                        "participa": participa,
+                        "marca": request.POST.get(
+                            f"marca_item_{pi.id}",
+                            "",
+                        ).strip(),
+                        "preco_inicial": request.POST.get(
+                            f"preco_item_{pi.id}",
+                            "",
+                        ).strip(),
+                    }
+
+                return render(
+                    request,
+                    "pregoes/propostas_iniciais.html",
+                    {
+                        "pregoes": pregoes_lista,
+                        "modo": modo,
+                        "pregao": pregao,
+                        "itens_pregao": itens_pregao,
+                        "item_pregao": None,
+                        "fornecedores": fornecedores,
+                        "fornecedor_selecionado": fornecedor_selecionado,
+                        "propostas_salvas": propostas_digitadas,
+                        "proposta_digital_import_token": proposta_digital_import_token,
+            "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
+                    },
+                )
+
+            salvos = 0
+            participantes = 0
+
+            try:
+                with transaction.atomic():
+                    proposta_digital_bloqueada = None
+
+                    if proposta_digital_para_importar_id:
+                        proposta_digital_bloqueada = (
+                            PropostaDigital.objects.select_for_update()
+                            .filter(
+                                id=proposta_digital_para_importar_id,
+                                pregao=pregao,
+                            )
+                            .first()
+                        )
+
+                        if (
+                            not proposta_digital_bloqueada
+                            or proposta_digital_bloqueada.status
+                            != PropostaDigital.STATUS_FINALIZADA
+                        ):
+                            raise ValidationError(
+                                "Esta Proposta Digital já foi importada, invalidada "
+                                "ou não está mais disponível."
+                            )
+
+                        cnpj_fornecedor = _somente_digitos(
+                            fornecedor_selecionado.cnpj
+                        )
+                        cnpj_hash_fornecedor = hashlib.sha256(
+                            cnpj_fornecedor.encode("utf-8")
+                        ).hexdigest()
+
+                        if (
+                            len(cnpj_fornecedor) != 14
+                            or not hmac.compare_digest(
+                                proposta_digital_bloqueada.cnpj_hash,
+                                cnpj_hash_fornecedor,
+                            )
+                            or not hmac.compare_digest(
+                                proposta_digital_bloqueada.estrutura_hash,
+                                _hash_estrutura_itens_proposta_digital(pregao),
+                            )
+                        ):
+                            raise ValidationError(
+                                "A Proposta Digital não corresponde ao "
+                                "pregão/fornecedor selecionado."
+                            )
+
+                    for dados in dados_validados:
+                        PropostaInicialItem.objects.update_or_create(
+                            pregao=pregao,
+                            pregao_item=dados["pregao_item"],
+                            fornecedor=fornecedor_selecionado,
+                            defaults={
+                                "participa": dados["participa"],
+                                "marca": dados["marca"],
+                                "preco_inicial": dados["preco_inicial"],
+                            },
+                        )
+                        salvos += 1
+                        if dados["participa"]:
+                            participantes += 1
+
+                    if proposta_digital_bloqueada:
+                        proposta_digital_bloqueada.status = (
+                            PropostaDigital.STATUS_IMPORTADA
+                        )
+                        proposta_digital_bloqueada.fornecedor_importado = (
+                            fornecedor_selecionado
+                        )
+                        proposta_digital_bloqueada.importado_por = request.user
+                        proposta_digital_bloqueada.importado_em = timezone.now()
+                        proposta_digital_bloqueada.save(
+                            update_fields=[
+                                "status",
+                                "fornecedor_importado",
+                                "importado_por",
+                                "importado_em",
+                            ]
+                        )
+
+            except ValidationError as erro_importacao:
+                messages.error(request, str(erro_importacao))
+                return redirect(
+                    f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                    f"&fornecedor={fornecedor_selecionado.id}"
+                )
+
+            mensagem_sucesso = (
+                f"Propostas do fornecedor {fornecedor_selecionado.razao_social} "
+                f"salvas com sucesso. Itens participantes: {participantes}. "
+                f"Registros processados: {salvos}."
+            )
+
+            if proposta_digital_para_importar_id:
+                mensagem_sucesso += " Proposta Digital marcada como importada."
+
+            messages.success(request, mensagem_sucesso)
+
+            return redirect(
+                f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                f"&fornecedor={fornecedor_selecionado.id}"
+            )
 
     return render(
         request,
-        "importacoes/exportacoes.html",
+        "pregoes/propostas_iniciais.html",
         {
-            "configuracao_backup": configuracao,
-            "form_configuracao_backup": form_configuracao,
-            "historicos_backup": historicos,
-            "ultimo_backup_concluido": ultimo_concluido,
-            "status_integracao_backup": status_integracao,
-            "integracao_backup_pronta": all(status_integracao.values()),
+            "pregoes": pregoes_lista,
+            "modo": modo,
+            "pregao": pregao,
+            "itens_pregao": itens_pregao,
+            "item_pregao": item_pregao,
+            "fornecedores": fornecedores,
+            "fornecedor_selecionado": fornecedor_selecionado,
+            "propostas_salvas": propostas_salvas,
+            "proposta_digital_import_token": proposta_digital_import_token,
+            "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
         },
     )
 
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-@require_POST
-def salvar_configuracao_backup(request):
-    configuracao = ConfiguracaoBackup.obter()
-    form = ConfiguracaoBackupForm(request.POST, instance=configuracao)
-
-    if form.is_valid():
-        objeto = form.save(commit=False)
-        objeto.timezone = "America/Cuiaba"
-        objeto.atualizado_por = request.user
-        objeto.save()
-        messages.success(
-            request,
-            f"Configuração do backup diário salva. Horário: {objeto.horario_diario:%H:%M} (Mato Grosso).",
-        )
-    else:
-        messages.error(request, "Não foi possível salvar a configuração do backup.")
-
-    return redirect("importacoes:exportacoes")
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-@require_POST
-def gerar_backup_banco(request):
-    try:
-        historico = executar_backup_postgresql(
-            tipo=HistoricoBackup.TIPO_MANUAL,
-            usuario=request.user,
-        )
-        messages.success(
-            request,
-            f"Backup técnico concluído e enviado ao Google Drive: {historico.nome_arquivo}",
-        )
-    except BackupBancoErro as erro:
-        messages.error(request, f"Não foi possível gerar o backup técnico: {erro}")
-
-    return redirect("importacoes:exportacoes")
-
-
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-def baixar_backup_completo(request):
-    workbook = criar_backup_completo_workbook(usuario=request.user)
-    arquivo = BytesIO()
-    workbook.save(arquivo)
-    arquivo.seek(0)
-
-    data_arquivo = timezone.localtime().strftime("%Y-%m-%d_%H-%M")
-    nome_arquivo = f"backup_sistema_pregoes_{data_arquivo}.xlsx"
-
-    response = HttpResponse(
-        arquivo.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    response["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
-
-    return response
