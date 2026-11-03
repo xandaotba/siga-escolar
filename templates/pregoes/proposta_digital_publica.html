@@ -357,7 +357,7 @@
                                     {% if pi.item.descricao %}<small>{{ pi.item.descricao }}</small>{% endif %}
                                 </td>
                                 <td class="unidade">{{ pi.item.get_unidade_medida_display|default:pi.item.unidade_medida }}</td>
-                                <td class="qtd">{{ pi.quantidade_total }}</td>
+                                <td class="qtd">{{ pi.quantidade_total|floatformat:"0" }}</td>
                                 <td><input type="text" class="marca" maxlength="150" placeholder="Marca"></td>
                                 <td><input type="text" class="preco" inputmode="decimal" maxlength="20" placeholder="0,00"></td>
                                 <td class="nao-col"><input type="checkbox" class="nao-cotar" aria-label="Não cotar item {{ pi.ordem }}"></td>
