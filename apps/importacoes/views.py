@@ -401,7 +401,6 @@ def importar_fornecedores(request):
                         "erros": len(erros),
                         "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                         "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                        "ignorados": 0,
                     }
 
                     if erros:
@@ -421,10 +420,7 @@ def importar_fornecedores(request):
                 messages.error(request, "Nenhuma importação validada foi encontrada. Envie a planilha novamente.")
                 return redirect("importacoes:fornecedores")
 
-            linhas_invalidas = [
-                linha for linha in linhas
-                if not linha.get("ignorar") and not linha.get("valido")
-            ]
+            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
 
             if linhas_invalidas:
                 messages.error(request, "Ainda existem linhas inválidas. Corrija a planilha e valide novamente.")
@@ -432,13 +428,8 @@ def importar_fornecedores(request):
 
             criados = 0
             atualizados = 0
-            ignorados = 0
 
             for linha in linhas:
-                if linha.get("ignorar"):
-                    ignorados += 1
-                    continue
-
                 dados = linha["dados"]
                 cnpj_digitos = somente_digitos(dados["cnpj"])
 
@@ -952,24 +943,14 @@ def importar_escolas(request):
                     "Ainda existem linhas inválidas. Se o erro for município, selecione o município correto na coluna Correção e confirme novamente.",
                 )
 
-                ignorados_lista = [
-                    linha for linha in linhas if linha.get("ignorar")
-                ]
-                validos = [
-                    linha for linha in linhas
-                    if linha.get("valido") and not linha.get("ignorar")
-                ]
-                erros = [
-                    linha for linha in linhas
-                    if not linha.get("valido") and not linha.get("ignorar")
-                ]
+                validos = [linha for linha in linhas if linha.get("valido")]
+                erros = [linha for linha in linhas if not linha.get("valido")]
                 resumo = {
                     "total": len(linhas),
                     "validos": len(validos),
                     "erros": len(erros),
                     "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                     "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
-                    "ignorados": len(ignorados_lista),
                 }
 
                 form = ImportacaoPlanilhaForm()
@@ -2103,6 +2084,7 @@ def importar_quantitativo_pregao(request):
                         "erros": len(erros),
                         "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                         "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                        "ignorados": 0,
                     }
 
                     if erros:
@@ -2138,8 +2120,8 @@ def importar_quantitativo_pregao(request):
                 return redirect("importacoes:quantitativo_pregao")
 
             # Aplica correções de item e unidade feitas na tela de prévia.
-            # Linhas marcadas como "Não importar" não bloqueiam a confirmação
-            # e não serão gravadas no banco.
+            # Linhas marcadas como "Não importar" deixam de participar de todas
+            # as validações posteriores e não serão gravadas.
             for linha in linhas:
                 linha["ignorar"] = (
                     request.POST.get(f"nao_importar_{linha['linha']}") == "1"
@@ -2218,11 +2200,29 @@ def importar_quantitativo_pregao(request):
                     linha["acao"] = "Erro"
 
             # Verifica duplicidade após as correções.
+            # Remove mensagens antigas para que uma correção de item possa
+            # realmente resolver uma duplicidade detectada na prévia anterior.
             itens_finais = set()
 
             for linha in linhas:
                 if linha.get("ignorar"):
                     continue
+
+                linha["erros"] = [
+                    erro
+                    for erro in linha.get("erros", [])
+                    if "Item duplicado dentro da própria planilha" not in erro
+                ]
+
+                # Se a única pendência era uma duplicidade antiga e a correção
+                # resolveu o problema, reabilita a linha antes de recalcular
+                # as duplicidades finais.
+                if not linha.get("erros"):
+                    linha["valido"] = True
+                    linha["acao"] = "Atualizar" if QuantitativoPregao.objects.filter(
+                        pregao=pregao,
+                        item_id=linha["dados"].get("item_id"),
+                    ).exists() else "Criar"
 
                 item_id = linha["dados"].get("item_id")
 
@@ -2234,7 +2234,10 @@ def importar_quantitativo_pregao(request):
                     else:
                         itens_finais.add(item_id)
 
-            linhas_invalidas = [linha for linha in linhas if not linha.get("valido")]
+            linhas_invalidas = [
+                linha for linha in linhas
+                if not linha.get("ignorar") and not linha.get("valido")
+            ]
 
             if linhas_invalidas:
                 request.session["importacao_quantitativo_pregao_linhas"] = linhas
@@ -2244,14 +2247,24 @@ def importar_quantitativo_pregao(request):
                     "Ainda existem linhas inválidas. Corrija a planilha ou selecione item/unidade correta na prévia e confirme novamente.",
                 )
 
-                validos = [linha for linha in linhas if linha.get("valido")]
-                erros = [linha for linha in linhas if not linha.get("valido")]
+                ignorados_lista = [
+                    linha for linha in linhas if linha.get("ignorar")
+                ]
+                validos = [
+                    linha for linha in linhas
+                    if linha.get("valido") and not linha.get("ignorar")
+                ]
+                erros = [
+                    linha for linha in linhas
+                    if not linha.get("valido") and not linha.get("ignorar")
+                ]
                 resumo = {
                     "total": len(linhas),
                     "validos": len(validos),
                     "erros": len(erros),
                     "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
                     "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                    "ignorados": len(ignorados_lista),
                 }
 
                 form = ImportacaoPlanilhaForm()
@@ -2269,31 +2282,121 @@ def importar_quantitativo_pregao(request):
 
             criados = 0
             atualizados = 0
+            ignorados = 0
+            linha_em_processamento = None
 
-            for linha in linhas:
-                dados = linha["dados"]
-                item = Item.objects.get(id=dados["item_id"])
-                quantidade = Decimal(str(dados["quantidade"]))
+            try:
+                with transaction.atomic():
+                    for linha in linhas:
+                        if linha.get("ignorar"):
+                            ignorados += 1
+                            continue
 
-                quantitativo = QuantitativoPregao.objects.filter(
-                    pregao=pregao,
-                    item=item,
-                ).first()
+                        linha_em_processamento = linha
+                        dados = linha["dados"]
 
-                if quantitativo:
-                    quantitativo.quantidade = quantidade
-                    quantitativo.full_clean()
-                    quantitativo.save()
-                    atualizados += 1
+                        item = Item.objects.filter(
+                            id=dados.get("item_id")
+                        ).first()
+
+                        if not item:
+                            raise ValidationError(
+                                "Item não encontrado no momento da gravação."
+                            )
+
+                        quantidade = decimal_planilha(dados.get("quantidade"))
+
+                        if quantidade is None or quantidade <= 0:
+                            raise ValidationError(
+                                "Quantidade inválida no momento da gravação."
+                            )
+
+                        quantitativo = QuantitativoPregao.objects.filter(
+                            pregao=pregao,
+                            item=item,
+                        ).first()
+
+                        if quantitativo:
+                            quantitativo.quantidade = quantidade
+                            quantitativo.full_clean()
+                            quantitativo.save()
+                            atualizados += 1
+                        else:
+                            quantitativo = QuantitativoPregao(
+                                pregao=pregao,
+                                item=item,
+                                quantidade=quantidade,
+                            )
+                            quantitativo.full_clean()
+                            quantitativo.save()
+                            criados += 1
+
+            except Exception as erro:
+                logger.exception(
+                    "Erro ao confirmar importação de quantitativo por certame. Pregão=%s",
+                    getattr(pregao, "id", None),
+                )
+
+                numero_linha = (
+                    linha_em_processamento.get("linha")
+                    if linha_em_processamento
+                    else "não identificada"
+                )
+
+                if isinstance(erro, ValidationError):
+                    if hasattr(erro, "message_dict"):
+                        partes = []
+                        for campo, mensagens_campo in erro.message_dict.items():
+                            partes.append(
+                                f"{campo}: {', '.join(str(m) for m in mensagens_campo)}"
+                            )
+                        detalhe_erro = "; ".join(partes)
+                    else:
+                        detalhe_erro = "; ".join(str(m) for m in erro.messages)
                 else:
-                    quantitativo = QuantitativoPregao(
-                        pregao=pregao,
-                        item=item,
-                        quantidade=quantidade,
-                    )
-                    quantitativo.full_clean()
-                    quantitativo.save()
-                    criados += 1
+                    detalhe_erro = str(erro).strip() or erro.__class__.__name__
+
+                request.session["importacao_quantitativo_pregao_linhas"] = linhas
+
+                messages.error(
+                    request,
+                    f"A importação não foi gravada. Erro na linha {numero_linha}: "
+                    f"{detalhe_erro}. Nenhuma linha desta tentativa foi salva.",
+                )
+
+                ignorados_lista = [
+                    linha for linha in linhas if linha.get("ignorar")
+                ]
+                validos = [
+                    linha for linha in linhas
+                    if linha.get("valido") and not linha.get("ignorar")
+                ]
+                erros = [
+                    linha for linha in linhas
+                    if not linha.get("valido") and not linha.get("ignorar")
+                ]
+
+                resumo = {
+                    "total": len(linhas),
+                    "validos": len(validos),
+                    "erros": len(erros),
+                    "criar": len([linha for linha in validos if linha["acao"] == "Criar"]),
+                    "atualizar": len([linha for linha in validos if linha["acao"] == "Atualizar"]),
+                    "ignorados": len(ignorados_lista),
+                }
+
+                form = ImportacaoPlanilhaForm()
+                return render(
+                    request,
+                    "importacoes/quantitativo_pregao.html",
+                    {
+                        "form": form,
+                        "linhas": linhas,
+                        "resumo": resumo,
+                        "pregoes": pregoes,
+                        "pregao": pregao,
+                    },
+                )
 
             request.session.pop("importacao_quantitativo_pregao_linhas", None)
             request.session.pop("importacao_quantitativo_pregao_pregao_id", None)
