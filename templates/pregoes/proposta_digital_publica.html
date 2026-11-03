@@ -253,11 +253,19 @@
 </header>
 
 <main class="conteudo">
-    {% if not disponivel %}
+    {% if aguardando_itens %}
+        <section class="card fechado">
+            <h2>Proposta em preparação</h2>
+            <p class="muted">
+                Este é o link oficial da Proposta Digital deste pregão, mas os itens ainda não foram disponibilizados para preenchimento.
+                A relação será atualizada automaticamente após o cadastro dos quantitativos. Acesse este mesmo link novamente mais tarde.
+            </p>
+        </section>
+    {% elif not disponivel %}
         <section class="card fechado">
             <h2>Recebimento indisponível</h2>
             <p class="muted">
-                Este link não está aberto para novas propostas. O recebimento é permitido somente antes do início do pregão e enquanto houver itens disponíveis.
+                Este link não está aberto para novas propostas. O recebimento é permitido somente antes do início do pregão.
             </p>
         </section>
     {% else %}

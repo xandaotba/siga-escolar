@@ -1012,10 +1012,8 @@ def itens_por_pregao(request, pregao_id):
         tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
     )
 
-    # Se ainda não houver PregaoItem, tenta criar a partir dos quantitativos,
-    # mas somente se já existir quantitativo por escola.
-    if not PregaoItem.objects.filter(pregao=pregao).exists():
-        garantir_itens_pregao_para_propostas(pregao)
+    # Mantém a relação de itens sincronizada com o quantitativo atual.
+    garantir_itens_pregao_para_propostas(pregao)
 
     itens = (
         PregaoItem.objects.filter(pregao=pregao)
@@ -1038,39 +1036,57 @@ def itens_por_pregao(request, pregao_id):
 
 def garantir_itens_pregao_para_propostas(pregao):
     """
-    Para pregões ainda não iniciados, pode não existir PregaoItem.
-    Esta função cria os PregaoItem a partir do QuantitativoPregao,
-    mas somente se já existir pelo menos um QuantitativoEscola para o pregão.
+    Sincroniza PregaoItem com o QuantitativoPregao atual.
+
+    Regras:
+    - não exige QuantitativoEscola;
+    - cria itens novos adicionados depois ao quantitativo do certame;
+    - atualiza quantidade_total dos itens já existentes;
+    - preserva os PregaoItem existentes e seus IDs;
+    - itens novos recebem ordem após a maior ordem já existente.
     """
-
-    existe_quantitativo_escola = QuantitativoEscola.objects.filter(
-        pregao=pregao
-    ).exists()
-
-    if not existe_quantitativo_escola:
-        return False
-
-    quantitativos_pregao = (
+    quantitativos_pregao = list(
         QuantitativoPregao.objects.filter(pregao=pregao)
         .select_related("item")
         .order_by("item__nome_item")
     )
 
-    ordem = 1
-
-    for qp in quantitativos_pregao:
-        PregaoItem.objects.get_or_create(
-            pregao=pregao,
-            item=qp.item,
-            defaults={
-                "ordem": ordem,
-                "quantidade_total": qp.quantidade,
-            },
+    with transaction.atomic():
+        itens_existentes = list(
+            PregaoItem.objects.select_for_update()
+            .filter(pregao=pregao)
+            .order_by("ordem", "id")
         )
 
-        ordem += 1
+        existentes_por_item = {
+            item_pregao.item_id: item_pregao
+            for item_pregao in itens_existentes
+        }
 
-    return True
+        ultima_ordem = max(
+            (item_pregao.ordem for item_pregao in itens_existentes),
+            default=0,
+        )
+
+        for quantitativo in quantitativos_pregao:
+            item_pregao = existentes_por_item.get(quantitativo.item_id)
+
+            if item_pregao:
+                if item_pregao.quantidade_total != quantitativo.quantidade:
+                    item_pregao.quantidade_total = quantitativo.quantidade
+                    item_pregao.save(update_fields=["quantidade_total"])
+                continue
+
+            ultima_ordem += 1
+            novo_item = PregaoItem.objects.create(
+                pregao=pregao,
+                item=quantitativo.item,
+                ordem=ultima_ordem,
+                quantidade_total=quantitativo.quantidade,
+            )
+            existentes_por_item[quantitativo.item_id] = novo_item
+
+    return len(quantitativos_pregao)
 
 
 def media_precos(request):
@@ -1102,8 +1118,7 @@ def media_precos(request):
             )
             return redirect("pregoes:media_precos")
 
-        if not PregaoItem.objects.filter(pregao=pregao).exists():
-            garantir_itens_pregao_para_propostas(pregao)
+        garantir_itens_pregao_para_propostas(pregao)
 
         itens_pregao = (
             PregaoItem.objects.filter(pregao=pregao)
@@ -1274,6 +1289,10 @@ def _link_proposta_digital_aberto(link):
 
 
 def _hash_estrutura_itens_proposta_digital(pregao):
+    # Novos quantitativos cadastrados depois da criação do link
+    # também passam a fazer parte da estrutura vigente.
+    garantir_itens_pregao_para_propostas(pregao)
+
     partes = []
     for item in (
         PregaoItem.objects.filter(pregao=pregao)
@@ -1324,21 +1343,9 @@ def gerar_link_proposta_digital(request):
             status=400,
         )
 
-    if not PregaoItem.objects.filter(pregao=pregao).exists():
-        garantir_itens_pregao_para_propostas(pregao)
-
+    # O link pode ser criado antes do cadastro dos quantitativos.
+    garantir_itens_pregao_para_propostas(pregao)
     quantidade_itens = PregaoItem.objects.filter(pregao=pregao).count()
-    if quantidade_itens == 0:
-        return _json_no_store(
-            {
-                "ok": False,
-                "mensagem": (
-                    "Este pregão ainda não possui itens disponíveis para a proposta. "
-                    "Confira os quantitativos do pregão/escolas antes de gerar o link."
-                ),
-            },
-            status=400,
-        )
 
     link, criado = PropostaDigitalLink.objects.get_or_create(
         pregao=pregao,
@@ -1375,15 +1382,19 @@ def proposta_digital_publica(request, token):
         ativo=True,
     )
     pregao = link.pregao
-    disponivel = _link_proposta_digital_aberto(link)
+    link_aberto = _link_proposta_digital_aberto(link)
 
     itens_pregao = []
-    if disponivel:
+    if link_aberto:
+        garantir_itens_pregao_para_propostas(pregao)
         itens_pregao = list(
             PregaoItem.objects.filter(pregao=pregao)
             .select_related("item")
             .order_by("ordem", "item__nome_item")
         )
+
+    tem_itens = bool(itens_pregao)
+    disponivel = link_aberto and tem_itens
 
     response = render(
         request,
@@ -1392,10 +1403,11 @@ def proposta_digital_publica(request, token):
             "link_proposta": link,
             "pregao": pregao,
             "itens_pregao": itens_pregao,
-            "disponivel": disponivel and bool(itens_pregao),
+            "disponivel": disponivel,
+            "aguardando_itens": link_aberto and not tem_itens,
             "estrutura_hash": (
                 _hash_estrutura_itens_proposta_digital(pregao)
-                if disponivel and itens_pregao
+                if disponivel
                 else ""
             ),
         },
@@ -2398,8 +2410,7 @@ def propostas_iniciais(request):
             )
             return redirect("pregoes:propostas_iniciais")
 
-        if not PregaoItem.objects.filter(pregao=pregao).exists():
-            garantir_itens_pregao_para_propostas(pregao)
+        garantir_itens_pregao_para_propostas(pregao)
 
         itens_pregao = list(
             PregaoItem.objects.filter(pregao=pregao)
