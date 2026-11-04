@@ -1038,23 +1038,26 @@ def garantir_itens_pregao_para_propostas(pregao):
     """
     Sincroniza PregaoItem com o QuantitativoPregao atual.
 
-    Regras:
-    - não exige QuantitativoEscola;
-    - cria itens novos adicionados depois ao quantitativo do certame;
-    - atualiza quantidade_total dos itens já existentes;
-    - preserva os PregaoItem existentes e seus IDs;
-    - itens novos recebem ordem após a maior ordem já existente.
+    Enquanto o pregão estiver "Não iniciado":
+    - itens com quantitativo atual recebem ordem 1..N em ordem alfabética;
+    - itens novos são criados automaticamente;
+    - quantidade_total dos itens existentes é atualizada;
+    - PregaoItem antigos que perderam o quantitativo são preservados para não
+      apagar vínculos/histórico, mas ficam depois dos itens ativos.
+
+    Depois que o pregão inicia, a ordem deixa de ser reorganizada.
     """
     quantitativos_pregao = list(
         QuantitativoPregao.objects.filter(pregao=pregao)
         .select_related("item")
-        .order_by("item__nome_item")
+        .order_by("item__nome_item", "item_id")
     )
 
     with transaction.atomic():
         itens_existentes = list(
             PregaoItem.objects.select_for_update()
             .filter(pregao=pregao)
+            .select_related("item")
             .order_by("ordem", "id")
         )
 
@@ -1068,6 +1071,7 @@ def garantir_itens_pregao_para_propostas(pregao):
             default=0,
         )
 
+        # Primeiro sincroniza existência e quantidade.
         for quantitativo in quantitativos_pregao:
             item_pregao = existentes_por_item.get(quantitativo.item_id)
 
@@ -1085,6 +1089,68 @@ def garantir_itens_pregao_para_propostas(pregao):
                 quantidade_total=quantitativo.quantidade,
             )
             existentes_por_item[quantitativo.item_id] = novo_item
+            itens_existentes.append(novo_item)
+
+        # A ordem somente pode ser reorganizada antes do início do pregão.
+        if pregao.status == Pregao.STATUS_NAO_INICIADO:
+            ids_com_quantitativo = {
+                quantitativo.item_id
+                for quantitativo in quantitativos_pregao
+            }
+
+            # Os itens ativos seguem exatamente a ordem alfabética do
+            # QuantitativoPregao atual.
+            itens_ativos = [
+                existentes_por_item[quantitativo.item_id]
+                for quantitativo in quantitativos_pregao
+            ]
+
+            # Itens que já existiram no PregaoItem, mas perderam o quantitativo,
+            # são mantidos para preservar possíveis vínculos históricos.
+            # Eles ficam depois dos itens válidos e não interferem na sequência
+            # 1..N usada pelos itens atuais do certame.
+            itens_sem_quantitativo = sorted(
+                [
+                    item_pregao
+                    for item_pregao in itens_existentes
+                    if item_pregao.item_id not in ids_com_quantitativo
+                ],
+                key=lambda item_pregao: (
+                    str(item_pregao.item.nome_item or "").casefold(),
+                    item_pregao.id,
+                ),
+            )
+
+            itens_ordenados = itens_ativos + itens_sem_quantitativo
+
+            if itens_ordenados:
+                maior_ordem_atual = max(
+                    item_pregao.ordem
+                    for item_pregao in itens_ordenados
+                )
+
+                # Primeira etapa: move todos para uma faixa temporária.
+                # Isso evita violar a restrição única (pregao, ordem) durante
+                # trocas como 10->11 e 11->10.
+                ordem_temporaria_base = (
+                    maior_ordem_atual
+                    + len(itens_ordenados)
+                    + 1000
+                )
+
+                for indice, item_pregao in enumerate(itens_ordenados, start=1):
+                    ordem_temporaria = ordem_temporaria_base + indice
+                    PregaoItem.objects.filter(pk=item_pregao.pk).update(
+                        ordem=ordem_temporaria
+                    )
+                    item_pregao.ordem = ordem_temporaria
+
+                # Segunda etapa: grava a sequência definitiva 1..N.
+                for nova_ordem, item_pregao in enumerate(itens_ordenados, start=1):
+                    PregaoItem.objects.filter(pk=item_pregao.pk).update(
+                        ordem=nova_ordem
+                    )
+                    item_pregao.ordem = nova_ordem
 
     return len(quantitativos_pregao)
 
