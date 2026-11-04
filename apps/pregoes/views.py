@@ -1120,8 +1120,19 @@ def media_precos(request):
 
         garantir_itens_pregao_para_propostas(pregao)
 
+        # A tela de Média de Preços deve refletir exatamente o quantitativo
+        # atual do certame. PregaoItem antigos podem ser preservados internamente
+        # por segurança/histórico, mas não devem aparecer se o item deixou de
+        # possuir QuantitativoPregao.
+        itens_com_quantitativo = QuantitativoPregao.objects.filter(
+            pregao=pregao,
+        ).values_list("item_id", flat=True)
+
         itens_pregao = (
-            PregaoItem.objects.filter(pregao=pregao)
+            PregaoItem.objects.filter(
+                pregao=pregao,
+                item_id__in=itens_com_quantitativo,
+            )
             .select_related("item")
             .order_by("ordem", "item__nome_item")
         )
