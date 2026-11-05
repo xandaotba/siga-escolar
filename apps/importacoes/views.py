@@ -1722,11 +1722,11 @@ def opcoes_item_para_correcao(texto_item):
 
 def opcoes_item_quantitativo_pregao_para_correcao(texto_item, pregao):
     """
-    Retorna somente sugestões de itens que possuem QuantitativoPregao no certame
-    selecionado e cujo nome tenha similaridade com o texto informado na planilha.
+    Retorna todos os itens que possuem QuantitativoPregao no certame selecionado,
+    priorizando no topo os nomes mais parecidos com o texto informado.
 
-    Essa função é exclusiva da importação de Quantitativo por Escola. Assim ela
-    não conflita com outras rotinas que trabalham com PregaoItem.
+    Isso permite corrigir também casos de duplicidade escola/item detectados
+    somente depois de uma correção anterior.
     """
     if not pregao:
         return []
@@ -1738,54 +1738,58 @@ def opcoes_item_quantitativo_pregao_para_correcao(texto_item, pregao):
     )
     itens = [quantitativo.item for quantitativo in quantitativos]
 
-    texto_normalizado = normalizar_texto_comparacao(texto_item)
-    if not texto_normalizado or not itens:
+    if not itens:
         return []
 
-    mapa_itens = {
+    texto_normalizado = normalizar_texto_comparacao(texto_item)
+
+    mapa_normalizado = {
         normalizar_texto_comparacao(item.nome_item): item
         for item in itens
     }
 
-    # Primeiro considera os nomes mais próximos. Um cutoff moderado permite
-    # casos como "BANANA" -> "BANANA DA TERRA", sem listar todo o certame.
-    nomes_sugeridos = get_close_matches(
-        texto_normalizado,
-        list(mapa_itens.keys()),
-        n=8,
-        cutoff=0.45,
-    )
+    sugestoes_normalizadas = set()
 
-    # Complementa com comparação por inclusão de palavras. Isso ajuda em nomes
-    # compostos quando o Excel traz apenas parte do nome cadastrado.
-    tokens_entrada = set(texto_normalizado.split())
-    for nome_normalizado in mapa_itens:
-        tokens_item = set(nome_normalizado.split())
-        if tokens_entrada and tokens_item and (
-            tokens_entrada.issubset(tokens_item)
-            or tokens_item.issubset(tokens_entrada)
-        ):
-            if nome_normalizado not in nomes_sugeridos:
-                nomes_sugeridos.append(nome_normalizado)
-
-    sugestoes = []
-    ids_adicionados = set()
-
-    for nome_normalizado in nomes_sugeridos:
-        item = mapa_itens.get(nome_normalizado)
-        if not item or item.id in ids_adicionados:
-            continue
-
-        ids_adicionados.add(item.id)
-        sugestoes.append(
-            {
-                "id": item.id,
-                "nome": item.nome_item,
-                "unidade": item.get_unidade_medida_display(),
-            }
+    if texto_normalizado:
+        sugestoes = get_close_matches(
+            texto_normalizado,
+            list(mapa_normalizado.keys()),
+            n=8,
+            cutoff=0.45,
         )
 
-    return sugestoes
+        for sugestao in sugestoes:
+            sugestoes_normalizadas.add(sugestao)
+
+        tokens_entrada = set(texto_normalizado.split())
+
+        for nome_normalizado in mapa_normalizado:
+            tokens_item = set(nome_normalizado.split())
+
+            if tokens_entrada and tokens_item and (
+                tokens_entrada.issubset(tokens_item)
+                or tokens_item.issubset(tokens_entrada)
+            ):
+                sugestoes_normalizadas.add(nome_normalizado)
+
+    itens_ordenados = sorted(
+        itens,
+        key=lambda item: (
+            0
+            if normalizar_texto_comparacao(item.nome_item) in sugestoes_normalizadas
+            else 1,
+            item.nome_item,
+        ),
+    )
+
+    return [
+        {
+            "id": item.id,
+            "nome": item.nome_item,
+            "unidade": item.get_unidade_medida_display(),
+        }
+        for item in itens_ordenados
+    ]
 
 
 def obter_item_por_correcao(request, numero_linha):
@@ -2880,6 +2884,8 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
             continue
         if "já possui quantitativo cadastrado" in erro:
             continue
+        if "Combinação escola/item duplicada" in erro:
+            continue
         erros_filtrados.append(erro)
 
     if escola:
@@ -3124,7 +3130,22 @@ def importar_quantitativo_escola(request):
                     if chave in chaves_finais:
                         linha["valido"] = False
                         linha["acao"] = "Erro"
-                        linha["erros"].append("Combinação escola/item duplicada dentro da própria planilha após correção.")
+                        linha["erro_item"] = True
+                        linha["item_opcoes"] = opcoes_item_quantitativo_pregao_para_correcao(
+                            linha["dados"].get("item_texto"),
+                            pregao,
+                        )
+
+                        # Garante apenas uma ocorrência da mensagem.
+                        linha["erros"] = [
+                            erro
+                            for erro in linha.get("erros", [])
+                            if "Combinação escola/item duplicada" not in erro
+                        ]
+                        linha["erros"].append(
+                            "Combinação escola/item duplicada dentro da própria planilha após correção. "
+                            "Selecione outro item na coluna Correção do Item ou marque Não importar esta linha."
+                        )
                     else:
                         chaves_finais.add(chave)
 
