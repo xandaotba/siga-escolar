@@ -431,7 +431,7 @@
                             type="hidden"
                             class="ordem-visual-input"
                             name="ordem_visual_{{ linha.linha }}"
-                            value="{{ linha._ordem_visual|default:'' }}"
+                            value="{{ linha.ordem_visual|default:'' }}"
                             form="form-confirmar-importacao-quantitativo-escola"
                         >
                         {% if linha.manual %}

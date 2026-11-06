@@ -3186,18 +3186,18 @@ def importar_quantitativo_escola(request):
             # manuais caso a confirmação volte à tela por algum erro.
             for indice_padrao, linha in enumerate(linhas, start=1):
                 try:
-                    linha["_ordem_visual"] = int(
+                    linha["ordem_visual"] = int(
                         request.POST.get(
                             f"ordem_visual_{linha['linha']}",
                             indice_padrao,
                         )
                     )
                 except (TypeError, ValueError):
-                    linha["_ordem_visual"] = indice_padrao
+                    linha["ordem_visual"] = indice_padrao
 
             linhas.sort(
                 key=lambda linha: (
-                    linha.get("_ordem_visual", 999999),
+                    linha.get("ordem_visual", 999999),
                     str(linha.get("linha", "")),
                 )
             )
@@ -3378,7 +3378,6 @@ def importar_quantitativo_escola(request):
                         "pregao": pregao,
                         "escolas_sistema": escolas_sistema,
                         "itens_sistema": itens_sistema,
-            "unidades_sistema": unidades_sistema,
                         "unidades_sistema": unidades_sistema,
                     },
                 )
@@ -3534,7 +3533,6 @@ def importar_quantitativo_escola(request):
                         "pregao": pregao,
                         "escolas_sistema": escolas_sistema,
                         "itens_sistema": itens_sistema,
-            "unidades_sistema": unidades_sistema,
                         "unidades_sistema": unidades_sistema,
                     },
                 )
