@@ -2844,6 +2844,66 @@ def baixar_modelo_quantitativo_escola(request):
     return response
 
 
+
+def montar_linha_manual_quantitativo_escola(
+    identificador,
+    pregao,
+    escola_id,
+    item_id,
+    unidade_id,
+    quantidade_texto,
+):
+    """
+    Monta uma linha criada manualmente na prévia da importação.
+
+    O identificador usa N1, N2, N3... para não ser confundido com
+    o número real da linha do Excel.
+    """
+    escola = Escola.objects.filter(id=escola_id).first() if escola_id else None
+    item = Item.objects.filter(id=item_id).first() if item_id else None
+    unidade = (
+        UnidadeMedida.objects.filter(id=unidade_id).first()
+        if unidade_id
+        else None
+    )
+
+    linha = {
+        "linha": identificador,
+        "manual": True,
+        "valido": False,
+        "acao": "Erro",
+        "erros": [],
+        "erro_escola": False,
+        "erro_item": False,
+        "erro_unidade": False,
+        "erro_quantidade": False,
+        "saldo_maximo": "",
+        "ignorar": False,
+        "escola_opcoes": [],
+        "item_opcoes": [],
+        "unidade_opcoes": [],
+        "dados": {
+            "escola_planilha": "",
+            "item_planilha": "",
+            "unidade_planilha": "",
+            "escola_texto": escola.nome_escola if escola else "",
+            "escola_id": escola.id if escola else "",
+            "escola_corrigida_id": escola.id if escola else "",
+            "escola_corrigida_nome": escola.nome_escola if escola else "",
+            "item_texto": item.nome_item if item else "",
+            "item_id": item.id if item else "",
+            "item_corrigido_id": item.id if item else "",
+            "item_corrigido_nome": item.nome_item if item else "",
+            "unidade_texto": unidade.nome if unidade else "",
+            "unidade_medida": unidade.codigo if unidade else "",
+            "unidade_corrigida_id": unidade.id if unidade else "",
+            "unidade_corrigida_nome": unidade.nome if unidade else "",
+            "quantidade": texto_celula(quantidade_texto),
+        },
+    }
+
+    return recalcular_linha_quantitativo_escola(linha, pregao)
+
 def recalcular_linha_quantitativo_escola(linha, pregao):
     if linha.get("ignorar"):
         linha["valido"] = True
@@ -2980,6 +3040,7 @@ def importar_quantitativo_escola(request):
     resumo = None
     escolas_sistema = []
     itens_sistema = []
+    unidades_sistema = opcoes_unidade_para_correcao("")
     pregoes = (
         Pregao.objects.filter(
             status=Pregao.STATUS_NAO_INICIADO,
@@ -3079,6 +3140,68 @@ def importar_quantitativo_escola(request):
                 )
                 return redirect("importacoes:quantitativo_escola")
 
+            # Linhas manuais são reconstruídas a partir do POST a cada
+            # confirmação. Assim evitamos duplicá-las quando a tela volta
+            # com erros de validação.
+            linhas = [
+                linha
+                for linha in linhas
+                if not linha.get("manual")
+            ]
+
+            identificadores_manuais = []
+            for identificador in request.POST.getlist("linha_manual_id"):
+                identificador = str(identificador or "").strip()
+
+                if (
+                    re.fullmatch(r"N\d+", identificador)
+                    and identificador not in identificadores_manuais
+                ):
+                    identificadores_manuais.append(identificador)
+
+            for identificador in identificadores_manuais:
+                linha_manual = montar_linha_manual_quantitativo_escola(
+                    identificador=identificador,
+                    pregao=pregao,
+                    escola_id=request.POST.get(
+                        f"escola_corrigida_{identificador}",
+                        "",
+                    ),
+                    item_id=request.POST.get(
+                        f"item_corrigido_{identificador}",
+                        "",
+                    ),
+                    unidade_id=request.POST.get(
+                        f"unidade_corrigida_{identificador}",
+                        "",
+                    ),
+                    quantidade_texto=request.POST.get(
+                        f"quantidade_corrigida_{identificador}",
+                        "",
+                    ),
+                )
+                linhas.append(linha_manual)
+
+            # Preserva a posição visual escolhida pelo usuário para as linhas
+            # manuais caso a confirmação volte à tela por algum erro.
+            for indice_padrao, linha in enumerate(linhas, start=1):
+                try:
+                    linha["_ordem_visual"] = int(
+                        request.POST.get(
+                            f"ordem_visual_{linha['linha']}",
+                            indice_padrao,
+                        )
+                    )
+                except (TypeError, ValueError):
+                    linha["_ordem_visual"] = indice_padrao
+
+            linhas.sort(
+                key=lambda linha: (
+                    linha.get("_ordem_visual", 999999),
+                    str(linha.get("linha", "")),
+                )
+            )
+
             for linha in linhas:
                 # Quando o usuário marca "Não importar", a linha inteira é ignorada:
                 # não bloqueia a confirmação e não será gravada no banco.
@@ -3116,7 +3239,7 @@ def importar_quantitativo_escola(request):
                     linha["dados"]["item_corrigido_id"] = ""
                     linha["dados"]["item_corrigido_nome"] = ""
 
-                if linha.get("erro_unidade"):
+                if linha.get("erro_unidade") or linha.get("manual"):
                     unidade_corrigida = obter_unidade_por_correcao(request, linha["linha"])
 
                     if unidade_corrigida:
@@ -3124,6 +3247,11 @@ def importar_quantitativo_escola(request):
                         linha["dados"]["unidade_corrigida_nome"] = unidade_corrigida.nome
                         linha["dados"]["unidade_medida"] = unidade_corrigida.codigo
                         linha["dados"]["unidade_texto"] = unidade_corrigida.nome
+                    elif linha.get("manual"):
+                        linha["dados"]["unidade_corrigida_id"] = ""
+                        linha["dados"]["unidade_corrigida_nome"] = ""
+                        linha["dados"]["unidade_medida"] = ""
+                        linha["dados"]["unidade_texto"] = ""
 
                 quantidade_corrigida = request.POST.get(
                     f"quantidade_corrigida_{linha['linha']}",
@@ -3250,6 +3378,8 @@ def importar_quantitativo_escola(request):
                         "pregao": pregao,
                         "escolas_sistema": escolas_sistema,
                         "itens_sistema": itens_sistema,
+            "unidades_sistema": unidades_sistema,
+                        "unidades_sistema": unidades_sistema,
                     },
                 )
 
@@ -3404,6 +3534,8 @@ def importar_quantitativo_escola(request):
                         "pregao": pregao,
                         "escolas_sistema": escolas_sistema,
                         "itens_sistema": itens_sistema,
+            "unidades_sistema": unidades_sistema,
+                        "unidades_sistema": unidades_sistema,
                     },
                 )
 
@@ -3435,6 +3567,7 @@ def importar_quantitativo_escola(request):
             "pregao": pregao,
             "escolas_sistema": escolas_sistema,
             "itens_sistema": itens_sistema,
+            "unidades_sistema": unidades_sistema,
         },
     )
 

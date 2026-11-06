@@ -197,6 +197,70 @@
         pointer-events: none;
     }
 
+    .linha-insercao td {
+        height: 8px;
+        padding: 0 !important;
+        border: 0 !important;
+        position: relative;
+        background: transparent !important;
+    }
+
+    .linha-insercao-botao {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        border: 1px solid #0d6efd;
+        background: #ffffff;
+        color: #0d6efd;
+        font-size: 17px;
+        line-height: 18px;
+        font-weight: 900;
+        cursor: pointer;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .12s ease, transform .12s ease, background .12s ease;
+        z-index: 3;
+    }
+
+    .linha-insercao:hover .linha-insercao-botao,
+    .linha-insercao-botao:focus {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .linha-insercao-botao:hover {
+        background: #0d6efd;
+        color: #ffffff;
+        transform: translate(-50%, -50%) scale(1.08);
+    }
+
+    .linha-manual {
+        background: #f8fbff;
+    }
+
+    .linha-manual .marcador-manual {
+        display: inline-block;
+        padding: 2px 5px;
+        border-radius: 999px;
+        background: #e0f2fe;
+        color: #075985;
+        font-weight: 800;
+        font-size: 9px;
+    }
+
+    .quantidade-manual-input {
+        text-align: right;
+        padding-right: 5px !important;
+    }
+
+    .fontes-opcoes-adicao {
+        display: none !important;
+    }
+
     @media (max-width: 900px) {
         .importacao-passos,
         .resumo-importacao {
@@ -359,9 +423,26 @@
                 <tr
                     id="linha-importacao-{{ linha.linha }}"
                     data-linha-importacao="{{ linha.linha }}"
-                    {% if linha.ignorar %}class="linha-ignorada"{% endif %}
+                    class="{% if linha.ignorar %}linha-ignorada {% endif %}{% if linha.manual %}linha-manual{% endif %}"
                 >
-                    <td class="col-linha">{{ linha.linha }}</td>
+                    <td class="col-linha">
+                        {{ linha.linha }}
+                        <input
+                            type="hidden"
+                            class="ordem-visual-input"
+                            name="ordem_visual_{{ linha.linha }}"
+                            value="{{ linha._ordem_visual|default:'' }}"
+                            form="form-confirmar-importacao-quantitativo-escola"
+                        >
+                        {% if linha.manual %}
+                        <input
+                            type="hidden"
+                            name="linha_manual_id"
+                            value="{{ linha.linha }}"
+                            form="form-confirmar-importacao-quantitativo-escola"
+                        >
+                        {% endif %}
+                    </td>
 
                     <td class="col-acao">
                         {% if linha.acao == "Criar" %}
@@ -376,7 +457,11 @@
                     </td>
 
                     <td class="col-escola-planilha">
+                        {% if linha.manual %}
+                        <span class="marcador-manual">Adicionada manualmente</span>
+                        {% else %}
                         {{ linha.dados.escola_planilha|default:linha.dados.escola_texto }}
+                        {% endif %}
                     </td>
 
                     <td class="col-escola-sistema">
@@ -399,7 +484,11 @@
                     </td>
 
                     <td class="col-item-planilha">
+                        {% if linha.manual %}
+                        <span class="marcador-manual">Adicionado manualmente</span>
+                        {% else %}
                         {{ linha.dados.item_planilha|default:linha.dados.item_texto }}
+                        {% endif %}
                     </td>
 
                     <td class="col-item-sistema">
@@ -437,11 +526,32 @@
                     </td>
 
                     <td class="col-unidade">
+                        {% if linha.manual %}
+                        <select
+                            class="unidade-manual-select"
+                            data-linha="{{ linha.linha }}"
+                            name="unidade_corrigida_{{ linha.linha }}"
+                            form="form-confirmar-importacao-quantitativo-escola"
+                        >
+                            <option value="">Selecione...</option>
+                            {% for unidade in unidades_sistema %}
+                            <option
+                                value="{{ unidade.id }}"
+                                {% if unidade.id == linha.dados.unidade_corrigida_id %}selected{% endif %}
+                            >
+                                {{ unidade.rotulo }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        {% else %}
                         {{ linha.dados.unidade_planilha|default:linha.dados.unidade_texto }}
+                        {% endif %}
                     </td>
 
                     <td class="col-unidade-correcao">
-                        {% if linha.erro_unidade %}
+                        {% if linha.manual %}
+                            -
+                        {% elif linha.erro_unidade %}
                             {% if linha.unidade_opcoes %}
                             <select
                                 class="unidade-correcao-select"
@@ -469,7 +579,21 @@
                         {% endif %}
                     </td>
 
-                    <td class="col-quantidade">{{ linha.dados.quantidade }}</td>
+                    <td class="col-quantidade">
+                        {% if linha.manual %}
+                        <input
+                            type="text"
+                            class="quantidade-manual-input"
+                            name="quantidade_corrigida_{{ linha.linha }}"
+                            value="{{ linha.dados.quantidade }}"
+                            placeholder="0"
+                            inputmode="decimal"
+                            form="form-confirmar-importacao-quantitativo-escola"
+                        >
+                        {% else %}
+                        {{ linha.dados.quantidade }}
+                        {% endif %}
+                    </td>
 
                     <td class="col-erros">
                         {% if linha.ignorar %}
@@ -485,9 +609,42 @@
                         {% endif %}
                     </td>
                 </tr>
+                <tr class="linha-insercao" aria-hidden="false">
+                    <td colspan="11">
+                        <button
+                            type="button"
+                            class="linha-insercao-botao"
+                            title="Adicionar item nesta posição"
+                            aria-label="Adicionar item nesta posição"
+                        >+</button>
+                    </td>
+                </tr>
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+
+    <div class="fontes-opcoes-adicao" aria-hidden="true">
+        <select id="fonte-escolas-sistema">
+            <option value="">Selecione...</option>
+            {% for escola in escolas_sistema %}
+            <option value="{{ escola.id }}">{{ escola.nome }} — {{ escola.municipio }}/{{ escola.uf }}</option>
+            {% endfor %}
+        </select>
+
+        <select id="fonte-itens-sistema">
+            <option value="">Selecione...</option>
+            {% for item in itens_sistema %}
+            <option value="{{ item.id }}">{{ item.nome }} — {{ item.unidade }}</option>
+            {% endfor %}
+        </select>
+
+        <select id="fonte-unidades-sistema">
+            <option value="">Selecione...</option>
+            {% for unidade in unidades_sistema %}
+            <option value="{{ unidade.id }}">{{ unidade.rotulo }}</option>
+            {% endfor %}
+        </select>
     </div>
 
     <form id="form-confirmar-importacao-quantitativo-escola" method="post" style="margin-top:18px;">
@@ -500,6 +657,7 @@
         {% if resumo.erros > 0 %}
         <p style="color:#92400e; font-weight:800; margin-bottom:12px;">
             Confira as associações em <strong>Escola Sistema</strong> e <strong>Item Sistema</strong>.
+            Passe o mouse entre duas linhas e clique em <strong>+</strong> para incluir um item que não veio na planilha.
             Se não desejar importar uma linha, marque <strong>Não importar</strong>.
             Quando houver erro de unidade, selecione a unidade correta na coluna correspondente.
         </p>
@@ -514,7 +672,31 @@
 <script>
 (function () {
     const form = document.getElementById('form-confirmar-importacao-quantitativo-escola');
-    if (!form) return;
+    const tabela = document.querySelector('.tabela-validacao-importacao');
+    if (!form || !tabela) return;
+
+    const tbody = tabela.querySelector('tbody');
+    const fonteEscolas = document.getElementById('fonte-escolas-sistema');
+    const fonteItens = document.getElementById('fonte-itens-sistema');
+    const fonteUnidades = document.getElementById('fonte-unidades-sistema');
+
+    let contadorManual = 0;
+
+    document.querySelectorAll('input[name="linha_manual_id"]').forEach(function (input) {
+        const match = String(input.value || '').match(/^N(\d+)$/);
+        if (match) {
+            contadorManual = Math.max(contadorManual, Number(match[1]));
+        }
+    });
+
+    function escaparHtml(texto) {
+        return String(texto ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
 
     function atualizarEstadoLinha(row) {
         const checkbox = row.querySelector('.nao-importar-checkbox');
@@ -522,30 +704,198 @@
 
         row.classList.toggle('linha-ignorada', ignorada);
 
-        row.querySelectorAll('select').forEach(function (select) {
-            select.disabled = ignorada;
+        row.querySelectorAll('select, input[type="text"]').forEach(function (campo) {
+            campo.disabled = ignorada;
         });
     }
 
-    document.querySelectorAll('[data-linha-importacao]').forEach(function (row) {
+    function registrarLinha(row) {
         atualizarEstadoLinha(row);
 
         const checkbox = row.querySelector('.nao-importar-checkbox');
-        if (checkbox) {
+        if (checkbox && !checkbox.dataset.listenerRegistrado) {
+            checkbox.dataset.listenerRegistrado = '1';
             checkbox.addEventListener('change', function () {
                 atualizarEstadoLinha(row);
             });
         }
-    });
+    }
+
+    function criarSeparador() {
+        const separador = document.createElement('tr');
+        separador.className = 'linha-insercao';
+        separador.innerHTML =
+            '<td colspan="11">' +
+                '<button type="button" class="linha-insercao-botao" ' +
+                    'title="Adicionar item nesta posição" ' +
+                    'aria-label="Adicionar item nesta posição">+</button>' +
+            '</td>';
+
+        return separador;
+    }
+
+    function preencherOpcoes(select, fonte) {
+        if (select && fonte) {
+            select.innerHTML = fonte.innerHTML;
+        }
+    }
+
+    function criarLinhaManual() {
+        contadorManual += 1;
+        const identificador = 'N' + contadorManual;
+
+        const row = document.createElement('tr');
+        row.id = 'linha-importacao-' + identificador;
+        row.dataset.linhaImportacao = identificador;
+        row.className = 'linha-manual';
+
+        row.innerHTML = `
+            <td class="col-linha">
+                ${escaparHtml(identificador)}
+                <input type="hidden"
+                    class="ordem-visual-input"
+                    name="ordem_visual_${escaparHtml(identificador)}"
+                    value=""
+                    form="form-confirmar-importacao-quantitativo-escola">
+                <input type="hidden"
+                    name="linha_manual_id"
+                    value="${escaparHtml(identificador)}"
+                    form="form-confirmar-importacao-quantitativo-escola">
+            </td>
+
+            <td class="col-acao">
+                <span class="badge-importacao badge-criar">Criar</span>
+            </td>
+
+            <td class="col-escola-planilha">
+                <span class="marcador-manual">Adicionada manualmente</span>
+            </td>
+
+            <td class="col-escola-sistema">
+                <select
+                    class="escola-sistema-select"
+                    data-linha="${escaparHtml(identificador)}"
+                    name="escola_corrigida_${escaparHtml(identificador)}"
+                    form="form-confirmar-importacao-quantitativo-escola">
+                </select>
+            </td>
+
+            <td class="col-item-planilha">
+                <span class="marcador-manual">Adicionado manualmente</span>
+            </td>
+
+            <td class="col-item-sistema">
+                <select
+                    class="item-sistema-select"
+                    data-linha="${escaparHtml(identificador)}"
+                    name="item_corrigido_${escaparHtml(identificador)}"
+                    form="form-confirmar-importacao-quantitativo-escola">
+                </select>
+            </td>
+
+            <td class="col-nao-importar">
+                <label class="nao-importar-linha">
+                    <input
+                        type="checkbox"
+                        class="nao-importar-checkbox"
+                        data-linha="${escaparHtml(identificador)}"
+                        name="nao_importar_${escaparHtml(identificador)}"
+                        value="1"
+                        form="form-confirmar-importacao-quantitativo-escola">
+                    Não
+                </label>
+            </td>
+
+            <td class="col-unidade">
+                <select
+                    class="unidade-manual-select"
+                    data-linha="${escaparHtml(identificador)}"
+                    name="unidade_corrigida_${escaparHtml(identificador)}"
+                    form="form-confirmar-importacao-quantitativo-escola">
+                </select>
+            </td>
+
+            <td class="col-unidade-correcao">-</td>
+
+            <td class="col-quantidade">
+                <input
+                    type="text"
+                    class="quantidade-manual-input"
+                    name="quantidade_corrigida_${escaparHtml(identificador)}"
+                    value=""
+                    placeholder="0"
+                    inputmode="decimal"
+                    form="form-confirmar-importacao-quantitativo-escola">
+            </td>
+
+            <td class="col-erros">
+                <span style="color:#475569;">Preencha escola, item, unidade e quantidade.</span>
+            </td>
+        `;
+
+        preencherOpcoes(
+            row.querySelector('.escola-sistema-select'),
+            fonteEscolas
+        );
+        preencherOpcoes(
+            row.querySelector('.item-sistema-select'),
+            fonteItens
+        );
+        preencherOpcoes(
+            row.querySelector('.unidade-manual-select'),
+            fonteUnidades
+        );
+
+        registrarLinha(row);
+        return row;
+    }
+
+    function registrarSeparador(separador) {
+        const botao = separador.querySelector('.linha-insercao-botao');
+        if (!botao || botao.dataset.listenerRegistrado) return;
+
+        botao.dataset.listenerRegistrado = '1';
+
+        botao.addEventListener('click', function () {
+            const novaLinha = criarLinhaManual();
+            const novoSeparadorAnterior = criarSeparador();
+
+            tbody.insertBefore(novoSeparadorAnterior, separador);
+            tbody.insertBefore(novaLinha, separador);
+
+            registrarSeparador(novoSeparadorAnterior);
+
+            const escola = novaLinha.querySelector('.escola-sistema-select');
+            if (escola) escola.focus();
+        });
+    }
+
+    function atualizarOrdensVisuais() {
+        let ordem = 0;
+
+        tbody.querySelectorAll('[data-linha-importacao]').forEach(function (row) {
+            ordem += 1;
+            const input = row.querySelector('.ordem-visual-input');
+
+            if (input) {
+                input.value = String(ordem);
+            }
+        });
+    }
+
+    tbody.querySelectorAll('[data-linha-importacao]').forEach(registrarLinha);
+    tbody.querySelectorAll('.linha-insercao').forEach(registrarSeparador);
 
     form.addEventListener('submit', function (event) {
         document.querySelectorAll('.linha-pendente-confirmacao').forEach(function (row) {
             row.classList.remove('linha-pendente-confirmacao');
         });
 
+        atualizarOrdensVisuais();
+
         const linhasPendentes = [];
 
-        document.querySelectorAll('[data-linha-importacao]').forEach(function (row) {
+        tbody.querySelectorAll('[data-linha-importacao]').forEach(function (row) {
             const linha = row.dataset.linhaImportacao;
             const checkbox = row.querySelector('.nao-importar-checkbox');
 
@@ -555,13 +905,26 @@
 
             const escola = row.querySelector('.escola-sistema-select');
             const item = row.querySelector('.item-sistema-select');
-            const unidade = row.querySelector('.unidade-correcao-select');
+            const unidadeCorrecao = row.querySelector('.unidade-correcao-select');
+            const unidadeManual = row.querySelector('.unidade-manual-select');
+            const quantidadeManual = row.querySelector('.quantidade-manual-input');
 
             const faltandoEscola = escola && !escola.value;
             const faltandoItem = item && !item.value;
-            const faltandoUnidade = unidade && !unidade.value;
+            const faltandoUnidade = (
+                (unidadeCorrecao && !unidadeCorrecao.value) ||
+                (unidadeManual && !unidadeManual.value)
+            );
+            const faltandoQuantidade = (
+                quantidadeManual && !String(quantidadeManual.value || '').trim()
+            );
 
-            if (faltandoEscola || faltandoItem || faltandoUnidade) {
+            if (
+                faltandoEscola ||
+                faltandoItem ||
+                faltandoUnidade ||
+                faltandoQuantidade
+            ) {
                 linhasPendentes.push(linha);
                 row.classList.add('linha-pendente-confirmacao');
             }
@@ -571,9 +934,9 @@
             event.preventDefault();
 
             alert(
-                'Existem linhas com seleção pendente: ' +
+                'Existem linhas com campos pendentes: ' +
                 linhasPendentes.join(', ') +
-                '.\n\nConfira Escola Sistema, Item Sistema e Correção da Unidade, ou marque Não importar.'
+                '.\n\nConfira Escola Sistema, Item Sistema, Unidade de Medida e Quantidade, ou marque Não importar.'
             );
 
             const primeiraLinha = document.getElementById(
@@ -589,7 +952,7 @@
             return;
         }
 
-        if (!confirm('Confirmar a importação dos quantitativos por escola com as associações selecionadas?')) {
+        if (!confirm('Confirmar a importação dos quantitativos por escola com as associações e linhas adicionadas?')) {
             event.preventDefault();
         }
     });
