@@ -252,7 +252,7 @@
         font-size: 9px;
     }
 
-    .quantidade-manual-input {
+    .quantidade-editavel-input {
         text-align: right;
         padding-right: 5px !important;
     }
@@ -580,19 +580,15 @@
                     </td>
 
                     <td class="col-quantidade">
-                        {% if linha.manual %}
                         <input
                             type="text"
-                            class="quantidade-manual-input"
+                            class="quantidade-editavel-input"
                             name="quantidade_corrigida_{{ linha.linha }}"
                             value="{{ linha.dados.quantidade }}"
                             placeholder="0"
                             inputmode="decimal"
                             form="form-confirmar-importacao-quantitativo-escola"
                         >
-                        {% else %}
-                        {{ linha.dados.quantidade }}
-                        {% endif %}
                     </td>
 
                     <td class="col-erros">
@@ -820,7 +816,7 @@
             <td class="col-quantidade">
                 <input
                     type="text"
-                    class="quantidade-manual-input"
+                    class="quantidade-editavel-input"
                     name="quantidade_corrigida_${escaparHtml(identificador)}"
                     value=""
                     placeholder="0"
@@ -907,7 +903,7 @@
             const item = row.querySelector('.item-sistema-select');
             const unidadeCorrecao = row.querySelector('.unidade-correcao-select');
             const unidadeManual = row.querySelector('.unidade-manual-select');
-            const quantidadeManual = row.querySelector('.quantidade-manual-input');
+            const quantidadeEditavel = row.querySelector('.quantidade-editavel-input');
 
             const faltandoEscola = escola && !escola.value;
             const faltandoItem = item && !item.value;
@@ -916,7 +912,7 @@
                 (unidadeManual && !unidadeManual.value)
             );
             const faltandoQuantidade = (
-                quantidadeManual && !String(quantidadeManual.value || '').trim()
+                quantidadeEditavel && !String(quantidadeEditavel.value || '').trim()
             );
 
             if (
