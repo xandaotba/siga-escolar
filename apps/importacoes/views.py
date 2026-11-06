@@ -2706,6 +2706,12 @@ def montar_linha_quantitativo_escola(numero_linha, valores, pregao, atualizar_ex
         "item_opcoes": item_opcoes,
         "unidade_opcoes": unidade_opcoes,
         "dados": {
+            # Valores originais da planilha: nunca são sobrescritos.
+            "escola_planilha": escola_texto,
+            "item_planilha": item_texto,
+            "unidade_planilha": unidade_texto,
+
+            # Valores usados internamente após a associação com o sistema.
             "escola_texto": escola_texto,
             "escola_id": escola.id if escola else "",
             "escola_corrigida_id": "",
@@ -2972,6 +2978,8 @@ def recalcular_linha_quantitativo_escola(linha, pregao):
 def importar_quantitativo_escola(request):
     linhas = []
     resumo = None
+    escolas_sistema = []
+    itens_sistema = []
     pregoes = (
         Pregao.objects.filter(
             status=Pregao.STATUS_NAO_INICIADO,
@@ -2985,6 +2993,11 @@ def importar_quantitativo_escola(request):
 
     if pregao_id:
         pregao = Pregao.objects.filter(id=pregao_id).first()
+
+    if pregao:
+        # Listas únicas usadas por todas as linhas da prévia.
+        escolas_sistema = opcoes_escola_para_correcao("", pregao)
+        itens_sistema = opcoes_item_quantitativo_pregao_para_correcao("", pregao)
 
     if request.method == "POST":
         acao = request.POST.get("acao")
@@ -3075,25 +3088,33 @@ def importar_quantitativo_escola(request):
                     linha = recalcular_linha_quantitativo_escola(linha, pregao)
                     continue
 
-                if linha.get("erro_escola"):
-                    escola_corrigida = obter_escola_por_correcao(request, linha["linha"])
+                # "Escola Sistema" existe em todas as linhas.
+                # O usuário pode manter a associação automática ou trocar manualmente.
+                escola_corrigida = obter_escola_por_correcao(request, linha["linha"])
 
-                    if escola_corrigida:
-                        linha["dados"]["escola_id"] = escola_corrigida.id
-                        linha["dados"]["escola_corrigida_id"] = escola_corrigida.id
-                        linha["dados"]["escola_corrigida_nome"] = escola_corrigida.nome_escola
-                        linha["dados"]["escola_texto"] = escola_corrigida.nome_escola
+                if escola_corrigida and validar_escola_pertence_pregao(pregao, escola_corrigida):
+                    linha["dados"]["escola_id"] = escola_corrigida.id
+                    linha["dados"]["escola_corrigida_id"] = escola_corrigida.id
+                    linha["dados"]["escola_corrigida_nome"] = escola_corrigida.nome_escola
+                    linha["dados"]["escola_texto"] = escola_corrigida.nome_escola
+                else:
+                    linha["dados"]["escola_id"] = ""
+                    linha["dados"]["escola_corrigida_id"] = ""
+                    linha["dados"]["escola_corrigida_nome"] = ""
 
-                if linha.get("erro_item"):
-                    item_corrigido = obter_item_por_correcao(request, linha["linha"])
+                # "Item Sistema" também existe em todas as linhas e contém
+                # somente itens com QuantitativoPregao no certame selecionado.
+                item_corrigido = obter_item_por_correcao(request, linha["linha"])
 
-                    # Aceita a correção somente se o item realmente possuir
-                    # quantitativo no certame selecionado.
-                    if item_corrigido and item_existe_no_quantitativo_pregao(pregao, item_corrigido):
-                        linha["dados"]["item_id"] = item_corrigido.id
-                        linha["dados"]["item_corrigido_id"] = item_corrigido.id
-                        linha["dados"]["item_corrigido_nome"] = item_corrigido.nome_item
-                        linha["dados"]["item_texto"] = item_corrigido.nome_item
+                if item_corrigido and item_existe_no_quantitativo_pregao(pregao, item_corrigido):
+                    linha["dados"]["item_id"] = item_corrigido.id
+                    linha["dados"]["item_corrigido_id"] = item_corrigido.id
+                    linha["dados"]["item_corrigido_nome"] = item_corrigido.nome_item
+                    linha["dados"]["item_texto"] = item_corrigido.nome_item
+                else:
+                    linha["dados"]["item_id"] = ""
+                    linha["dados"]["item_corrigido_id"] = ""
+                    linha["dados"]["item_corrigido_nome"] = ""
 
                 if linha.get("erro_unidade"):
                     unidade_corrigida = obter_unidade_por_correcao(request, linha["linha"])
@@ -3144,7 +3165,7 @@ def importar_quantitativo_escola(request):
                         ]
                         linha["erros"].append(
                             "Combinação escola/item duplicada dentro da própria planilha após correção. "
-                            "Selecione outro item na coluna Correção do Item ou marque Não importar esta linha."
+                            "Selecione outro item na coluna Item Sistema ou marque Não importar esta linha."
                         )
                     else:
                         chaves_finais.add(chave)
@@ -3178,7 +3199,7 @@ def importar_quantitativo_escola(request):
                     numeros = ", ".join(str(linha["linha"]) for linha in linhas_item_pendente)
                     partes_mensagem.append(
                         f"Itens ainda não resolvidos nas linhas: {numeros}. "
-                        "Selecione um item sugerido na coluna Correção do Item ou marque Não importar esta linha."
+                        "Selecione um item na coluna Item Sistema ou marque Não importar esta linha."
                     )
 
                 if linhas_quantidade_pendente:
@@ -3194,7 +3215,7 @@ def importar_quantitativo_escola(request):
                     numeros = ", ".join(str(linha["linha"]) for linha in linhas_outros_erros)
                     partes_mensagem.append(
                         f"Também existem outros erros pendentes nas linhas: {numeros}. "
-                        "Revise escola ou unidade antes de confirmar."
+                        "Revise Escola Sistema ou Correção da Unidade antes de confirmar."
                     )
 
                 messages.error(request, " ".join(partes_mensagem))
@@ -3227,6 +3248,8 @@ def importar_quantitativo_escola(request):
                         "resumo": resumo,
                         "pregoes": pregoes,
                         "pregao": pregao,
+                        "escolas_sistema": escolas_sistema,
+                        "itens_sistema": itens_sistema,
                     },
                 )
 
@@ -3379,6 +3402,8 @@ def importar_quantitativo_escola(request):
                         "resumo": resumo,
                         "pregoes": pregoes,
                         "pregao": pregao,
+                        "escolas_sistema": escolas_sistema,
+                        "itens_sistema": itens_sistema,
                     },
                 )
 
@@ -3408,6 +3433,8 @@ def importar_quantitativo_escola(request):
             "resumo": resumo,
             "pregoes": pregoes,
             "pregao": pregao,
+            "escolas_sistema": escolas_sistema,
+            "itens_sistema": itens_sistema,
         },
     )
 

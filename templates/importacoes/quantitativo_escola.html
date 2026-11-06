@@ -108,11 +108,93 @@
     .nao-importar-linha {
         display: flex;
         align-items: center;
-        gap: 7px;
-        margin-top: 8px;
-        font-size: 12px;
+        justify-content: center;
+        gap: 5px;
+        margin: 0;
+        font-size: 10px;
         font-weight: 800;
         color: #475569;
+        white-space: nowrap;
+    }
+
+    /* Tabela compacta da validação */
+    .table-wrapper-validacao {
+        overflow-x: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+    }
+
+    .tabela-validacao-importacao {
+        width: 100%;
+        min-width: 1320px;
+        table-layout: fixed;
+        border-collapse: collapse;
+        font-size: 10.5px;
+        line-height: 1.15;
+    }
+
+    .tabela-validacao-importacao th,
+    .tabela-validacao-importacao td {
+        padding: 4px 5px !important;
+        vertical-align: middle;
+        border-bottom: 1px solid #e2e8f0;
+        overflow-wrap: anywhere;
+    }
+
+    .tabela-validacao-importacao th {
+        font-size: 10px;
+        line-height: 1.1;
+        white-space: normal;
+    }
+
+    .tabela-validacao-importacao select,
+    .tabela-validacao-importacao input[type="text"] {
+        width: 100%;
+        min-height: 28px;
+        padding: 3px 24px 3px 5px;
+        font-size: 10.5px;
+        line-height: 1.1;
+    }
+
+    .tabela-validacao-importacao input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+        margin: 0;
+    }
+
+    .tabela-validacao-importacao .badge-importacao {
+        padding: 3px 6px;
+        font-size: 9.5px;
+    }
+
+    .tabela-validacao-importacao ul {
+        margin: 0;
+        padding-left: 14px;
+    }
+
+    .tabela-validacao-importacao li {
+        margin: 0 0 2px;
+    }
+
+    .tabela-validacao-importacao .col-linha { width: 44px; text-align:center; }
+    .tabela-validacao-importacao .col-acao { width: 66px; }
+    .tabela-validacao-importacao .col-escola-planilha { width: 145px; }
+    .tabela-validacao-importacao .col-escola-sistema { width: 190px; }
+    .tabela-validacao-importacao .col-item-planilha { width: 150px; }
+    .tabela-validacao-importacao .col-item-sistema { width: 205px; }
+    .tabela-validacao-importacao .col-nao-importar { width: 88px; text-align:center; }
+    .tabela-validacao-importacao .col-unidade { width: 92px; }
+    .tabela-validacao-importacao .col-unidade-correcao { width: 145px; }
+    .tabela-validacao-importacao .col-quantidade { width: 78px; text-align:right; }
+    .tabela-validacao-importacao .col-erros { width: 220px; }
+
+    .linha-ignorada {
+        opacity: 0.55;
+        background: #f8fafc !important;
+    }
+
+    .linha-ignorada select {
+        pointer-events: none;
     }
 
     @media (max-width: 900px) {
@@ -151,7 +233,7 @@
     <div class="passo-card">
         <div class="passo-numero">3</div>
         <h3>Confirme</h3>
-        <p>Corrija escola/item/unidade na prévia, quando necessário, e confirme.</p>
+        <p>Confira Escola Sistema e Item Sistema, ajuste a unidade quando necessário e confirme.</p>
     </div>
 </div>
 
@@ -254,28 +336,34 @@
 <div class="card" style="margin-top:20px;">
     <h2>Prévia da Importação{% if pregao %} — {{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}{% endif %}</h2>
 
-    <div class="table-wrapper" style="margin-top:14px;">
-        <table>
+    <div class="table-wrapper-validacao" style="margin-top:10px;">
+        <table class="tabela-validacao-importacao">
             <thead>
                 <tr>
-                    <th>Linha</th>
-                    <th>Ação</th>
-                    <th>Escola informada</th>
-                    <th>Correção da Escola</th>
-                    <th>Item informado</th>
-                    <th>Correção do Item</th>
-                    <th>Unidade informada</th>
-                    <th>Correção da Unidade</th>
-                    <th>Quantidade</th>
-                    <th>Erros</th>
+                    <th class="col-linha">Linha</th>
+                    <th class="col-acao">Ação</th>
+                    <th class="col-escola-planilha">Escola Planilha</th>
+                    <th class="col-escola-sistema">Escola Sistema</th>
+                    <th class="col-item-planilha">Item Planilha</th>
+                    <th class="col-item-sistema">Item Sistema</th>
+                    <th class="col-nao-importar">Não importar</th>
+                    <th class="col-unidade">Unidade de Medida</th>
+                    <th class="col-unidade-correcao">Correção da Unidade</th>
+                    <th class="col-quantidade">Quantidade</th>
+                    <th class="col-erros">Erros</th>
                 </tr>
             </thead>
 
             <tbody>
                 {% for linha in linhas %}
-                <tr id="linha-importacao-{{ linha.linha }}" data-linha-importacao="{{ linha.linha }}">
-                    <td>{{ linha.linha }}</td>
-                    <td>
+                <tr
+                    id="linha-importacao-{{ linha.linha }}"
+                    data-linha-importacao="{{ linha.linha }}"
+                    {% if linha.ignorar %}class="linha-ignorada"{% endif %}
+                >
+                    <td class="col-linha">{{ linha.linha }}</td>
+
+                    <td class="col-acao">
                         {% if linha.acao == "Criar" %}
                         <span class="badge-importacao badge-criar">Criar</span>
                         {% elif linha.acao == "Atualizar" %}
@@ -286,84 +374,87 @@
                         <span class="badge-importacao badge-erro">Erro</span>
                         {% endif %}
                     </td>
-                    <td>{{ linha.dados.escola_texto }}</td>
-                    <td>
-                        {% if linha.erro_escola %}
-                            {% if linha.escola_opcoes %}
-                            <select name="escola_corrigida_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo-escola">
-                                <option value="">Selecione a escola correta</option>
-                                {% for escola in linha.escola_opcoes %}
-                                <option value="{{ escola.id }}">
-                                    {{ escola.nome }} — {{ escola.municipio }}/{{ escola.uf }}
-                                </option>
-                                {% endfor %}
-                            </select>
-                            {% else %}
-                            <span style="color:#991b1b; font-weight:800;">Nenhuma escola disponível para o pregão.</span>
-                            {% endif %}
-                        {% elif linha.dados.escola_corrigida_nome %}
-                            <strong>{{ linha.dados.escola_corrigida_nome }}</strong>
-                        {% else %}
-                            -
-                        {% endif %}
-                    </td>
-                    <td>{{ linha.dados.item_texto }}</td>
-                    <td>
-                        {% if linha.ignorar %}
-                            <span class="badge-importacao badge-ignorar">Esta linha não será importada</span>
-                            <label class="nao-importar-linha">
-                                <input
-                                    type="checkbox"
-                                    class="nao-importar-item-pendente"
-                                    data-linha="{{ linha.linha }}"
-                                    name="nao_importar_{{ linha.linha }}"
-                                    value="1"
-                                    checked
-                                    form="form-confirmar-importacao-quantitativo-escola"
-                                >
-                                Manter como não importar
-                            </label>
-                        {% elif linha.erro_item %}
-                            {% if linha.item_opcoes %}
-                            <select class="correcao-item-pendente" data-linha="{{ linha.linha }}" name="item_corrigido_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo-escola">
-                                <option value="">Selecione o item correto</option>
-                                {% for item in linha.item_opcoes %}
-                                <option value="{{ item.id }}">
-                                    {{ item.nome }} — {{ item.unidade }}
-                                </option>
-                                {% endfor %}
-                            </select>
-                            {% else %}
-                            <span style="color:#991b1b; font-weight:800;">
-                                Nenhum item semelhante encontrado entre os itens com quantitativo deste certame.
-                            </span>
-                            {% endif %}
 
-                            <label class="nao-importar-linha">
-                                <input
-                                    type="checkbox"
-                                    class="nao-importar-item-pendente"
-                                    data-linha="{{ linha.linha }}"
-                                    name="nao_importar_{{ linha.linha }}"
-                                    value="1"
-                                    form="form-confirmar-importacao-quantitativo-escola"
-                                >
-                                Não importar esta linha
-                            </label>
-                        {% elif linha.dados.item_corrigido_nome %}
-                            <strong>{{ linha.dados.item_corrigido_nome }}</strong>
-                        {% else %}
-                            -
-                        {% endif %}
+                    <td class="col-escola-planilha">
+                        {{ linha.dados.escola_planilha|default:linha.dados.escola_texto }}
                     </td>
-                    <td>{{ linha.dados.unidade_texto }}</td>
-                    <td>
+
+                    <td class="col-escola-sistema">
+                        <select
+                            class="escola-sistema-select"
+                            data-linha="{{ linha.linha }}"
+                            name="escola_corrigida_{{ linha.linha }}"
+                            form="form-confirmar-importacao-quantitativo-escola"
+                        >
+                            <option value="">Selecione...</option>
+                            {% for escola in escolas_sistema %}
+                            <option
+                                value="{{ escola.id }}"
+                                {% if escola.id == linha.dados.escola_id %}selected{% endif %}
+                            >
+                                {{ escola.nome }} — {{ escola.municipio }}/{{ escola.uf }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </td>
+
+                    <td class="col-item-planilha">
+                        {{ linha.dados.item_planilha|default:linha.dados.item_texto }}
+                    </td>
+
+                    <td class="col-item-sistema">
+                        <select
+                            class="item-sistema-select"
+                            data-linha="{{ linha.linha }}"
+                            name="item_corrigido_{{ linha.linha }}"
+                            form="form-confirmar-importacao-quantitativo-escola"
+                        >
+                            <option value="">Selecione...</option>
+                            {% for item in itens_sistema %}
+                            <option
+                                value="{{ item.id }}"
+                                {% if item.id == linha.dados.item_id %}selected{% endif %}
+                            >
+                                {{ item.nome }} — {{ item.unidade }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </td>
+
+                    <td class="col-nao-importar">
+                        <label class="nao-importar-linha">
+                            <input
+                                type="checkbox"
+                                class="nao-importar-checkbox"
+                                data-linha="{{ linha.linha }}"
+                                name="nao_importar_{{ linha.linha }}"
+                                value="1"
+                                {% if linha.ignorar %}checked{% endif %}
+                                form="form-confirmar-importacao-quantitativo-escola"
+                            >
+                            Não
+                        </label>
+                    </td>
+
+                    <td class="col-unidade">
+                        {{ linha.dados.unidade_planilha|default:linha.dados.unidade_texto }}
+                    </td>
+
+                    <td class="col-unidade-correcao">
                         {% if linha.erro_unidade %}
                             {% if linha.unidade_opcoes %}
-                            <select name="unidade_corrigida_{{ linha.linha }}" form="form-confirmar-importacao-quantitativo-escola">
-                                <option value="">Selecione a unidade correta</option>
+                            <select
+                                class="unidade-correcao-select"
+                                data-linha="{{ linha.linha }}"
+                                name="unidade_corrigida_{{ linha.linha }}"
+                                form="form-confirmar-importacao-quantitativo-escola"
+                            >
+                                <option value="">Selecione...</option>
                                 {% for unidade in linha.unidade_opcoes %}
-                                <option value="{{ unidade.id }}">
+                                <option
+                                    value="{{ unidade.id }}"
+                                    {% if unidade.id == linha.dados.unidade_corrigida_id %}selected{% endif %}
+                                >
                                     {{ unidade.rotulo }}
                                 </option>
                                 {% endfor %}
@@ -377,51 +468,14 @@
                             -
                         {% endif %}
                     </td>
-                    <td>
-                        {% if linha.erro_quantidade and not linha.ignorar %}
-                            <input
-                                type="number"
-                                min="1"
-                                step="1"
-                                inputmode="numeric"
-                                class="correcao-quantidade-pendente"
-                                data-linha="{{ linha.linha }}"
-                                name="quantidade_corrigida_{{ linha.linha }}"
-                                value="{{ linha.dados.quantidade|floatformat:'0' }}"
-                                {% if linha.saldo_maximo %}
-                                max="{{ linha.saldo_maximo|floatformat:'0' }}"
-                                {% endif %}
-                                form="form-confirmar-importacao-quantitativo-escola"
-                                style="width:110px;"
-                            >
-                            {% if linha.saldo_maximo %}
-                            <small style="display:block; margin-top:5px; color:#991b1b; font-weight:800;">
-                                Máximo: {{ linha.saldo_maximo|floatformat:'0' }}
-                            </small>
-                            {% endif %}
 
-                            {% if not linha.erro_item %}
-                            <label class="nao-importar-linha">
-                                <input
-                                    type="checkbox"
-                                    class="nao-importar-item-pendente"
-                                    data-linha="{{ linha.linha }}"
-                                    name="nao_importar_{{ linha.linha }}"
-                                    value="1"
-                                    form="form-confirmar-importacao-quantitativo-escola"
-                                >
-                                Não importar esta linha
-                            </label>
-                            {% endif %}
-                        {% else %}
-                            {{ linha.dados.quantidade|floatformat:'0' }}
-                        {% endif %}
-                    </td>
-                    <td>
+                    <td class="col-quantidade">{{ linha.dados.quantidade }}</td>
+
+                    <td class="col-erros">
                         {% if linha.ignorar %}
                         <span style="color:#475569; font-weight:800;">Linha marcada para não importar.</span>
                         {% elif linha.erros %}
-                        <ul style="margin:0; padding-left:18px;">
+                        <ul>
                             {% for erro in linha.erros %}
                             <li>{{ erro }}</li>
                             {% endfor %}
@@ -445,9 +499,9 @@
 
         {% if resumo.erros > 0 %}
         <p style="color:#92400e; font-weight:800; margin-bottom:12px;">
-            Para erro de item, selecione um item do certame na coluna de correção ou marque "Não importar esta linha".
-            Para escola/unidade, selecione a correção correspondente.
-            Para erro de quantidade ou saldo, ajuste a quantidade diretamente na prévia ou marque "Não importar esta linha".
+            Confira as associações em <strong>Escola Sistema</strong> e <strong>Item Sistema</strong>.
+            Se não desejar importar uma linha, marque <strong>Não importar</strong>.
+            Quando houver erro de unidade, selecione a unidade correta na coluna correspondente.
         </p>
         {% endif %}
 
@@ -462,75 +516,80 @@
     const form = document.getElementById('form-confirmar-importacao-quantitativo-escola');
     if (!form) return;
 
+    function atualizarEstadoLinha(row) {
+        const checkbox = row.querySelector('.nao-importar-checkbox');
+        const ignorada = Boolean(checkbox && checkbox.checked);
+
+        row.classList.toggle('linha-ignorada', ignorada);
+
+        row.querySelectorAll('select').forEach(function (select) {
+            select.disabled = ignorada;
+        });
+    }
+
+    document.querySelectorAll('[data-linha-importacao]').forEach(function (row) {
+        atualizarEstadoLinha(row);
+
+        const checkbox = row.querySelector('.nao-importar-checkbox');
+        if (checkbox) {
+            checkbox.addEventListener('change', function () {
+                atualizarEstadoLinha(row);
+            });
+        }
+    });
+
     form.addEventListener('submit', function (event) {
         document.querySelectorAll('.linha-pendente-confirmacao').forEach(function (row) {
             row.classList.remove('linha-pendente-confirmacao');
         });
 
-        const selects = Array.from(document.querySelectorAll('.correcao-item-pendente'));
-        const quantidades = Array.from(document.querySelectorAll('.correcao-quantidade-pendente'));
-        const linhasPendentes = new Set();
+        const linhasPendentes = [];
 
-        selects.forEach(function (select) {
-            const linha = select.dataset.linha;
-            const checkbox = document.querySelector(
-                '.nao-importar-item-pendente[data-linha="' + linha + '"]'
-            );
+        document.querySelectorAll('[data-linha-importacao]').forEach(function (row) {
+            const linha = row.dataset.linhaImportacao;
+            const checkbox = row.querySelector('.nao-importar-checkbox');
 
-            const itemSelecionado = Boolean(select.value);
-            const naoImportar = Boolean(checkbox && checkbox.checked);
+            if (checkbox && checkbox.checked) {
+                return;
+            }
 
-            if (!itemSelecionado && !naoImportar) {
-                linhasPendentes.add(linha);
+            const escola = row.querySelector('.escola-sistema-select');
+            const item = row.querySelector('.item-sistema-select');
+            const unidade = row.querySelector('.unidade-correcao-select');
+
+            const faltandoEscola = escola && !escola.value;
+            const faltandoItem = item && !item.value;
+            const faltandoUnidade = unidade && !unidade.value;
+
+            if (faltandoEscola || faltandoItem || faltandoUnidade) {
+                linhasPendentes.push(linha);
+                row.classList.add('linha-pendente-confirmacao');
             }
         });
 
-        quantidades.forEach(function (input) {
-            const linha = input.dataset.linha;
-            const checkbox = document.querySelector(
-                '.nao-importar-item-pendente[data-linha="' + linha + '"]'
-            );
-            const naoImportar = Boolean(checkbox && checkbox.checked);
-
-            if (naoImportar) return;
-
-            const valor = Number(input.value);
-            const maximo = input.max ? Number(input.max) : null;
-
-            if (
-                !input.value ||
-                !Number.isInteger(valor) ||
-                valor <= 0 ||
-                (maximo !== null && valor > maximo)
-            ) {
-                linhasPendentes.add(linha);
-            }
-        });
-
-        const linhasPendentesLista = Array.from(linhasPendentes);
-
-        linhasPendentesLista.forEach(function (linha) {
-            const row = document.getElementById('linha-importacao-' + linha);
-            if (row) row.classList.add('linha-pendente-confirmacao');
-        });
-
-        if (linhasPendentesLista.length > 0) {
+        if (linhasPendentes.length > 0) {
             event.preventDefault();
 
             alert(
-                'Existem linhas ainda não resolvidas: ' +
-                linhasPendentesLista.join(', ') +
-                '.\n\nCorrija o item/quantidade indicado ou marque “Não importar esta linha”.'
+                'Existem linhas com seleção pendente: ' +
+                linhasPendentes.join(', ') +
+                '.\n\nConfira Escola Sistema, Item Sistema e Correção da Unidade, ou marque Não importar.'
             );
 
-            const primeiraLinha = document.getElementById('linha-importacao-' + linhasPendentesLista[0]);
+            const primeiraLinha = document.getElementById(
+                'linha-importacao-' + linhasPendentes[0]
+            );
+
             if (primeiraLinha) {
-                primeiraLinha.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                primeiraLinha.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
             }
             return;
         }
 
-        if (!confirm('Confirmar a importação dos quantitativos por escola e das correções selecionadas?')) {
+        if (!confirm('Confirmar a importação dos quantitativos por escola com as associações selecionadas?')) {
             event.preventDefault();
         }
     });
