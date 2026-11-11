@@ -100,6 +100,16 @@ urlpatterns = [
         name="gerar_resultado_chamada_publica_word",
     ),
     path(
+        "chamada-publica/resultado/<int:pregao_id>/fornecedores-adjudicados-reserva/word/",
+        views.gerar_fornecedores_adjudicados_reserva_chamada_word,
+        name="gerar_fornecedores_adjudicados_reserva_chamada_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/fornecedores-adjudicados-reserva/pdf/",
+        views.gerar_fornecedores_adjudicados_reserva_chamada_pdf,
+        name="gerar_fornecedores_adjudicados_reserva_chamada_pdf",
+    ),
+    path(
         "chamada-publica/resultado/<int:pregao_id>/pdf/",
         views.gerar_resultado_chamada_publica_pdf,
         name="gerar_resultado_chamada_publica_pdf",
@@ -164,6 +174,21 @@ urlpatterns = [
         "chamada-publica/resultado/",
         views.resultado_chamada_publica,
         name="resultado_chamada_publica",
+    ),
+    path(
+        "chamada-publica/cadastro-reserva/distrato-item/<int:distrato_item_id>/adjudicar/",
+        views.adjudicar_cadastro_reserva_chamada_publica,
+        name="adjudicar_cadastro_reserva_chamada_publica",
+    ),
+    path(
+        "chamada-publica/cadastro-reserva/<int:pregao_item_id>/editar/",
+        views.editar_cadastro_reserva_chamada_publica,
+        name="editar_cadastro_reserva_chamada_publica",
+    ),
+    path(
+        "chamada-publica/cadastro-reserva/<int:pregao_item_id>/cancelar/",
+        views.cancelar_cadastro_reserva_chamada_publica,
+        name="cancelar_cadastro_reserva_chamada_publica",
     ),
     path(
         "chamada-publica/projetos-venda/",

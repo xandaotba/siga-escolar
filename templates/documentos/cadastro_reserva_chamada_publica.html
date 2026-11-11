@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Cadastro Reserva | Sistema de Certames{% endblock %}
+{% block page_title %}Cadastro Reserva da Chamada Pública{% endblock %}
+{% block page_subtitle %}Cadastre ou edite o fornecedor reserva, marca e quantidade disponível para substituição futura{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>{{ item_pregao.item.nome_item }}</h2>
+
+    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:14px; margin-bottom:18px;">
+        <div><strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }}</div>
+        <div><strong>Ordem:</strong> {{ item_pregao.ordem }}</div>
+        <div><strong>Unidade:</strong> {{ item_pregao.item.get_unidade_medida_display }}</div>
+        <div><strong>Quantidade Total do Certame:</strong> {{ item_pregao.quantidade_total|quantidade_br }}</div>
+
+        {% if cadastro %}
+            <div><strong>Quantidade já utilizada da reserva:</strong> {{ cadastro.quantidade_utilizada|quantidade_br }}</div>
+            <div><strong>Saldo atual da reserva:</strong> {{ cadastro.saldo_reserva|quantidade_br }}</div>
+            {% if cadastro.status == "cancelado" %}
+                <div style="margin-top:8px; color:#92400e; font-weight:800;">
+                    Este cadastro reserva está cancelado. Ao salvar, ele será reativado.
+                </div>
+            {% endif %}
+        {% endif %}
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-3">
+            <div class="form-group">
+                <label>Fornecedor Reserva</label>
+                <select name="fornecedor_reserva" required>
+                    <option value="">Selecione o fornecedor</option>
+                    {% for fornecedor in fornecedores %}
+                        <option
+                            value="{{ fornecedor.id }}"
+                            {% if fornecedor_selecionado|stringformat:"s" == fornecedor.id|stringformat:"s" %}selected{% endif %}
+                        >
+                            {{ fornecedor.razao_social }} — {{ fornecedor.get_tipo_fornecedor_chamada_display }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <small>
+                    Não são exibidos fornecedores já adjudicados como principais para este item.
+                </small>
+            </div>
+
+            <div class="form-group">
+                <label>Marca / Descrição</label>
+                <input
+                    type="text"
+                    name="marca_reserva"
+                    value="{{ marca_valor }}"
+                    placeholder="Ex.: In natura"
+                >
+                <small>
+                    Marca ou descrição apresentada pelo fornecedor reserva.
+                </small>
+            </div>
+
+            <div class="form-group">
+                <label>Quantidade no Cadastro Reserva</label>
+                <input
+                    type="text"
+                    name="quantidade_reserva"
+                    value="{{ quantidade_valor }}"
+                    placeholder="0"
+                    inputmode="decimal"
+                    required
+                >
+                <small>
+                    Deve ser maior que zero, não pode ultrapassar o quantitativo total
+                    do item e não pode ser menor que a quantidade já utilizada.
+                </small>
+            </div>
+        </div>
+
+        {% if cadastro and cadastro.quantidade_utilizada > 0 %}
+        <div class="alert alert-info">
+            Como já existe quantidade utilizada neste cadastro, o fornecedor reserva
+            não poderá ser trocado. A quantidade total ainda pode ser ajustada, desde
+            que permaneça igual ou superior à quantidade já utilizada.
+        </div>
+        {% endif %}
+
+        <div class="actions">
+            <button class="btn btn-success" type="submit">
+                Salvar Cadastro Reserva
+            </button>
+
+            <a
+                class="btn btn-secondary"
+                href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}"
+            >
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}

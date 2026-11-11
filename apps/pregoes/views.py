@@ -14,7 +14,8 @@ from django.core import signing
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
+from django.db.models.deletion import ProtectedError
+from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -428,12 +429,45 @@ def _converter_quantidade_digitada(valor, valor_atual=None):
     return Decimal(sinal + normalizado)
 
 
+
+def _certame_permite_alterar_quantitativos(pregao):
+    """
+    Pregão Presencial: quantitativos somente antes do início.
+    Chamada Pública: quantitativos podem ser incluídos/alterados em qualquer status.
+    """
+    return bool(
+        pregao
+        and (
+            pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA
+            or pregao.status == Pregao.STATUS_NAO_INICIADO
+        )
+    )
+
+
+def _certame_permite_alterar_media_precos(pregao):
+    """
+    Mantém a regra atual do Pregão Presencial (não iniciado/em andamento)
+    e libera a Chamada Pública em qualquer status, inclusive finalizada.
+    """
+    return bool(
+        pregao
+        and (
+            pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA
+            or pregao.status in [
+                Pregao.STATUS_NAO_INICIADO,
+                Pregao.STATUS_EM_ANDAMENTO,
+            ]
+        )
+    )
+
 def quantitativo_pregao(request):
     pregoes_lista = (
         Pregao.objects.filter(
-            status=Pregao.STATUS_NAO_INICIADO
+            Q(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+            | Q(status=Pregao.STATUS_NAO_INICIADO)
         )
         .prefetch_related("municipios")
+        .distinct()
         .order_by("-ano", "-numero")
     )
 
@@ -455,10 +489,10 @@ def quantitativo_pregao(request):
             messages.error(request, "Selecione um pregão.")
             return redirect("pregoes:quantitativo_pregao")
 
-        if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        if not _certame_permite_alterar_quantitativos(pregao):
             messages.error(
                 request,
-                "Não é permitido alterar quantitativos de pregão já iniciado ou finalizado.",
+                "Não é permitido alterar quantitativos de Pregão Presencial já iniciado ou finalizado.",
             )
             return redirect("pregoes:quantitativo_pregao")
 
@@ -541,9 +575,11 @@ def quantitativo_pregao(request):
 def quantitativo_escola(request):
     pregoes_lista = (
         Pregao.objects.filter(
-            status=Pregao.STATUS_NAO_INICIADO
+            Q(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+            | Q(status=Pregao.STATUS_NAO_INICIADO)
         )
         .prefetch_related("municipios")
+        .distinct()
         .order_by("-ano", "-numero")
     )
 
@@ -636,10 +672,10 @@ def quantitativo_escola(request):
             messages.error(request, "Selecione o pregão e a escola.")
             return redirect("pregoes:quantitativo_escola")
 
-        if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        if not _certame_permite_alterar_quantitativos(pregao):
             messages.error(
                 request,
-                "Não é permitido alterar quantitativos de escola em pregão já iniciado ou finalizado.",
+                "Não é permitido alterar quantitativos por escola de Pregão Presencial já iniciado ou finalizado.",
             )
             return redirect("pregoes:quantitativo_escola")
 
@@ -767,26 +803,78 @@ def quantitativo_escola(request):
                 },
             )
 
-        with transaction.atomic():
-            QuantitativoEscola.objects.filter(
-                pregao=pregao,
-                escola=escola,
-            ).delete()
+        itens_preservados_por_vinculo = []
 
-            for item_id, quantidade in quantidades_digitadas.items():
-                QuantitativoEscola.objects.create(
-                    pregao=pregao,
-                    escola=escola,
-                    item_id=item_id,
-                    quantidade=quantidade,
+        with transaction.atomic():
+            # Preserva os IDs dos QuantitativoEscola já existentes.
+            # Eles podem estar vinculados a contratos por FK PROTECT.
+            quantitativos_existentes = {
+                quantitativo.item_id: quantitativo
+                for quantitativo in (
+                    QuantitativoEscola.objects.select_for_update()
+                    .filter(
+                        pregao=pregao,
+                        escola=escola,
+                    )
+                    .select_related("item")
                 )
+            }
+
+            # Atualiza os registros existentes e cria somente os novos.
+            for item_id, quantidade in quantidades_digitadas.items():
+                quantitativo_existente = quantitativos_existentes.get(item_id)
+
+                if quantitativo_existente:
+                    if quantitativo_existente.quantidade != quantidade:
+                        quantitativo_existente.quantidade = quantidade
+                        quantitativo_existente.save(
+                            update_fields=["quantidade", "atualizado_em"]
+                        )
+                else:
+                    QuantitativoEscola.objects.create(
+                        pregao=pregao,
+                        escola=escola,
+                        item_id=item_id,
+                        quantidade=quantidade,
+                    )
+
+            # Campo vazio significa remover o item desta escola.
+            # Se houver contrato/histórico protegido, preserva o registro
+            # em vez de gerar erro 500.
+            itens_para_remover = set(quantitativos_existentes) - set(
+                quantidades_digitadas
+            )
+
+            for item_id in itens_para_remover:
+                quantitativo = quantitativos_existentes[item_id]
+
+                try:
+                    # Savepoint individual para que um PROTECT não invalide
+                    # as demais inclusões/alterações do salvamento.
+                    with transaction.atomic():
+                        quantitativo.delete()
+                except ProtectedError:
+                    itens_preservados_por_vinculo.append(
+                        quantitativo.item.nome_item
+                    )
 
         total_salvos = len(quantidades_digitadas)
 
         messages.success(
             request,
-            f"Quantitativos da escola salvos com sucesso. Itens gravados: {total_salvos}.",
+            f"Quantitativos da escola salvos com sucesso. Itens gravados/atualizados: {total_salvos}.",
         )
+
+        if itens_preservados_por_vinculo:
+            nomes_itens = ", ".join(
+                sorted(set(itens_preservados_por_vinculo))
+            )
+            messages.warning(
+                request,
+                "Os seguintes itens não foram removidos porque seus quantitativos "
+                "já estão vinculados a contratos ou a outros registros protegidos: "
+                f"{nomes_itens}. As demais alterações foram salvas normalmente.",
+            )
 
         return redirect(
             f"{request.path}?pregao={pregao.id}&escola={escola.id}"
@@ -1092,7 +1180,7 @@ def garantir_itens_pregao_para_propostas(pregao):
             itens_existentes.append(novo_item)
 
         # A ordem somente pode ser reorganizada antes do início do pregão.
-        if pregao.status == Pregao.STATUS_NAO_INICIADO:
+        if pregao.tipo_certame == Pregao.TIPO_PREGAO_PRESENCIAL and pregao.status == Pregao.STATUS_NAO_INICIADO:
             ids_com_quantitativo = {
                 quantitativo.item_id
                 for quantitativo in quantitativos_pregao
@@ -1158,12 +1246,16 @@ def garantir_itens_pregao_para_propostas(pregao):
 def media_precos(request):
     pregoes_lista = (
         Pregao.objects.filter(
-            status__in=[
-                Pregao.STATUS_NAO_INICIADO,
-                Pregao.STATUS_EM_ANDAMENTO,
-            ]
+            Q(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+            | Q(
+                status__in=[
+                    Pregao.STATUS_NAO_INICIADO,
+                    Pregao.STATUS_EM_ANDAMENTO,
+                ]
+            )
         )
         .prefetch_related("municipios")
+        .distinct()
         .order_by("-ano", "-numero")
     )
 
@@ -1174,13 +1266,10 @@ def media_precos(request):
     if pregao_id:
         pregao = get_object_or_404(Pregao, id=pregao_id)
 
-        if pregao.status not in [
-            Pregao.STATUS_NAO_INICIADO,
-            Pregao.STATUS_EM_ANDAMENTO,
-        ]:
+        if not _certame_permite_alterar_media_precos(pregao):
             messages.error(
                 request,
-                "Só é possível cadastrar médias de preços em certames não iniciados ou em andamento.",
+                "Só é possível cadastrar médias de preços em Pregão Presencial não iniciado ou em andamento.",
             )
             return redirect("pregoes:media_precos")
 
@@ -1208,13 +1297,10 @@ def media_precos(request):
             messages.error(request, "Selecione um certame.")
             return redirect("pregoes:media_precos")
 
-        if pregao.status not in [
-            Pregao.STATUS_NAO_INICIADO,
-            Pregao.STATUS_EM_ANDAMENTO,
-        ]:
+        if not _certame_permite_alterar_media_precos(pregao):
             messages.error(
                 request,
-                "Só é possível alterar médias de preços em certames não iniciados ou em andamento.",
+                "Só é possível alterar médias de preços em Pregão Presencial não iniciado ou em andamento.",
             )
             return redirect("pregoes:media_precos")
 

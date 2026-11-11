@@ -9,7 +9,7 @@ import re
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import HttpResponse
@@ -2026,14 +2026,39 @@ def baixar_modelo_quantitativo_pregao(request):
 
 @login_required
 @user_passes_test(usuario_pode_importar, login_url="dashboard")
+
+def _certame_permite_importar_quantitativos(pregao):
+    return bool(
+        pregao
+        and (
+            pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA
+            or pregao.status == Pregao.STATUS_NAO_INICIADO
+        )
+    )
+
+
+def _certame_permite_importar_media_precos(pregao):
+    return bool(
+        pregao
+        and (
+            pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA
+            or pregao.status in [
+                Pregao.STATUS_NAO_INICIADO,
+                Pregao.STATUS_EM_ANDAMENTO,
+            ]
+        )
+    )
+
 def importar_quantitativo_pregao(request):
     linhas = []
     resumo = None
     pregoes = (
         Pregao.objects.filter(
-            status=Pregao.STATUS_NAO_INICIADO,
+            Q(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+            | Q(status=Pregao.STATUS_NAO_INICIADO)
         )
         .prefetch_related("municipios")
+        .distinct()
         .order_by("-ano", "-numero")
     )
     pregao = None
@@ -2050,10 +2075,10 @@ def importar_quantitativo_pregao(request):
             messages.error(request, "Selecione um pregão válido.")
             return redirect("importacoes:quantitativo_pregao")
 
-        if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        if not _certame_permite_importar_quantitativos(pregao):
             messages.error(
                 request,
-                "Não é permitido importar quantitativos em pregão já iniciado ou finalizado.",
+                "Não é permitido importar quantitativos em Pregão Presencial já iniciado ou finalizado.",
             )
             return redirect("importacoes:quantitativo_pregao")
 
@@ -3043,9 +3068,11 @@ def importar_quantitativo_escola(request):
     unidades_sistema = opcoes_unidade_para_correcao("")
     pregoes = (
         Pregao.objects.filter(
-            status=Pregao.STATUS_NAO_INICIADO,
+            Q(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+            | Q(status=Pregao.STATUS_NAO_INICIADO)
         )
         .prefetch_related("municipios")
+        .distinct()
         .order_by("-ano", "-numero")
     )
     pregao = None
@@ -3067,10 +3094,10 @@ def importar_quantitativo_escola(request):
             messages.error(request, "Selecione um pregão válido.")
             return redirect("importacoes:quantitativo_escola")
 
-        if pregao.status != Pregao.STATUS_NAO_INICIADO:
+        if not _certame_permite_importar_quantitativos(pregao):
             messages.error(
                 request,
-                "Não é permitido importar quantitativos de escola em pregão já iniciado ou finalizado.",
+                "Não é permitido importar quantitativos por escola em Pregão Presencial já iniciado ou finalizado.",
             )
             return redirect("importacoes:quantitativo_escola")
 
@@ -3952,40 +3979,58 @@ def validar_cabecalho_planilha_media_precos(linha):
 
 def garantir_itens_pregao_para_importacao_media(pregao):
     """
-    Garante que os PregaoItem existam antes da importação das médias,
-    usando a mesma regra da tela manual de Média de Preços:
-    só cria os itens se houver quantitativo por escola para o certame.
+    Sincroniza PregaoItem com o QuantitativoPregao atual para permitir
+    cadastro/importação de médias.
+
+    Não depende de QuantitativoEscola. Isso é necessário especialmente na
+    Chamada Pública, onde adjudicação e distribuição por escola são etapas
+    independentes.
     """
-    if PregaoItem.objects.filter(pregao=pregao).exists():
-        return True
-
-    existe_quantitativo_escola = QuantitativoEscola.objects.filter(
-        pregao=pregao
-    ).exists()
-
-    if not existe_quantitativo_escola:
-        return False
-
-    quantitativos_pregao = (
+    quantitativos = list(
         QuantitativoPregao.objects.filter(pregao=pregao)
         .select_related("item")
-        .order_by("item__nome_item")
+        .order_by("item__nome_item", "item_id")
     )
 
-    ordem = 1
+    if not quantitativos:
+        return False
 
-    for qp in quantitativos_pregao:
-        PregaoItem.objects.get_or_create(
-            pregao=pregao,
-            item=qp.item,
-            defaults={
-                "ordem": ordem,
-                "quantidade_total": qp.quantidade,
-            },
+    with transaction.atomic():
+        existentes = list(
+            PregaoItem.objects.select_for_update()
+            .filter(pregao=pregao)
+            .order_by("ordem", "id")
         )
-        ordem += 1
 
-    return PregaoItem.objects.filter(pregao=pregao).exists()
+        por_item = {
+            registro.item_id: registro
+            for registro in existentes
+        }
+
+        ultima_ordem = max(
+            (registro.ordem for registro in existentes),
+            default=0,
+        )
+
+        for quantitativo in quantitativos:
+            registro = por_item.get(quantitativo.item_id)
+
+            if registro:
+                if registro.quantidade_total != quantitativo.quantidade:
+                    registro.quantidade_total = quantitativo.quantidade
+                    registro.save(update_fields=["quantidade_total"])
+                continue
+
+            ultima_ordem += 1
+            registro = PregaoItem.objects.create(
+                pregao=pregao,
+                item=quantitativo.item,
+                ordem=ultima_ordem,
+                quantidade_total=quantitativo.quantidade,
+            )
+            por_item[quantitativo.item_id] = registro
+
+    return True
 
 
 def opcoes_item_certame_para_correcao(texto_item, pregao):
@@ -3993,8 +4038,15 @@ def opcoes_item_certame_para_correcao(texto_item, pregao):
     Retorna somente itens que pertencem ao certame selecionado.
     Mantém os itens mais parecidos com o texto informado no topo da lista.
     """
+    itens_com_quantitativo = QuantitativoPregao.objects.filter(
+        pregao=pregao,
+    ).values_list("item_id", flat=True)
+
     itens_pregao = (
-        PregaoItem.objects.filter(pregao=pregao)
+        PregaoItem.objects.filter(
+            pregao=pregao,
+            item_id__in=itens_com_quantitativo,
+        )
         .select_related("item")
         .order_by("ordem", "item__nome_item")
     )
@@ -4258,12 +4310,16 @@ def importar_media_precos(request):
 
     pregoes = (
         Pregao.objects.filter(
-            status__in=[
-                Pregao.STATUS_NAO_INICIADO,
-                Pregao.STATUS_EM_ANDAMENTO,
-            ]
+            Q(tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
+            | Q(
+                status__in=[
+                    Pregao.STATUS_NAO_INICIADO,
+                    Pregao.STATUS_EM_ANDAMENTO,
+                ]
+            )
         )
         .prefetch_related("municipios")
+        .distinct()
         .order_by("-ano", "-numero")
     )
 
@@ -4280,13 +4336,10 @@ def importar_media_precos(request):
             messages.error(request, "Selecione um certame válido.")
             return redirect("importacoes:media_precos")
 
-        if pregao.status not in [
-            Pregao.STATUS_NAO_INICIADO,
-            Pregao.STATUS_EM_ANDAMENTO,
-        ]:
+        if not _certame_permite_importar_media_precos(pregao):
             messages.error(
                 request,
-                "Só é possível importar médias em certames não iniciados ou em andamento.",
+                "Só é possível importar médias em Pregão Presencial não iniciado ou em andamento.",
             )
             return redirect("importacoes:media_precos")
 
@@ -4294,7 +4347,7 @@ def importar_media_precos(request):
             messages.error(
                 request,
                 "Não foi possível localizar itens para este certame. "
-                "Cadastre primeiro o quantitativo do certame e o quantitativo por escola.",
+                "Cadastre primeiro o quantitativo do certame.",
             )
             return redirect(
                 f"{request.path}?pregao={pregao.id}"

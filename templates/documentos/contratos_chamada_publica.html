@@ -190,8 +190,9 @@
     <div class="card">
         <h2>Base para Geração de Contratos</h2>
         <p class="texto-ajuda">
-            Os contratos abaixo seguem a mesma lógica do Pregão: por escola e fornecedor.
-            O sistema considera os quantitativos por escola e as quantidades adjudicadas na Chamada Pública.
+            Os contratos são organizados por escola e fornecedor.
+            O sistema considera os quantitativos por escola, as adjudicações principais
+            e as novas adjudicações feitas ao Cadastro Reserva após distratos.
         </p>
     </div>
 
@@ -242,6 +243,7 @@
                                     <thead>
                                         <tr>
                                             <th>Selecionar</th>
+                                            <th>Origem</th>
                                             <th>Item</th>
                                             <th>Marca</th>
                                             <th>Unidade</th>
@@ -260,9 +262,16 @@
                                                     <input
                                                         type="checkbox"
                                                         name="selecionar_item"
-                                                        value="{{ item.resultado_id }}|{{ item.quantitativo_escola_id }}"
+                                                        value="{{ item.origem_tipo }}|{{ item.origem_id }}|{{ item.quantitativo_escola_id }}"
                                                         checked
                                                     >
+                                                </td>
+                                                <td>
+                                                    {% if item.eh_cadastro_reserva %}
+                                                        <span class="badge badge-warning">Cadastro Reserva</span>
+                                                    {% else %}
+                                                        <span class="badge badge-success">Adjudicação Principal</span>
+                                                    {% endif %}
                                                 </td>
                                                 <td>{{ item.item.nome_item }}</td>
                                                 <td>{{ item.marca|default:"-" }}</td>
@@ -272,7 +281,7 @@
                                                 <td>
                                                     <input
                                                         type="text"
-                                                        name="quantidade_{{ item.resultado_id }}_{{ item.quantitativo_escola_id }}"
+                                                        name="quantidade_{{ item.origem_tipo }}_{{ item.origem_id }}_{{ item.quantitativo_escola_id }}"
                                                         value="{{ item.quantidade_contratar|quantidade_br }}"
                                                         title="Você pode digitar 1220, 1.220, 1220,50 ou 1.220,50"
                                                         style="max-width:110px;"

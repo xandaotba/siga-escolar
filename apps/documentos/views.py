@@ -10,7 +10,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.db.models import Sum, Max, Count
 from django.db import models
-from django.db import transaction
+from django.db import transaction, IntegrityError
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.cadastros.models import Escola, Fornecedor, Item
@@ -38,6 +39,8 @@ from .models import (
     ProjetoVenda,
     ProjetoVendaItem,
     ResultadoChamadaPublicaItem,
+    CadastroReservaChamadaPublica,
+    AdjudicacaoReservaChamadaPublica,
 )
 
 from io import BytesIO
@@ -4651,7 +4654,7 @@ def visualizar_contrato(request, contrato_id):
 
     itens = (
         ContratoItemGerado.objects.filter(contrato=contrato)
-        .select_related("item")
+        .select_related("item", "adjudicacao_reserva")
         .order_by("item__nome_item")
     )
 
@@ -5200,6 +5203,15 @@ def obter_cpf_representante_fornecedor_chamada(fornecedor):
 
 
 def obter_saldo_resultado_chamada_para_contrato(resultado):
+    """
+    Saldo da adjudicação PRINCIPAL ainda não convertido em contrato.
+
+    Para Chamada Pública, um distrato não devolve a quantidade ao fornecedor
+    original: a quantidade liberada fica disponível para nova adjudicação ao
+    Cadastro Reserva. Por isso contamos contratos gerados e distratados como
+    consumo histórico da adjudicação principal; apenas contratos cancelados
+    devolvem saldo ao resultado original.
+    """
     total_contratado = (
         ContratoItemGerado.objects.filter(
             contrato__pregao=resultado.pregao,
@@ -5207,8 +5219,10 @@ def obter_saldo_resultado_chamada_para_contrato(resultado):
             contrato__status__in=[
                 ContratoGerado.STATUS_GERADO,
                 ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
+                ContratoGerado.STATUS_DISTRATADO,
             ],
             item=resultado.item,
+            adjudicacao_reserva__isnull=True,
         )
         .aggregate(total=Sum("quantidade_contratada"))
         .get("total")
@@ -5223,7 +5237,13 @@ def obter_saldo_resultado_chamada_para_contrato(resultado):
 
 
 def obter_saldo_quantitativo_escola_chamada(quantitativo):
-    total_contratado = (
+    """
+    Saldo efetivamente ativo do quantitativo da escola.
+
+    Contratos parcialmente distratados consomem somente a quantidade ainda
+    ativa. Contratos totalmente distratados e cancelados não consomem saldo.
+    """
+    itens_contrato = (
         ContratoItemGerado.objects.filter(
             quantitativo_escola=quantitativo,
             contrato__status__in=[
@@ -5231,11 +5251,55 @@ def obter_saldo_quantitativo_escola_chamada(quantitativo):
                 ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
             ],
         )
+        .prefetch_related("distratos")
+    )
+
+    total_ativo = Decimal("0")
+
+    for item_contrato in itens_contrato:
+        quantidade_distratada = (
+            item_contrato.distratos.aggregate(
+                total=Sum("quantidade_distratada")
+            ).get("total")
+            or Decimal("0")
+        )
+
+        quantidade_ativa = (
+            item_contrato.quantidade_contratada - quantidade_distratada
+        )
+
+        if quantidade_ativa > 0:
+            total_ativo += quantidade_ativa
+
+    saldo = quantitativo.quantidade - total_ativo
+
+    if saldo < 0:
+        return Decimal("0")
+
+    return saldo
+
+
+def obter_saldo_adjudicacao_reserva_para_contrato(adjudicacao):
+    """
+    Quantidade adjudicada ao Cadastro Reserva que ainda não virou contrato.
+
+    Um eventual distrato posterior do contrato do próprio fornecedor reserva
+    não reabre automaticamente essa adjudicação.
+    """
+    total_contratado = (
+        ContratoItemGerado.objects.filter(
+            adjudicacao_reserva=adjudicacao,
+            contrato__status__in=[
+                ContratoGerado.STATUS_GERADO,
+                ContratoGerado.STATUS_PARCIALMENTE_DISTRATADO,
+                ContratoGerado.STATUS_DISTRATADO,
+            ],
+        )
         .aggregate(total=Sum("quantidade_contratada"))
         .get("total")
     ) or Decimal("0")
 
-    saldo = quantitativo.quantidade - total_contratado
+    saldo = adjudicacao.quantidade_adjudicada - total_contratado
 
     if saldo < 0:
         return Decimal("0")
@@ -5244,6 +5308,159 @@ def obter_saldo_quantitativo_escola_chamada(quantitativo):
 
 
 def montar_contratos_chamada_publica_possiveis(pregao):
+    quantitativos = list(
+        QuantitativoEscola.objects.filter(
+            pregao=pregao,
+            quantidade__gt=0,
+        )
+        .select_related("escola", "escola__municipio", "item")
+        .order_by("escola__nome_escola", "item__nome_item")
+    )
+
+    quantitativo_por_escola_item = {
+        (quantitativo.escola_id, quantitativo.item_id): quantitativo
+        for quantitativo in quantitativos
+    }
+
+    saldo_escola_por_quantitativo = {
+        quantitativo.id: obter_saldo_quantitativo_escola_chamada(quantitativo)
+        for quantitativo in quantitativos
+    }
+
+    escolas_dict = {}
+    total_contratos = 0
+    total_itens = 0
+    valor_total_geral = Decimal("0")
+
+    def adicionar_item(
+        quantitativo,
+        fornecedor,
+        item,
+        marca,
+        unidade,
+        quantidade_contratar,
+        saldo_origem,
+        valor_unitario,
+        origem_tipo,
+        origem_id,
+        adjudicacao_reserva=None,
+    ):
+        nonlocal total_contratos, total_itens, valor_total_geral
+
+        if quantidade_contratar <= 0:
+            return
+
+        escola = quantitativo.escola
+        valor_total_item = quantidade_contratar * valor_unitario
+
+        if escola.id not in escolas_dict:
+            escolas_dict[escola.id] = {
+                "escola": escola,
+                "fornecedores": {},
+                "valor_total_escola": Decimal("0"),
+            }
+
+        escola_grupo = escolas_dict[escola.id]
+
+        if fornecedor.id not in escola_grupo["fornecedores"]:
+            escola_grupo["fornecedores"][fornecedor.id] = {
+                "fornecedor": fornecedor,
+                "itens": [],
+                "valor_total_contrato": Decimal("0"),
+            }
+            total_contratos += 1
+
+        fornecedor_grupo = escola_grupo["fornecedores"][fornecedor.id]
+
+        fornecedor_grupo["itens"].append(
+            {
+                "origem_tipo": origem_tipo,
+                "origem_id": origem_id,
+                "resultado_id": origem_id if origem_tipo == "principal" else "",
+                "adjudicacao_reserva_id": (
+                    adjudicacao_reserva.id
+                    if adjudicacao_reserva
+                    else ""
+                ),
+                "quantitativo_escola_id": quantitativo.id,
+                "item": item,
+                "marca": marca or "",
+                "unidade": unidade,
+                "quantidade_contratar": quantidade_contratar,
+                "quantidade_escola": quantitativo.quantidade,
+                "saldo_escola": saldo_escola_por_quantitativo.get(
+                    quantitativo.id,
+                    Decimal("0"),
+                ),
+                "saldo_resultado": saldo_origem,
+                "valor_unitario": valor_unitario,
+                "valor_total_item": valor_total_item,
+                "eh_cadastro_reserva": origem_tipo == "reserva",
+            }
+        )
+
+        fornecedor_grupo["valor_total_contrato"] += valor_total_item
+        escola_grupo["valor_total_escola"] += valor_total_item
+        valor_total_geral += valor_total_item
+        total_itens += 1
+
+    # 1. Adjudicações do Cadastro Reserva têm escola definida pelo contrato
+    # distratado e devem ocupar primeiro o saldo devolvido daquela escola.
+    adjudicacoes_reserva = (
+        AdjudicacaoReservaChamadaPublica.objects.filter(
+            pregao=pregao,
+            status=AdjudicacaoReservaChamadaPublica.STATUS_REGISTRADO,
+        )
+        .select_related(
+            "fornecedor_reserva",
+            "item",
+            "pregao_item",
+            "escola",
+            "cadastro_reserva",
+        )
+        .order_by("escola__nome_escola", "pregao_item__ordem", "criado_em")
+    )
+
+    for adjudicacao in adjudicacoes_reserva:
+        quantitativo = quantitativo_por_escola_item.get(
+            (adjudicacao.escola_id, adjudicacao.item_id)
+        )
+
+        if not quantitativo:
+            continue
+
+        saldo_escola = saldo_escola_por_quantitativo.get(
+            quantitativo.id,
+            Decimal("0"),
+        )
+        saldo_adjudicacao = obter_saldo_adjudicacao_reserva_para_contrato(
+            adjudicacao
+        )
+
+        quantidade_contratar = min(saldo_escola, saldo_adjudicacao)
+
+        if quantidade_contratar <= 0:
+            continue
+
+        adicionar_item(
+            quantitativo=quantitativo,
+            fornecedor=adjudicacao.fornecedor_reserva,
+            item=adjudicacao.item,
+            marca=adjudicacao.marca,
+            unidade=adjudicacao.item.get_unidade_medida_display(),
+            quantidade_contratar=quantidade_contratar,
+            saldo_origem=saldo_adjudicacao,
+            valor_unitario=adjudicacao.valor_unitario,
+            origem_tipo="reserva",
+            origem_id=adjudicacao.id,
+            adjudicacao_reserva=adjudicacao,
+        )
+
+        saldo_escola_por_quantitativo[quantitativo.id] = (
+            saldo_escola - quantidade_contratar
+        )
+
+    # 2. Depois distribuímos adjudicações principais ainda não contratadas.
     resultados = list(
         ResultadoChamadaPublicaItem.objects.filter(
             pregao=pregao,
@@ -5268,22 +5485,11 @@ def montar_contratos_chamada_publica_possiveis(pregao):
             }
         )
 
-    quantitativos = (
-        QuantitativoEscola.objects.filter(
-            pregao=pregao,
-            quantidade__gt=0,
-        )
-        .select_related("escola", "escola__municipio", "item")
-        .order_by("escola__nome_escola", "item__nome_item")
-    )
-
-    escolas_dict = {}
-    total_contratos = 0
-    total_itens = 0
-    valor_total_geral = Decimal("0")
-
     for quantitativo in quantitativos:
-        saldo_escola = obter_saldo_quantitativo_escola_chamada(quantitativo)
+        saldo_escola = saldo_escola_por_quantitativo.get(
+            quantitativo.id,
+            Decimal("0"),
+        )
 
         if saldo_escola <= 0:
             continue
@@ -5305,52 +5511,23 @@ def montar_contratos_chamada_publica_possiveis(pregao):
             if quantidade_contratar <= 0:
                 continue
 
-            valor_total_item = quantidade_contratar * resultado.valor_unitario
-            escola = quantitativo.escola
-            fornecedor = resultado.fornecedor
-
-            if escola.id not in escolas_dict:
-                escolas_dict[escola.id] = {
-                    "escola": escola,
-                    "fornecedores": {},
-                    "valor_total_escola": Decimal("0"),
-                }
-
-            escola_grupo = escolas_dict[escola.id]
-
-            if fornecedor.id not in escola_grupo["fornecedores"]:
-                escola_grupo["fornecedores"][fornecedor.id] = {
-                    "fornecedor": fornecedor,
-                    "itens": [],
-                    "valor_total_contrato": Decimal("0"),
-                }
-                total_contratos += 1
-
-            fornecedor_grupo = escola_grupo["fornecedores"][fornecedor.id]
-
-            fornecedor_grupo["itens"].append(
-                {
-                    "resultado_id": resultado.id,
-                    "quantitativo_escola_id": quantitativo.id,
-                    "item": quantitativo.item,
-                    "marca": resultado.projeto_item.marca or "",
-                    "unidade": resultado.item.get_unidade_medida_display(),
-                    "quantidade_contratar": quantidade_contratar,
-                    "quantidade_escola": quantitativo.quantidade,
-                    "saldo_escola": saldo_escola,
-                    "saldo_resultado": saldo_resultado,
-                    "valor_unitario": resultado.valor_unitario,
-                    "valor_total_item": valor_total_item,
-                }
+            adicionar_item(
+                quantitativo=quantitativo,
+                fornecedor=resultado.fornecedor,
+                item=resultado.item,
+                marca=resultado.projeto_item.marca or "",
+                unidade=resultado.item.get_unidade_medida_display(),
+                quantidade_contratar=quantidade_contratar,
+                saldo_origem=saldo_resultado,
+                valor_unitario=resultado.valor_unitario,
+                origem_tipo="principal",
+                origem_id=resultado.id,
             )
-
-            fornecedor_grupo["valor_total_contrato"] += valor_total_item
-            escola_grupo["valor_total_escola"] += valor_total_item
-            valor_total_geral += valor_total_item
-            total_itens += 1
 
             saldo_escola -= quantidade_contratar
             opcao["saldo_disponivel"] -= quantidade_contratar
+
+        saldo_escola_por_quantitativo[quantitativo.id] = saldo_escola
 
     escolas_contratos = []
 
@@ -5433,76 +5610,155 @@ def contratos_chamada_publica_pregao(request, pregao_id):
 
         itens_para_salvar = []
         erros = []
+        quantidade_selecionada_por_quantitativo = defaultdict(Decimal)
 
         with transaction.atomic():
             for selecionado in selecionados:
                 partes = str(selecionado or "").split("|")
 
-                if len(partes) != 2:
+                # Compatibilidade com a tela anterior:
+                # resultado_id|quantitativo_id = adjudicação principal.
+                if len(partes) == 2:
+                    origem_tipo = "principal"
+                    origem_id, quantitativo_id = partes
+                elif len(partes) == 3:
+                    origem_tipo, origem_id, quantitativo_id = partes
+                else:
                     erros.append("Um dos itens selecionados possui identificação inválida.")
                     continue
 
-                resultado_id, quantitativo_id = partes
+                if origem_tipo not in ["principal", "reserva"]:
+                    erros.append("Um dos itens selecionados possui origem inválida.")
+                    continue
 
-                resultado = get_object_or_404(
-                    ResultadoChamadaPublicaItem.objects.select_related(
-                        "pregao",
-                        "fornecedor",
-                        "item",
-                        "projeto_item",
-                    ),
-                    id=resultado_id,
-                    pregao=pregao,
-                    fornecedor=fornecedor,
-                    status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
-                )
+                adjudicacao_reserva = None
+
+                if origem_tipo == "principal":
+                    resultado = get_object_or_404(
+                        ResultadoChamadaPublicaItem.objects.select_related(
+                            "pregao",
+                            "fornecedor",
+                            "item",
+                            "projeto_item",
+                        ),
+                        id=origem_id,
+                        pregao=pregao,
+                        fornecedor=fornecedor,
+                        status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+                    )
+
+                    item_origem = resultado.item
+                    marca = resultado.projeto_item.marca or ""
+                    valor_unitario = resultado.valor_unitario
+                    saldo_origem = obter_saldo_resultado_chamada_para_contrato(
+                        resultado
+                    )
+                else:
+                    adjudicacao_reserva = get_object_or_404(
+                        AdjudicacaoReservaChamadaPublica.objects.select_related(
+                            "pregao",
+                            "fornecedor_reserva",
+                            "item",
+                            "escola",
+                            "cadastro_reserva",
+                        ),
+                        id=origem_id,
+                        pregao=pregao,
+                        fornecedor_reserva=fornecedor,
+                        escola=escola,
+                        status=AdjudicacaoReservaChamadaPublica.STATUS_REGISTRADO,
+                    )
+
+                    item_origem = adjudicacao_reserva.item
+                    marca = adjudicacao_reserva.marca or ""
+                    valor_unitario = adjudicacao_reserva.valor_unitario
+                    saldo_origem = obter_saldo_adjudicacao_reserva_para_contrato(
+                        adjudicacao_reserva
+                    )
 
                 quantitativo = get_object_or_404(
                     QuantitativoEscola.objects.select_related("item", "escola"),
                     id=quantitativo_id,
                     pregao=pregao,
                     escola=escola,
-                    item=resultado.item,
+                    item=item_origem,
                 )
 
-                campo_quantidade = f"quantidade_{resultado_id}_{quantitativo_id}"
+                campo_quantidade = (
+                    f"quantidade_{origem_tipo}_{origem_id}_{quantitativo_id}"
+                )
                 quantidade_texto = (request.POST.get(campo_quantidade) or "").strip()
 
+                # Compatibilidade com o nome antigo da quantidade principal.
+                if (
+                    not quantidade_texto
+                    and origem_tipo == "principal"
+                ):
+                    quantidade_texto = (
+                        request.POST.get(
+                            f"quantidade_{origem_id}_{quantitativo_id}",
+                        )
+                        or ""
+                    ).strip()
+
                 if not quantidade_texto:
-                    erros.append(f"Informe a quantidade do item {resultado.item.nome_item}.")
+                    erros.append(
+                        f"Informe a quantidade do item {item_origem.nome_item}."
+                    )
                     continue
 
                 try:
                     quantidade = converter_decimal_brasileiro(quantidade_texto)
                 except InvalidOperation:
-                    erros.append(f"A quantidade do item {resultado.item.nome_item} é inválida.")
-                    continue
-
-                if quantidade <= 0:
-                    erros.append(f"A quantidade do item {resultado.item.nome_item} deve ser maior que zero.")
-                    continue
-
-                saldo_escola = obter_saldo_quantitativo_escola_chamada(quantitativo)
-                saldo_resultado = obter_saldo_resultado_chamada_para_contrato(resultado)
-                saldo_disponivel = min(saldo_escola, saldo_resultado)
-
-                if quantidade > saldo_disponivel:
                     erros.append(
-                        f"A quantidade do item {resultado.item.nome_item} ultrapassa o saldo disponível. "
-                        f"Saldo disponível: {formatar_decimal_br(saldo_disponivel)}."
+                        f"A quantidade do item {item_origem.nome_item} é inválida."
                     )
                     continue
 
+                if quantidade <= 0:
+                    erros.append(
+                        f"A quantidade do item {item_origem.nome_item} deve ser maior que zero."
+                    )
+                    continue
+
+                saldo_escola = obter_saldo_quantitativo_escola_chamada(
+                    quantitativo
+                )
+                saldo_escola_restante_no_post = (
+                    saldo_escola
+                    - quantidade_selecionada_por_quantitativo[quantitativo.id]
+                )
+
+                if saldo_escola_restante_no_post < 0:
+                    saldo_escola_restante_no_post = Decimal("0")
+
+                saldo_disponivel = min(
+                    saldo_escola_restante_no_post,
+                    saldo_origem,
+                )
+
+                if quantidade > saldo_disponivel:
+                    erros.append(
+                        f"A quantidade do item {item_origem.nome_item} ultrapassa "
+                        f"o saldo disponível. Saldo disponível: "
+                        f"{formatar_decimal_br(saldo_disponivel)}."
+                    )
+                    continue
+
+                quantidade_selecionada_por_quantitativo[
+                    quantitativo.id
+                ] += quantidade
+
                 itens_para_salvar.append(
                     {
-                        "resultado": resultado,
                         "quantitativo": quantitativo,
-                        "item": resultado.item,
-                        "marca": resultado.projeto_item.marca or "",
-                        "unidade": resultado.item.get_unidade_medida_display(),
+                        "item": item_origem,
+                        "marca": marca,
+                        "unidade": item_origem.get_unidade_medida_display(),
                         "quantidade": quantidade,
-                        "valor_unitario": resultado.valor_unitario,
-                        "valor_total": quantidade * resultado.valor_unitario,
+                        "valor_unitario": valor_unitario,
+                        "valor_total": quantidade * valor_unitario,
+                        "adjudicacao_reserva": adjudicacao_reserva,
                     }
                 )
 
@@ -5510,20 +5766,31 @@ def contratos_chamada_publica_pregao(request, pregao_id):
                 for erro in erros:
                     messages.error(request, erro)
 
-                return redirect("documentos:contratos_chamada_publica_pregao", pregao_id=pregao.id)
+                return redirect(
+                    "documentos:contratos_chamada_publica_pregao",
+                    pregao_id=pregao.id,
+                )
 
             if not itens_para_salvar:
-                messages.error(request, "Nenhum item válido foi selecionado para gerar contrato.")
-                return redirect("documentos:contratos_chamada_publica_pregao", pregao_id=pregao.id)
+                messages.error(
+                    request,
+                    "Nenhum item válido foi selecionado para gerar contrato.",
+                )
+                return redirect(
+                    "documentos:contratos_chamada_publica_pregao",
+                    pregao_id=pregao.id,
+                )
 
             valor_total_contrato = sum(
                 (item["valor_total"] for item in itens_para_salvar),
                 Decimal("0"),
             )
 
-            numero_sequencial, ano_contrato, numero_contrato = gerar_numero_contrato_por_escola_ano(
-                escola,
-                pregao.ano,
+            numero_sequencial, ano_contrato, numero_contrato = (
+                gerar_numero_contrato_por_escola_ano(
+                    escola,
+                    pregao.ano,
+                )
             )
 
             contrato = ContratoGerado.objects.create(
@@ -5547,9 +5814,13 @@ def contratos_chamada_publica_pregao(request, pregao_id):
                     quantidade_contratada=item["quantidade"],
                     valor_unitario=item["valor_unitario"],
                     valor_total=item["valor_total"],
+                    adjudicacao_reserva=item["adjudicacao_reserva"],
                 )
 
-        messages.success(request, "Contrato da Chamada Pública gerado com sucesso.")
+        messages.success(
+            request,
+            "Contrato da Chamada Pública gerado com sucesso.",
+        )
         return redirect("documentos:contratos_gerados")
 
     chamadas = (
@@ -6033,7 +6304,7 @@ def registrar_distrato_contrato(request, contrato_id):
 
     itens = (
         ContratoItemGerado.objects.filter(contrato=contrato)
-        .select_related("item")
+        .select_related("item", "adjudicacao_reserva")
         .order_by("item__nome_item")
     )
 
@@ -6047,12 +6318,42 @@ def registrar_distrato_contrato(request, contrato_id):
             if saldo_ativo < 0:
                 saldo_ativo = Decimal("0")
 
+            cadastro_reserva = None
+
+            if (
+                contrato.pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA
+                and item.adjudicacao_reserva_id is None
+            ):
+                pregao_item = PregaoItem.objects.filter(
+                    pregao=contrato.pregao,
+                    item=item.item,
+                ).first()
+
+                if pregao_item:
+                    cadastro_reserva = (
+                        CadastroReservaChamadaPublica.objects.filter(
+                            pregao_item=pregao_item,
+                            status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+                        )
+                        .select_related("fornecedor")
+                        .first()
+                    )
+
             itens_contexto.append(
                 {
                     "item_contrato": item,
                     "quantidade_ja_distratada": quantidade_ja_distratada,
                     "saldo_ativo": saldo_ativo,
                     "valor_ativo": saldo_ativo * item.valor_unitario,
+                    "cadastro_reserva": cadastro_reserva,
+                    "saldo_reserva": (
+                        cadastro_reserva.saldo_reserva
+                        if cadastro_reserva
+                        else Decimal("0.000")
+                    ),
+                    "contrato_origem_reserva": bool(
+                        item.adjudicacao_reserva_id
+                    ),
                 }
             )
 
@@ -6081,6 +6382,10 @@ def registrar_distrato_contrato(request, contrato_id):
                     "contrato": contrato,
                     "itens_contexto": itens_contexto,
                     "data_padrao": timezone.localdate(),
+                    "eh_chamada_publica": (
+                        contrato.pregao.tipo_certame
+                        == Pregao.TIPO_CHAMADA_PUBLICA
+                    ),
                 },
             )
 
@@ -6093,6 +6398,10 @@ def registrar_distrato_contrato(request, contrato_id):
                     "contrato": contrato,
                     "itens_contexto": itens_contexto,
                     "data_padrao": data_distrato_texto,
+                    "eh_chamada_publica": (
+                        contrato.pregao.tipo_certame
+                        == Pregao.TIPO_CHAMADA_PUBLICA
+                    ),
                 },
             )
 
@@ -6105,6 +6414,10 @@ def registrar_distrato_contrato(request, contrato_id):
                     "contrato": contrato,
                     "itens_contexto": itens_contexto,
                     "data_padrao": data_distrato_texto,
+                    "eh_chamada_publica": (
+                        contrato.pregao.tipo_certame
+                        == Pregao.TIPO_CHAMADA_PUBLICA
+                    ),
                 },
             )
 
@@ -6186,6 +6499,10 @@ def registrar_distrato_contrato(request, contrato_id):
                     "contrato": contrato,
                     "itens_contexto": itens_contexto,
                     "data_padrao": data_distrato_texto,
+                    "eh_chamada_publica": (
+                        contrato.pregao.tipo_certame
+                        == Pregao.TIPO_CHAMADA_PUBLICA
+                    ),
                 },
             )
 
@@ -6198,6 +6515,10 @@ def registrar_distrato_contrato(request, contrato_id):
                     "contrato": contrato,
                     "itens_contexto": itens_contexto,
                     "data_padrao": data_distrato_texto,
+                    "eh_chamada_publica": (
+                        contrato.pregao.tipo_certame
+                        == Pregao.TIPO_CHAMADA_PUBLICA
+                    ),
                 },
             )
 
@@ -6256,11 +6577,27 @@ def registrar_distrato_contrato(request, contrato_id):
             ]
         )
 
-        messages.success(
-            request,
-            f"Distrato registrado com sucesso para o contrato {contrato.numero_contrato}. "
-            "A quantidade distratada voltou a ficar disponível para contratação futura.",
-        )
+        if contrato.pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA:
+            messages.success(
+                request,
+                f"Distrato registrado com sucesso para o contrato "
+                f"{contrato.numero_contrato}. A quantidade distratada voltou "
+                "ao saldo da escola e está disponível para nova adjudicação "
+                "ao Cadastro Reserva, quando houver reserva ativa.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Distrato registrado com sucesso para o contrato "
+                f"{contrato.numero_contrato}. A quantidade distratada voltou "
+                "a ficar disponível para contratação futura.",
+            )
+
+        if contrato.pregao.tipo_certame == Pregao.TIPO_CHAMADA_PUBLICA:
+            return redirect(
+                f"{reverse('documentos:resultado_chamada_publica')}"
+                f"?pregao={contrato.pregao_id}"
+            )
 
         return redirect("documentos:contratos_gerados")
 
@@ -6271,6 +6608,10 @@ def registrar_distrato_contrato(request, contrato_id):
             "contrato": contrato,
             "itens_contexto": itens_contexto,
             "data_padrao": timezone.localdate(),
+            "eh_chamada_publica": (
+                contrato.pregao.tipo_certame
+                == Pregao.TIPO_CHAMADA_PUBLICA
+            ),
         },
     )
 
@@ -8404,29 +8745,58 @@ def decimal_br_para_decimal(valor):
 
 def garantir_itens_chamada_publica(pregao):
     """
-    Garante a existência dos PregaoItem a partir do Quantitativo por Pregão.
-    A Chamada Pública usa os mesmos itens/quantitativos já cadastrados no certame.
-    """
-    if PregaoItem.objects.filter(pregao=pregao).exists():
-        return
+    Sincroniza PregaoItem com o QuantitativoPregao atual da Chamada Pública.
 
-    quantitativos = (
+    Regras:
+    - não depende de QuantitativoEscola;
+    - cria itens adicionados posteriormente ao quantitativo do certame;
+    - atualiza quantidade_total dos itens já existentes;
+    - preserva PregaoItem antigos/IDs para não apagar adjudicações e histórico;
+    - novos itens recebem ordem após a maior ordem existente.
+    """
+    quantitativos = list(
         QuantitativoPregao.objects.filter(pregao=pregao)
         .select_related("item")
-        .order_by("item__nome_item")
+        .order_by("item__nome_item", "item_id")
     )
 
-    ordem = 1
-
-    for quantitativo in quantitativos:
-        PregaoItem.objects.create(
-            pregao=pregao,
-            item=quantitativo.item,
-            ordem=ordem,
-            quantidade_total=quantitativo.quantidade,
-            status=PregaoItem.STATUS_PENDENTE,
+    with transaction.atomic():
+        existentes = list(
+            PregaoItem.objects.select_for_update()
+            .filter(pregao=pregao)
+            .order_by("ordem", "id")
         )
-        ordem += 1
+
+        por_item = {
+            registro.item_id: registro
+            for registro in existentes
+        }
+
+        ultima_ordem = max(
+            (registro.ordem for registro in existentes),
+            default=0,
+        )
+
+        for quantitativo in quantitativos:
+            registro = por_item.get(quantitativo.item_id)
+
+            if registro:
+                if registro.quantidade_total != quantitativo.quantidade:
+                    registro.quantidade_total = quantitativo.quantidade
+                    registro.save(update_fields=["quantidade_total"])
+                continue
+
+            ultima_ordem += 1
+            registro = PregaoItem.objects.create(
+                pregao=pregao,
+                item=quantitativo.item,
+                ordem=ultima_ordem,
+                quantidade_total=quantitativo.quantidade,
+                status=PregaoItem.STATUS_PENDENTE,
+            )
+            por_item[quantitativo.item_id] = registro
+
+    return len(quantitativos)
 
 
 def calcular_status_chamada_publica(pregao):
@@ -8540,7 +8910,23 @@ def total_adjudicado_fornecedor_ano(fornecedor, ano, projeto_excluir=None):
     if projeto_excluir:
         queryset = queryset.exclude(projeto=projeto_excluir)
 
-    return queryset.aggregate(total=Sum("valor_total")).get("total") or Decimal("0.00")
+    total_principal = (
+        queryset.aggregate(total=Sum("valor_total")).get("total")
+        or Decimal("0.00")
+    )
+
+    total_reserva = (
+        AdjudicacaoReservaChamadaPublica.objects.filter(
+            fornecedor_reserva=fornecedor,
+            pregao__ano=ano,
+            status=AdjudicacaoReservaChamadaPublica.STATUS_REGISTRADO,
+        )
+        .aggregate(total=Sum("valor_total"))
+        .get("total")
+        or Decimal("0.00")
+    )
+
+    return total_principal + total_reserva
 
 
 def projetos_venda(request):
@@ -8582,9 +8968,14 @@ def montar_contexto_registro_projeto_venda(pregao, projeto=None):
 
     fornecedores = fornecedores_validos_chamada_publica(pregao)
 
+    itens_com_quantitativo = QuantitativoPregao.objects.filter(
+        pregao=pregao,
+    ).values_list("item_id", flat=True)
+
     itens_pregao = (
         PregaoItem.objects.filter(
             pregao=pregao,
+            item_id__in=itens_com_quantitativo,
             media_preco__isnull=False,
         )
         .select_related("item")
@@ -8600,6 +8991,14 @@ def montar_contexto_registro_projeto_venda(pregao, projeto=None):
             .select_related("pregao_item", "item")
         }
 
+    cadastros_reserva = {
+        cadastro.pregao_item_id: cadastro
+        for cadastro in CadastroReservaChamadaPublica.objects.filter(
+            pregao=pregao,
+            status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+        ).select_related("fornecedor", "pregao_item", "item")
+    }
+
     linhas_itens = []
 
     for item_pregao in itens_pregao:
@@ -8611,6 +9010,8 @@ def montar_contexto_registro_projeto_venda(pregao, projeto=None):
         )
         saldo_restante = item_pregao.quantidade_total - ja_adjudicada
 
+        cadastro_reserva = cadastros_reserva.get(item_pregao.id)
+
         linhas_itens.append(
             {
                 "item_pregao": item_pregao,
@@ -8618,10 +9019,309 @@ def montar_contexto_registro_projeto_venda(pregao, projeto=None):
                 "media_preco": item_pregao.media_preco,
                 "ja_adjudicada": ja_adjudicada,
                 "saldo_restante": saldo_restante,
+                "cadastro_reserva": cadastro_reserva,
+                "fornecedor_reserva_id": (
+                    cadastro_reserva.fornecedor_id
+                    if cadastro_reserva
+                    else ""
+                ),
+                "quantidade_reserva_valor": (
+                    str(cadastro_reserva.quantidade_reserva).replace(".", ",")
+                    if cadastro_reserva
+                    else ""
+                ),
+                "marca_reserva_valor": (
+                    cadastro_reserva.marca
+                    if cadastro_reserva
+                    else ""
+                ),
             }
         )
 
     return fornecedores, linhas_itens
+
+
+
+def ler_cadastros_reserva_post(
+    request,
+    pregao,
+    linhas_itens,
+    fornecedor_principal,
+    projeto=None,
+):
+    """
+    Lê e valida o cadastro reserva informado na tabela da adjudicação.
+
+    O cadastro reserva:
+    - é opcional;
+    - não consome saldo adjudicado;
+    - não entra no limite anual neste momento;
+    - precisa ter fornecedor e quantidade informados em conjunto;
+    - não pode usar fornecedor que já seja adjudicatário principal do mesmo item.
+    """
+    reservas_digitadas = []
+    erros = []
+
+    fornecedores_vinculados_ids = set(
+        pregao.fornecedores.filter(
+            ativo=True,
+            tipo_fornecedor_chamada__in=[
+                Fornecedor.TIPO_INDIVIDUAL,
+                Fornecedor.TIPO_GRUPO_FORMAL,
+            ],
+        ).values_list("id", flat=True)
+    )
+
+    for linha in linhas_itens:
+        item_pregao = linha["item_pregao"]
+
+        fornecedor_reserva_texto = (
+            request.POST.get(
+                f"fornecedor_reserva_{item_pregao.id}",
+                "",
+            )
+            or ""
+        ).strip()
+
+        quantidade_reserva_texto = (
+            request.POST.get(
+                f"quantidade_reserva_{item_pregao.id}",
+                "",
+            )
+            or ""
+        ).strip()
+
+        marca_reserva_texto = (
+            request.POST.get(
+                f"marca_reserva_{item_pregao.id}",
+                "",
+            )
+            or ""
+        ).strip()
+
+        linha["fornecedor_reserva_id"] = fornecedor_reserva_texto
+        linha["quantidade_reserva_valor"] = quantidade_reserva_texto
+        linha["marca_reserva_valor"] = marca_reserva_texto
+
+        if not fornecedor_reserva_texto and not quantidade_reserva_texto:
+            reservas_digitadas.append(
+                {
+                    "pregao_item": item_pregao,
+                    "fornecedor": None,
+                    "quantidade": None,
+                    "marca": "",
+                }
+            )
+            continue
+
+        if not fornecedor_reserva_texto:
+            erros.append(
+                f"Selecione o fornecedor reserva do item "
+                f"'{item_pregao.item.nome_item}' ou deixe também a quantidade vazia."
+            )
+            continue
+
+        if not quantidade_reserva_texto:
+            erros.append(
+                f"Informe a quantidade do cadastro reserva do item "
+                f"'{item_pregao.item.nome_item}' ou deixe também o fornecedor vazio."
+            )
+            continue
+
+        try:
+            fornecedor_reserva_id = int(fornecedor_reserva_texto)
+        except (TypeError, ValueError):
+            erros.append(
+                f"O fornecedor reserva informado para o item "
+                f"'{item_pregao.item.nome_item}' é inválido."
+            )
+            continue
+
+        if fornecedor_reserva_id not in fornecedores_vinculados_ids:
+            erros.append(
+                f"O fornecedor reserva do item '{item_pregao.item.nome_item}' "
+                f"não está vinculado a esta Chamada Pública."
+            )
+            continue
+
+        fornecedor_reserva = Fornecedor.objects.filter(
+            id=fornecedor_reserva_id,
+        ).first()
+
+        if not fornecedor_reserva:
+            erros.append(
+                f"O fornecedor reserva do item '{item_pregao.item.nome_item}' "
+                f"não foi encontrado."
+            )
+            continue
+
+        try:
+            quantidade_reserva = decimal_br_para_decimal(
+                quantidade_reserva_texto
+            )
+        except InvalidOperation:
+            erros.append(
+                f"A quantidade do cadastro reserva do item "
+                f"'{item_pregao.item.nome_item}' é inválida."
+            )
+            continue
+
+        if quantidade_reserva <= 0:
+            erros.append(
+                f"A quantidade do cadastro reserva do item "
+                f"'{item_pregao.item.nome_item}' deve ser maior que zero."
+            )
+            continue
+
+        if quantidade_reserva > item_pregao.quantidade_total:
+            erros.append(
+                f"A quantidade do cadastro reserva do item "
+                f"'{item_pregao.item.nome_item}' não pode ultrapassar "
+                f"o quantitativo total do certame ({item_pregao.quantidade_total})."
+            )
+            continue
+
+        # Fornecedores principais já adjudicados para este item, desconsiderando
+        # o projeto que está sendo editado.
+        principais_queryset = ResultadoChamadaPublicaItem.objects.filter(
+            pregao=pregao,
+            pregao_item=item_pregao,
+            status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+        )
+
+        if projeto:
+            principais_queryset = principais_queryset.exclude(
+                projeto=projeto
+            )
+
+        fornecedores_principais_ids = set(
+            principais_queryset.values_list("fornecedor_id", flat=True)
+        )
+
+        # Se o fornecedor atual receber quantidade principal neste mesmo POST,
+        # também não pode ser o fornecedor reserva.
+        quantidade_principal_texto = (
+            request.POST.get(
+                f"quantidade_{item_pregao.id}",
+                "",
+            )
+            or ""
+        ).strip()
+
+        quantidade_principal = Decimal("0.000")
+        if quantidade_principal_texto:
+            try:
+                quantidade_principal = decimal_br_para_decimal(
+                    quantidade_principal_texto
+                )
+            except InvalidOperation:
+                quantidade_principal = Decimal("0.000")
+
+        if quantidade_principal > 0 and fornecedor_principal:
+            fornecedores_principais_ids.add(fornecedor_principal.id)
+
+        if fornecedor_reserva.id in fornecedores_principais_ids:
+            erros.append(
+                f"O fornecedor reserva do item '{item_pregao.item.nome_item}' "
+                f"não pode ser o mesmo fornecedor adjudicado como principal "
+                f"para esse item."
+            )
+            continue
+
+        cadastro_existente = CadastroReservaChamadaPublica.objects.filter(
+            pregao_item=item_pregao,
+        ).first()
+
+        if cadastro_existente and cadastro_existente.quantidade_utilizada > 0:
+            if fornecedor_reserva.id != cadastro_existente.fornecedor_id:
+                erros.append(
+                    f"Não é possível trocar o fornecedor reserva do item "
+                    f"'{item_pregao.item.nome_item}' porque já existe "
+                    f"quantidade utilizada deste cadastro."
+                )
+                continue
+
+            if quantidade_reserva < cadastro_existente.quantidade_utilizada:
+                erros.append(
+                    f"A quantidade do cadastro reserva do item "
+                    f"'{item_pregao.item.nome_item}' não pode ser menor que "
+                    f"a quantidade já utilizada "
+                    f"({cadastro_existente.quantidade_utilizada})."
+                )
+                continue
+
+        reservas_digitadas.append(
+            {
+                "pregao_item": item_pregao,
+                "fornecedor": fornecedor_reserva,
+                "quantidade": quantidade_reserva,
+                "marca": marca_reserva_texto,
+            }
+        )
+
+    return reservas_digitadas, erros
+
+
+def sincronizar_cadastros_reserva_chamada(
+    request,
+    pregao,
+    reservas_digitadas,
+):
+    """
+    Cria/atualiza um único cadastro reserva por PregaoItem.
+
+    As regras de negócio já foram validadas por ler_cadastros_reserva_post().
+    Aqui evitamos full_clean() redundante durante a transação e usamos
+    update_or_create(), coerente com o OneToOneField de pregao_item.
+    """
+    usuario = request.user if request.user.is_authenticated else None
+
+    for reserva in reservas_digitadas:
+        item_pregao = reserva["pregao_item"]
+        fornecedor = reserva["fornecedor"]
+        quantidade = reserva["quantidade"]
+        marca = (reserva.get("marca") or "").strip()
+
+        if fornecedor is None or quantidade is None:
+            CadastroReservaChamadaPublica.objects.filter(
+                pregao_item=item_pregao,
+                status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+            ).update(
+                status=CadastroReservaChamadaPublica.STATUS_CANCELADO,
+            )
+            continue
+
+        defaults = {
+            "pregao": pregao,
+            "item": item_pregao.item,
+            "fornecedor": fornecedor,
+            "quantidade_reserva": quantidade,
+            "marca": marca,
+            "status": CadastroReservaChamadaPublica.STATUS_ATIVO,
+        }
+
+        if usuario:
+            defaults["registrado_por"] = usuario
+
+        CadastroReservaChamadaPublica.objects.update_or_create(
+            pregao_item=item_pregao,
+            defaults=defaults,
+        )
+
+
+def _mensagem_erro_adjudicacao(erro):
+    if isinstance(erro, ValidationError):
+        if hasattr(erro, "messages") and erro.messages:
+            return " ".join(str(mensagem) for mensagem in erro.messages)
+        if hasattr(erro, "message_dict"):
+            mensagens = []
+            for campo, lista in erro.message_dict.items():
+                for mensagem in lista:
+                    mensagens.append(str(mensagem))
+            if mensagens:
+                return " ".join(mensagens)
+
+    return str(erro) or "Não foi possível salvar a adjudicação."
 
 
 def salvar_adjudicacao_unificada(
@@ -8631,6 +9331,7 @@ def salvar_adjudicacao_unificada(
     cronograma_entrega,
     observacoes,
     itens_digitados,
+    reservas_digitadas=None,
     projeto=None,
 ):
     with transaction.atomic():
@@ -8697,6 +9398,13 @@ def salvar_adjudicacao_unificada(
 
         projeto.valor_total = valor_total_geral
         projeto.save(update_fields=["valor_total", "atualizado_em"])
+
+        if reservas_digitadas is not None:
+            sincronizar_cadastros_reserva_chamada(
+                request=request,
+                pregao=pregao,
+                reservas_digitadas=reservas_digitadas,
+            )
 
         return projeto
 
@@ -8790,6 +9498,15 @@ def registrar_projeto_venda(request, pregao_id):
                 }
             )
 
+        reservas_digitadas, erros_reserva = ler_cadastros_reserva_post(
+            request=request,
+            pregao=pregao,
+            linhas_itens=linhas_itens,
+            fornecedor_principal=fornecedor,
+            projeto=None,
+        )
+        erros.extend(erros_reserva)
+
         if not itens_digitados:
             erros.append("Informe a quantidade adjudicada em pelo menos um item.")
 
@@ -8822,14 +9539,38 @@ def registrar_projeto_venda(request, pregao_id):
                 },
             )
 
-        salvar_adjudicacao_unificada(
-            request=request,
-            pregao=pregao,
-            fornecedor=fornecedor,
-            cronograma_entrega=cronograma_entrega,
-            observacoes=observacoes,
-            itens_digitados=itens_digitados,
-        )
+        try:
+            salvar_adjudicacao_unificada(
+                request=request,
+                pregao=pregao,
+                fornecedor=fornecedor,
+                cronograma_entrega=cronograma_entrega,
+                observacoes=observacoes,
+                itens_digitados=itens_digitados,
+                reservas_digitadas=reservas_digitadas,
+            )
+        except (ValidationError, IntegrityError) as erro:
+            logger.exception(
+                "Erro ao salvar adjudicação/cadastro reserva da Chamada Pública %s.",
+                pregao.id,
+            )
+            messages.error(
+                request,
+                "Não foi possível salvar a adjudicação. "
+                + _mensagem_erro_adjudicacao(erro),
+            )
+            return render(
+                request,
+                "documentos/registrar_projeto_venda.html",
+                {
+                    "pregao": pregao,
+                    "fornecedores": fornecedores,
+                    "linhas_itens": linhas_itens,
+                    "projeto": None,
+                    "modo_edicao": False,
+                    "dados_post": request.POST,
+                },
+            )
 
         messages.success(request, "Adjudicação registrada com sucesso.")
         return redirect(f"{reverse('documentos:projetos_venda')}?pregao={pregao.id}")
@@ -8938,6 +9679,15 @@ def editar_projeto_venda(request, projeto_id):
                 }
             )
 
+        reservas_digitadas, erros_reserva = ler_cadastros_reserva_post(
+            request=request,
+            pregao=pregao,
+            linhas_itens=linhas_itens,
+            fornecedor_principal=fornecedor,
+            projeto=projeto,
+        )
+        erros.extend(erros_reserva)
+
         if not itens_digitados:
             erros.append("Informe a quantidade adjudicada em pelo menos um item.")
 
@@ -8971,15 +9721,39 @@ def editar_projeto_venda(request, projeto_id):
                 },
             )
 
-        salvar_adjudicacao_unificada(
-            request=request,
-            pregao=pregao,
-            fornecedor=fornecedor,
-            cronograma_entrega=cronograma_entrega,
-            observacoes=observacoes,
-            itens_digitados=itens_digitados,
-            projeto=projeto,
-        )
+        try:
+            salvar_adjudicacao_unificada(
+                request=request,
+                pregao=pregao,
+                fornecedor=fornecedor,
+                cronograma_entrega=cronograma_entrega,
+                observacoes=observacoes,
+                itens_digitados=itens_digitados,
+                reservas_digitadas=reservas_digitadas,
+                projeto=projeto,
+            )
+        except (ValidationError, IntegrityError) as erro:
+            logger.exception(
+                "Erro ao atualizar adjudicação/cadastro reserva da Chamada Pública %s.",
+                pregao.id,
+            )
+            messages.error(
+                request,
+                "Não foi possível atualizar a adjudicação. "
+                + _mensagem_erro_adjudicacao(erro),
+            )
+            return render(
+                request,
+                "documentos/registrar_projeto_venda.html",
+                {
+                    "pregao": pregao,
+                    "fornecedores": fornecedores,
+                    "linhas_itens": linhas_itens,
+                    "projeto": projeto,
+                    "modo_edicao": True,
+                    "dados_post": request.POST,
+                },
+            )
 
         messages.success(request, "Adjudicação atualizada com sucesso.")
         return redirect(f"{reverse('documentos:projetos_venda')}?pregao={pregao.id}")
@@ -9032,6 +9806,579 @@ def adjudicacao_chamada_publica(request):
     return redirect("documentos:projetos_venda")
 
 
+
+
+def obter_saldo_distrato_item_para_reserva(distrato_item):
+    total_adjudicado = (
+        AdjudicacaoReservaChamadaPublica.objects.filter(
+            distrato_item=distrato_item,
+            status=AdjudicacaoReservaChamadaPublica.STATUS_REGISTRADO,
+        )
+        .aggregate(total=Sum("quantidade_adjudicada"))
+        .get("total")
+        or Decimal("0.000")
+    )
+
+    saldo = distrato_item.quantidade_distratada - total_adjudicado
+
+    if saldo < 0:
+        return Decimal("0.000")
+
+    return saldo
+
+
+def adjudicar_cadastro_reserva_chamada_publica(request, distrato_item_id):
+    """
+    Transfere formalmente uma quantidade liberada por distrato para o
+    fornecedor do Cadastro Reserva.
+    """
+    if usuario_eh_consulta_escola(request):
+        messages.error(
+            request,
+            "Seu perfil permite apenas consultar informações.",
+        )
+        return redirect("documentos:resultado_chamada_publica")
+
+    distrato_item = get_object_or_404(
+        DistratoContratoItem.objects.select_related(
+            "distrato",
+            "contrato_item",
+            "contrato_item__contrato",
+            "contrato_item__contrato__pregao",
+            "contrato_item__contrato__escola",
+            "contrato_item__contrato__fornecedor",
+            "contrato_item__item",
+            "contrato_item__adjudicacao_reserva",
+        ),
+        id=distrato_item_id,
+    )
+
+    contrato_item = distrato_item.contrato_item
+    contrato = contrato_item.contrato
+    pregao = contrato.pregao
+
+    if pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA:
+        messages.error(
+            request,
+            "Esta ação está disponível somente para Chamada Pública.",
+        )
+        return redirect("documentos:contratos_gerados")
+
+    if contrato_item.adjudicacao_reserva_id:
+        messages.error(
+            request,
+            "Este contrato já foi originado do Cadastro Reserva. "
+            "Não é possível reenviar seu distrato ao mesmo cadastro reserva.",
+        )
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+        )
+
+    pregao_item = get_object_or_404(
+        PregaoItem,
+        pregao=pregao,
+        item=contrato_item.item,
+    )
+
+    cadastro = (
+        CadastroReservaChamadaPublica.objects.filter(
+            pregao_item=pregao_item,
+            status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+        )
+        .select_related("fornecedor", "item", "pregao_item")
+        .first()
+    )
+
+    if not cadastro:
+        messages.error(
+            request,
+            f"O item '{contrato_item.item.nome_item}' não possui "
+            "Cadastro Reserva ativo.",
+        )
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+        )
+
+    saldo_distrato = obter_saldo_distrato_item_para_reserva(distrato_item)
+    saldo_reserva = cadastro.saldo_reserva
+    quantidade_maxima = min(saldo_distrato, saldo_reserva)
+
+    if quantidade_maxima <= 0:
+        messages.error(
+            request,
+            "Não existe saldo disponível para nova adjudicação deste item.",
+        )
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+        )
+
+    quantidade_valor = formatar_decimal_br(quantidade_maxima)
+    marca_valor = cadastro.marca or ""
+
+    if request.method == "POST":
+        quantidade_texto = (
+            request.POST.get("quantidade_adjudicar") or ""
+        ).strip()
+        quantidade_valor = quantidade_texto
+        marca_valor = cadastro.marca or ""
+
+        erros = []
+
+        try:
+            quantidade = converter_decimal_brasileiro(quantidade_texto)
+        except InvalidOperation:
+            quantidade = None
+            erros.append("A quantidade informada é inválida.")
+
+        if quantidade is not None:
+            if quantidade <= 0:
+                erros.append(
+                    "A quantidade a adjudicar deve ser maior que zero."
+                )
+            if quantidade > saldo_distrato:
+                erros.append(
+                    "A quantidade informada ultrapassa o saldo liberado "
+                    f"pelo distrato ({formatar_decimal_br(saldo_distrato)})."
+                )
+            if quantidade > saldo_reserva:
+                erros.append(
+                    "A quantidade informada ultrapassa o saldo do Cadastro "
+                    f"Reserva ({formatar_decimal_br(saldo_reserva)})."
+                )
+
+        if not pregao_item.media_preco:
+            erros.append(
+                "O item não possui Média de Preço cadastrada."
+            )
+
+        valor_unitario = (
+            pregao_item.media_preco.quantize(Decimal("0.01"))
+            if pregao_item.media_preco
+            else Decimal("0.00")
+        )
+
+        if quantidade is not None and quantidade > 0 and not erros:
+            valor_nova_adjudicacao = (
+                quantidade * valor_unitario
+            ).quantize(Decimal("0.01"))
+
+            limite_fornecedor = (
+                cadastro.fornecedor.limite_anual_chamada_publica
+                or Decimal("0.00")
+            )
+            valor_ja_adjudicado = total_adjudicado_fornecedor_ano(
+                fornecedor=cadastro.fornecedor,
+                ano=pregao.ano,
+            )
+
+            if (
+                limite_fornecedor
+                and valor_ja_adjudicado + valor_nova_adjudicacao
+                > limite_fornecedor
+            ):
+                erros.append(
+                    "A nova adjudicação ultrapassa o limite anual do "
+                    f"fornecedor reserva. Limite: "
+                    f"{cadastro.fornecedor.get_limite_anual_chamada_publica_display()}."
+                )
+
+        if erros:
+            for erro in erros:
+                messages.error(request, erro)
+        else:
+            try:
+                with transaction.atomic():
+                    cadastro_bloqueado = (
+                        CadastroReservaChamadaPublica.objects.select_for_update()
+                        .select_related("fornecedor", "pregao_item", "item")
+                        .get(pk=cadastro.pk)
+                    )
+
+                    distrato_bloqueado = (
+                        DistratoContratoItem.objects.select_for_update()
+                        .select_related(
+                            "contrato_item",
+                            "contrato_item__contrato",
+                        )
+                        .get(pk=distrato_item.pk)
+                    )
+
+                    saldo_distrato_atual = (
+                        obter_saldo_distrato_item_para_reserva(
+                            distrato_bloqueado
+                        )
+                    )
+                    saldo_reserva_atual = cadastro_bloqueado.saldo_reserva
+
+                    if quantidade > saldo_distrato_atual:
+                        raise ValidationError(
+                            "O saldo liberado pelo distrato foi alterado. "
+                            "Atualize a página e tente novamente."
+                        )
+
+                    if quantidade > saldo_reserva_atual:
+                        raise ValidationError(
+                            "O saldo do Cadastro Reserva foi alterado. "
+                            "Atualize a página e tente novamente."
+                        )
+
+                    valor_total = (
+                        quantidade * valor_unitario
+                    ).quantize(Decimal("0.01"))
+
+                    adjudicacao = AdjudicacaoReservaChamadaPublica(
+                        cadastro_reserva=cadastro_bloqueado,
+                        distrato_item=distrato_bloqueado,
+                        pregao=pregao,
+                        pregao_item=pregao_item,
+                        item=contrato_item.item,
+                        escola=contrato.escola,
+                        fornecedor_original=contrato.fornecedor,
+                        fornecedor_reserva=cadastro_bloqueado.fornecedor,
+                        quantidade_adjudicada=quantidade,
+                        marca=cadastro_bloqueado.marca or "",
+                        valor_unitario=valor_unitario,
+                        valor_total=valor_total,
+                        status=AdjudicacaoReservaChamadaPublica.STATUS_REGISTRADO,
+                        registrado_por=(
+                            request.user
+                            if request.user.is_authenticated
+                            else None
+                        ),
+                    )
+                    adjudicacao.full_clean()
+                    adjudicacao.save()
+
+                    cadastro_bloqueado.quantidade_utilizada = (
+                        cadastro_bloqueado.quantidade_utilizada
+                        + quantidade
+                    )
+                    cadastro_bloqueado.save(
+                        update_fields=[
+                            "quantidade_utilizada",
+                            "atualizado_em",
+                        ]
+                    )
+            except (ValidationError, IntegrityError) as erro:
+                logger.exception(
+                    "Erro ao adjudicar cadastro reserva. Distrato item %s.",
+                    distrato_item.id,
+                )
+                messages.error(
+                    request,
+                    "Não foi possível registrar a adjudicação ao Cadastro "
+                    "Reserva. " + _mensagem_erro_adjudicacao(erro),
+                )
+            else:
+                messages.success(
+                    request,
+                    f"{formatar_decimal_br(quantidade)} de "
+                    f"'{contrato_item.item.nome_item}' foi adjudicado ao "
+                    f"fornecedor reserva {cadastro.fornecedor.razao_social}. "
+                    "O item já pode ser contratado na tela de Contratos da "
+                    "Chamada Pública.",
+                )
+                return redirect(
+                    f"{reverse('documentos:resultado_chamada_publica')}"
+                    f"?pregao={pregao.id}"
+                )
+
+    return render(
+        request,
+        "documentos/adjudicar_cadastro_reserva.html",
+        {
+            "pregao": pregao,
+            "pregao_item": pregao_item,
+            "cadastro": cadastro,
+            "distrato_item": distrato_item,
+            "contrato": contrato,
+            "contrato_item": contrato_item,
+            "saldo_distrato": saldo_distrato,
+            "saldo_reserva": saldo_reserva,
+            "quantidade_maxima": quantidade_maxima,
+            "quantidade_valor": quantidade_valor,
+            "marca_valor": marca_valor,
+        },
+    )
+
+
+
+def editar_cadastro_reserva_chamada_publica(request, pregao_item_id):
+    """
+    Cadastra ou edita o fornecedor/quantidade do cadastro reserva de um item.
+
+    Regras:
+    - disponível somente para Chamada Pública;
+    - o fornecedor precisa participar do certame;
+    - não pode ser fornecedor principal já adjudicado para o mesmo item;
+    - quantidade > 0 e <= quantitativo total do item;
+    - quantidade não pode ser reduzida abaixo da quantidade já utilizada;
+    - se já houve utilização da reserva, o fornecedor não pode ser trocado.
+    """
+    if usuario_eh_consulta_escola(request):
+        messages.error(
+            request,
+            "Seu perfil permite apenas consultar informações. "
+            "Esta ação não está disponível para usuários Consulta/Escola.",
+        )
+        return redirect("documentos:resultado_chamada_publica")
+
+    item_pregao = get_object_or_404(
+        PregaoItem.objects.select_related("pregao", "item"),
+        id=pregao_item_id,
+        pregao__tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+    pregao = item_pregao.pregao
+    aplicar_status_calculado_chamada_publica(pregao)
+
+    # O item precisa continuar pertencendo ao quantitativo atual do certame.
+    possui_quantitativo = QuantitativoPregao.objects.filter(
+        pregao=pregao,
+        item_id=item_pregao.item_id,
+    ).exists()
+
+    if not possui_quantitativo:
+        messages.error(
+            request,
+            "Este item não possui mais Quantitativo do Certame e não pode "
+            "receber novo cadastro reserva.",
+        )
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+        )
+
+    cadastro = CadastroReservaChamadaPublica.objects.filter(
+        pregao_item=item_pregao,
+    ).select_related("fornecedor").first()
+
+    fornecedores_principais_ids = set(
+        ResultadoChamadaPublicaItem.objects.filter(
+            pregao=pregao,
+            pregao_item=item_pregao,
+            status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+        ).values_list("fornecedor_id", flat=True)
+    )
+
+    fornecedores = (
+        fornecedores_validos_chamada_publica(pregao)
+        .exclude(id__in=fornecedores_principais_ids)
+        .order_by("razao_social")
+    )
+
+    if request.method == "POST":
+        fornecedor_id = (request.POST.get("fornecedor_reserva") or "").strip()
+        quantidade_texto = (request.POST.get("quantidade_reserva") or "").strip()
+        marca_texto = (request.POST.get("marca_reserva") or "").strip()
+
+        erros = []
+
+        if not fornecedor_id:
+            erros.append("Selecione o fornecedor do cadastro reserva.")
+
+        if not quantidade_texto:
+            erros.append("Informe a quantidade do cadastro reserva.")
+
+        fornecedor = None
+        if fornecedor_id:
+            try:
+                fornecedor_id_int = int(fornecedor_id)
+            except (TypeError, ValueError):
+                fornecedor_id_int = None
+                erros.append("O fornecedor selecionado é inválido.")
+
+            if fornecedor_id_int:
+                fornecedor = fornecedores_validos_chamada_publica(
+                    pregao
+                ).filter(id=fornecedor_id_int).first()
+
+                if not fornecedor:
+                    erros.append(
+                        "O fornecedor selecionado não está vinculado à Chamada Pública."
+                    )
+                elif fornecedor.id in fornecedores_principais_ids:
+                    erros.append(
+                        "O fornecedor reserva não pode ser um fornecedor já "
+                        "adjudicado como principal para este item."
+                    )
+
+        quantidade = None
+        if quantidade_texto:
+            try:
+                quantidade = decimal_br_para_decimal(quantidade_texto)
+            except InvalidOperation:
+                erros.append("A quantidade informada para o cadastro reserva é inválida.")
+
+        if quantidade is not None:
+            if quantidade <= 0:
+                erros.append("A quantidade do cadastro reserva deve ser maior que zero.")
+
+            if quantidade > item_pregao.quantidade_total:
+                erros.append(
+                    "A quantidade do cadastro reserva não pode ultrapassar "
+                    f"o quantitativo total do item ({item_pregao.quantidade_total})."
+                )
+
+            quantidade_utilizada = (
+                cadastro.quantidade_utilizada
+                if cadastro
+                else Decimal("0.000")
+            )
+
+            if quantidade < quantidade_utilizada:
+                erros.append(
+                    "A quantidade do cadastro reserva não pode ser menor que "
+                    f"a quantidade já utilizada ({quantidade_utilizada})."
+                )
+
+        if (
+            cadastro
+            and cadastro.quantidade_utilizada > 0
+            and fornecedor
+            and fornecedor.id != cadastro.fornecedor_id
+        ):
+            erros.append(
+                "Não é possível trocar o fornecedor reserva porque já existe "
+                "quantidade utilizada deste cadastro."
+            )
+
+        if erros:
+            for erro in erros:
+                messages.error(request, erro)
+
+            fornecedor_selecionado = fornecedor_id
+            quantidade_valor = quantidade_texto
+            marca_valor = marca_texto
+        else:
+            usuario = request.user if request.user.is_authenticated else None
+
+            defaults = {
+                "pregao": pregao,
+                "item": item_pregao.item,
+                "fornecedor": fornecedor,
+                "quantidade_reserva": quantidade,
+                "marca": marca_texto,
+                "status": CadastroReservaChamadaPublica.STATUS_ATIVO,
+            }
+
+            if usuario:
+                defaults["registrado_por"] = usuario
+
+            try:
+                with transaction.atomic():
+                    CadastroReservaChamadaPublica.objects.update_or_create(
+                        pregao_item=item_pregao,
+                        defaults=defaults,
+                    )
+            except (ValidationError, IntegrityError) as erro:
+                logger.exception(
+                    "Erro ao salvar cadastro reserva do item %s da Chamada Pública %s.",
+                    item_pregao.id,
+                    pregao.id,
+                )
+                messages.error(
+                    request,
+                    "Não foi possível salvar o cadastro reserva. "
+                    + _mensagem_erro_adjudicacao(erro),
+                )
+                fornecedor_selecionado = fornecedor_id
+                quantidade_valor = quantidade_texto
+                marca_valor = marca_texto
+            else:
+                messages.success(
+                    request,
+                    f"Cadastro reserva do item '{item_pregao.item.nome_item}' "
+                    "salvo com sucesso.",
+                )
+                return redirect(
+                    f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+                )
+    else:
+        fornecedor_selecionado = (
+            str(cadastro.fornecedor_id)
+            if cadastro and cadastro.status == CadastroReservaChamadaPublica.STATUS_ATIVO
+            else ""
+        )
+        quantidade_valor = (
+            str(cadastro.quantidade_reserva).replace(".", ",")
+            if cadastro and cadastro.status == CadastroReservaChamadaPublica.STATUS_ATIVO
+            else ""
+        )
+        marca_valor = (
+            cadastro.marca
+            if cadastro and cadastro.status == CadastroReservaChamadaPublica.STATUS_ATIVO
+            else ""
+        )
+
+    return render(
+        request,
+        "documentos/cadastro_reserva_chamada_publica_form.html",
+        {
+            "pregao": pregao,
+            "item_pregao": item_pregao,
+            "cadastro": cadastro,
+            "fornecedores": fornecedores,
+            "fornecedor_selecionado": fornecedor_selecionado,
+            "quantidade_valor": quantidade_valor,
+            "marca_valor": marca_valor,
+        },
+    )
+
+
+def cancelar_cadastro_reserva_chamada_publica(request, pregao_item_id):
+    """
+    Cancela logicamente o cadastro reserva, preservando todo o histórico.
+
+    A quantidade já utilizada, quando existir no futuro, permanece gravada.
+    """
+    if usuario_eh_consulta_escola(request):
+        messages.error(
+            request,
+            "Seu perfil permite apenas consultar informações. "
+            "Esta ação não está disponível para usuários Consulta/Escola.",
+        )
+        return redirect("documentos:resultado_chamada_publica")
+
+    item_pregao = get_object_or_404(
+        PregaoItem.objects.select_related("pregao", "item"),
+        id=pregao_item_id,
+        pregao__tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+    pregao = item_pregao.pregao
+
+    if request.method != "POST":
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+        )
+
+    cadastro = CadastroReservaChamadaPublica.objects.filter(
+        pregao_item=item_pregao,
+        status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+    ).first()
+
+    if not cadastro:
+        messages.warning(
+            request,
+            f"O item '{item_pregao.item.nome_item}' não possui cadastro reserva ativo.",
+        )
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+        )
+
+    cadastro.status = CadastroReservaChamadaPublica.STATUS_CANCELADO
+    cadastro.save(update_fields=["status", "atualizado_em"])
+
+    messages.success(
+        request,
+        f"Cadastro reserva do item '{item_pregao.item.nome_item}' cancelado. "
+        "O histórico foi preservado.",
+    )
+
+    return redirect(
+        f"{reverse('documentos:resultado_chamada_publica')}?pregao={pregao.id}"
+    )
+
+
+
 def resultado_chamada_publica(request):
     # Para usuários Consulta/Escola, a lista deve conter somente Chamadas
     # Públicas que tenham quantitativo ou contrato da escola vinculada.
@@ -9057,6 +10404,8 @@ def resultado_chamada_publica(request):
     pregao = None
     resultados = ResultadoChamadaPublicaItem.objects.none()
     resumo_itens = []
+    itens_liberados_reserva = []
+    adjudicacoes_reserva = AdjudicacaoReservaChamadaPublica.objects.none()
 
     if pregao_id:
         # A mesma restrição da lista é aplicada ao carregamento do certame.
@@ -9103,13 +10452,143 @@ def resultado_chamada_publica(request):
             )
         }
 
+        reservas_por_item = {
+            cadastro.pregao_item_id: cadastro
+            for cadastro in CadastroReservaChamadaPublica.objects.filter(
+                pregao=pregao,
+                status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+            ).select_related("fornecedor", "pregao_item", "item")
+        }
+
         for item_pregao in PregaoItem.objects.filter(pregao=pregao).select_related("item").order_by("ordem"):
             qtd = totais.get(item_pregao.id, Decimal("0.000"))
+            cadastro_reserva = reservas_por_item.get(item_pregao.id)
+
             resumo_itens.append(
                 {
                     "item_pregao": item_pregao,
                     "adjudicado": qtd,
                     "saldo": item_pregao.quantidade_total - qtd,
+                    "cadastro_reserva": cadastro_reserva,
+                    "quantidade_reserva_utilizada": (
+                        cadastro_reserva.quantidade_utilizada
+                        if cadastro_reserva
+                        else Decimal("0.000")
+                    ),
+                    "saldo_reserva": (
+                        cadastro_reserva.saldo_reserva
+                        if cadastro_reserva
+                        else Decimal("0.000")
+                    ),
+                }
+            )
+
+
+        adjudicacoes_reserva = (
+            AdjudicacaoReservaChamadaPublica.objects.filter(
+                pregao=pregao,
+                status=AdjudicacaoReservaChamadaPublica.STATUS_REGISTRADO,
+            )
+            .select_related(
+                "cadastro_reserva",
+                "fornecedor_reserva",
+                "fornecedor_original",
+                "item",
+                "escola",
+                "distrato_item",
+                "distrato_item__distrato",
+            )
+            .order_by(
+                "pregao_item__ordem",
+                "escola__nome_escola",
+                "-criado_em",
+            )
+        )
+
+        distratos_itens = (
+            DistratoContratoItem.objects.filter(
+                distrato__contrato__pregao=pregao,
+                contrato_item__adjudicacao_reserva__isnull=True,
+            )
+            .select_related(
+                "distrato",
+                "contrato_item",
+                "contrato_item__contrato",
+                "contrato_item__contrato__escola",
+                "contrato_item__contrato__fornecedor",
+                "contrato_item__item",
+            )
+            .order_by(
+                "contrato_item__item__nome_item",
+                "contrato_item__contrato__escola__nome_escola",
+                "criado_em",
+            )
+        )
+
+        cadastros_ativos_por_item = {
+            cadastro.item_id: cadastro
+            for cadastro in CadastroReservaChamadaPublica.objects.filter(
+                pregao=pregao,
+                status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+            ).select_related("fornecedor", "pregao_item", "item")
+        }
+
+        pregao_itens_por_item = {
+            pregao_item.item_id: pregao_item
+            for pregao_item in PregaoItem.objects.filter(
+                pregao=pregao,
+            ).select_related("item")
+        }
+
+        if usuario_eh_consulta_escola(request):
+            escola_consulta = escola_vinculada_usuario(request)
+
+            if escola_consulta:
+                distratos_itens = distratos_itens.filter(
+                    contrato_item__contrato__escola=escola_consulta,
+                )
+                adjudicacoes_reserva = adjudicacoes_reserva.filter(
+                    escola=escola_consulta,
+                )
+            else:
+                distratos_itens = distratos_itens.none()
+                adjudicacoes_reserva = adjudicacoes_reserva.none()
+
+        for distrato_item in distratos_itens:
+            saldo_liberado = obter_saldo_distrato_item_para_reserva(
+                distrato_item
+            )
+
+            if saldo_liberado <= 0:
+                continue
+
+            cadastro = cadastros_ativos_por_item.get(
+                distrato_item.contrato_item.item_id
+            )
+
+            saldo_reserva = (
+                cadastro.saldo_reserva
+                if cadastro
+                else Decimal("0.000")
+            )
+
+            quantidade_disponivel = min(
+                saldo_liberado,
+                saldo_reserva,
+            )
+
+            itens_liberados_reserva.append(
+                {
+                    "distrato_item": distrato_item,
+                    "contrato_item": distrato_item.contrato_item,
+                    "contrato": distrato_item.contrato_item.contrato,
+                    "cadastro_reserva": cadastro,
+                    "pregao_item": pregao_itens_por_item.get(
+                        distrato_item.contrato_item.item_id
+                    ),
+                    "saldo_liberado": saldo_liberado,
+                    "saldo_reserva": saldo_reserva,
+                    "quantidade_disponivel": quantidade_disponivel,
                 }
             )
 
@@ -9121,6 +10600,8 @@ def resultado_chamada_publica(request):
             "pregao": pregao,
             "resultados": resultados,
             "resumo_itens": resumo_itens,
+            "itens_liberados_reserva": itens_liberados_reserva,
+            "adjudicacoes_reserva": adjudicacoes_reserva,
         },
     )
 
@@ -9548,6 +11029,464 @@ def montar_documento_resultado_final_chamada_publica(pregao):
 def nome_arquivo_resultado_chamada_publica(pregao, extensao):
     nome_base = f"Resultado_Final_Chamada_Publica_{pregao.numero}_{pregao.ano}"
     return f"{limpar_nome_arquivo_chamada_publica(nome_base)}.{extensao}"
+
+
+
+def _identificacao_fornecedor_relatorio_chamada(fornecedor):
+    if not fornecedor:
+        return ""
+
+    nome = fornecedor.razao_social or ""
+    documento = (
+        getattr(fornecedor, "cnpj", "")
+        or getattr(fornecedor, "cpf", "")
+        or ""
+    )
+
+    return f"{nome} - {documento}" if documento else nome
+
+
+def _ordinal_adjudicado(numero):
+    return f"{numero}º Adjudicado"
+
+
+def _dados_fornecedores_adjudicados_reserva_chamada(pregao):
+    quantitativos = {
+        q.item_id: q
+        for q in QuantitativoPregao.objects.filter(pregao=pregao)
+        .select_related("item")
+    }
+
+    itens_pregao = list(
+        PregaoItem.objects.filter(
+            pregao=pregao,
+            item_id__in=quantitativos.keys(),
+        )
+        .select_related("item")
+        .order_by("ordem", "item__nome_item")
+    )
+
+    resultados = (
+        ResultadoChamadaPublicaItem.objects.filter(
+            pregao=pregao,
+            status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+            pregao_item__in=itens_pregao,
+        )
+        .select_related(
+            "fornecedor",
+            "projeto_item",
+            "pregao_item",
+            "item",
+        )
+        .order_by("pregao_item__ordem", "criado_em", "id")
+    )
+
+    resultados_por_item = {}
+    ordem_fornecedores = {}
+
+    for resultado in resultados:
+        item_id = resultado.pregao_item_id
+        resultados_por_item.setdefault(item_id, {})
+        ordem_fornecedores.setdefault(item_id, [])
+
+        fornecedor_id = resultado.fornecedor_id
+
+        if fornecedor_id not in resultados_por_item[item_id]:
+            resultados_por_item[item_id][fornecedor_id] = {
+                "fornecedor": _identificacao_fornecedor_relatorio_chamada(
+                    resultado.fornecedor
+                ),
+                "marcas": [],
+                "quantidade": Decimal("0.000"),
+            }
+            ordem_fornecedores[item_id].append(fornecedor_id)
+
+        agregado = resultados_por_item[item_id][fornecedor_id]
+        agregado["quantidade"] += (
+            resultado.quantidade_adjudicada or Decimal("0.000")
+        )
+
+        marca = (resultado.projeto_item.marca or "").strip()
+        if marca and marca not in agregado["marcas"]:
+            agregado["marcas"].append(marca)
+
+    reservas = {
+        c.pregao_item_id: c
+        for c in CadastroReservaChamadaPublica.objects.filter(
+            pregao=pregao,
+            status=CadastroReservaChamadaPublica.STATUS_ATIVO,
+            pregao_item__in=itens_pregao,
+        ).select_related("fornecedor", "pregao_item", "item")
+    }
+
+    linhas = []
+    max_adjudicados = 1
+
+    for item_pregao in itens_pregao:
+        adjudicados = []
+
+        for fornecedor_id in ordem_fornecedores.get(item_pregao.id, []):
+            agregado = resultados_por_item[item_pregao.id][fornecedor_id]
+            adjudicados.append(
+                {
+                    "fornecedor": agregado["fornecedor"],
+                    "marca": " / ".join(agregado["marcas"]),
+                    "quantidade": agregado["quantidade"],
+                }
+            )
+
+        max_adjudicados = max(max_adjudicados, len(adjudicados))
+
+        cadastro = reservas.get(item_pregao.id)
+        reserva = {
+            "fornecedor": "",
+            "marca": "",
+            "quantidade": None,
+        }
+
+        if cadastro:
+            reserva = {
+                "fornecedor": _identificacao_fornecedor_relatorio_chamada(
+                    cadastro.fornecedor
+                ),
+                "marca": cadastro.marca or "",
+                "quantidade": cadastro.quantidade_reserva,
+            }
+
+        q = quantitativos.get(item_pregao.item_id)
+
+        linhas.append(
+            {
+                "ordem": item_pregao.ordem,
+                "item": item_pregao.item,
+                "unidade": item_pregao.item.get_unidade_medida_display(),
+                "quantidade_certame": (
+                    q.quantidade if q else item_pregao.quantidade_total
+                ),
+                "adjudicados": adjudicados,
+                "reserva": reserva,
+            }
+        )
+
+    return linhas, max_adjudicados
+
+
+def montar_documento_fornecedores_adjudicados_reserva_chamada(pregao):
+    linhas, max_adjudicados = (
+        _dados_fornecedores_adjudicados_reserva_chamada(pregao)
+    )
+
+    documento = Document()
+    secao = documento.sections[0]
+    secao.orientation = WD_ORIENT.LANDSCAPE
+
+    if max_adjudicados <= 3:
+        secao.page_width = Cm(29.7)
+        secao.page_height = Cm(21)
+        largura_util = 28.1
+    else:
+        secao.page_width = Cm(42)
+        secao.page_height = Cm(29.7)
+        largura_util = 40.4
+
+    secao.top_margin = Cm(0.8)
+    secao.bottom_margin = Cm(0.8)
+    secao.left_margin = Cm(0.8)
+    secao.right_margin = Cm(0.8)
+
+    documento.styles["Normal"].font.name = "Arial"
+    documento.styles["Normal"].font.size = Pt(7)
+
+    cabecalho = documento.add_table(rows=2, cols=1)
+    _word_configurar_tabela(cabecalho)
+    _word_bordas_tabela(cabecalho)
+
+    _word_preencher_celula(
+        cabecalho.cell(0, 0),
+        "CÂMARA DE NEGÓCIOS DA ALIMENTAÇÃO ESCOLAR DA DIRETORIA REGIONAL DE EDUCAÇÃO",
+        tamanho=9,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+    _word_preencher_celula(
+        cabecalho.cell(1, 0),
+        (
+            "FORNECEDORES ADJUDICADOS E CADASTRO RESERVA - "
+            f"CHAMADA PÚBLICA Nº {pregao.numero}/{pregao.ano}"
+        ),
+        tamanho=9,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+
+    documento.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    dados = documento.add_table(rows=2, cols=3)
+    _word_configurar_tabela(dados)
+    _word_bordas_tabela(dados)
+
+    _word_preencher_celula(
+        dados.cell(0, 0),
+        f"Chamada Pública: {pregao.numero}/{pregao.ano}",
+        tamanho=8,
+    )
+    _word_preencher_celula(
+        dados.cell(0, 1),
+        f"Data: {timezone.localdate().strftime('%d/%m/%Y')}",
+        tamanho=8,
+    )
+    _word_preencher_celula(
+        dados.cell(0, 2),
+        f"Responsável: {pregao.nome_pregoeiro or ''}",
+        tamanho=8,
+    )
+
+    municipios_texto = ", ".join(
+        [
+            (
+                f"{m.nome}/{m.uf}"
+                if getattr(m, "uf", "")
+                else m.nome
+            )
+            for m in pregao.municipios.all().order_by("nome")
+        ]
+    )
+
+    cel = dados.cell(1, 0).merge(dados.cell(1, 2))
+    _word_preencher_celula(
+        cel,
+        f"Município(s): {municipios_texto or '-'}",
+        tamanho=8,
+    )
+
+    documento.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    grupos = max_adjudicados + 1  # último é Cadastro Reserva
+    total_colunas = 4 + grupos * 3
+    tabela = documento.add_table(rows=2, cols=total_colunas)
+    _word_configurar_tabela(tabela)
+    _word_bordas_tabela(tabela)
+
+    for c in range(4):
+        tabela.cell(0, c).merge(tabela.cell(1, c))
+
+    for c, texto in [
+        (0, "Nº"),
+        (1, "Gênero Alimentício"),
+        (2, "Unid."),
+        (3, "Quant. Certame"),
+    ]:
+        _word_preencher_celula(
+            tabela.cell(0, c),
+            texto,
+            tamanho=6.5,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(tabela.cell(0, c), "D9D9D9")
+
+    coluna = 4
+
+    for indice in range(1, max_adjudicados + 1):
+        tabela.cell(0, coluna).merge(tabela.cell(0, coluna + 2))
+        _word_preencher_celula(
+            tabela.cell(0, coluna),
+            _ordinal_adjudicado(indice),
+            tamanho=6.5,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(tabela.cell(0, coluna), "CFE2F3")
+
+        for d, texto in enumerate(["Fornecedor", "Marca", "Quant."]):
+            _word_preencher_celula(
+                tabela.cell(1, coluna + d),
+                texto,
+                tamanho=6,
+                negrito=True,
+                alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+            )
+            _word_sombrear_celula(
+                tabela.cell(1, coluna + d),
+                "D9D9D9",
+            )
+
+        coluna += 3
+
+    tabela.cell(0, coluna).merge(tabela.cell(0, coluna + 2))
+    _word_preencher_celula(
+        tabela.cell(0, coluna),
+        "Cadastro Reserva",
+        tamanho=6.5,
+        negrito=True,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+    _word_sombrear_celula(tabela.cell(0, coluna), "FFF2CC")
+
+    for d, texto in enumerate(["Fornecedor", "Marca", "Quant."]):
+        _word_preencher_celula(
+            tabela.cell(1, coluna + d),
+            texto,
+            tamanho=6,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(
+            tabela.cell(1, coluna + d),
+            "FFF2CC",
+        )
+
+    fixas = [0.7, 3.0, 1.4, 1.5]
+    disponivel = max(largura_util - sum(fixas), 8.0)
+    largura_grupo = disponivel / grupos
+    trio = [
+        largura_grupo * 0.55,
+        largura_grupo * 0.25,
+        largura_grupo * 0.20,
+    ]
+    larguras = list(fixas)
+
+    for _ in range(grupos):
+        larguras.extend(trio)
+
+    for row in tabela.rows:
+        for idx, cell in enumerate(row.cells):
+            if idx < len(larguras):
+                cell.width = Cm(larguras[idx])
+
+    fonte_linha = 6.2 if max_adjudicados <= 3 else 5.5
+
+    for linha in linhas:
+        row = tabela.add_row().cells
+
+        valores = [
+            linha["ordem"],
+            linha["item"].nome_item,
+            linha["unidade"],
+            formatar_numero_br(linha["quantidade_certame"]),
+        ]
+
+        for i in range(max_adjudicados):
+            if i < len(linha["adjudicados"]):
+                a = linha["adjudicados"][i]
+                valores.extend(
+                    [
+                        a["fornecedor"],
+                        a["marca"],
+                        formatar_numero_br(a["quantidade"]),
+                    ]
+                )
+            else:
+                valores.extend(["", "", ""])
+
+        r = linha["reserva"]
+        valores.extend(
+            [
+                r["fornecedor"],
+                r["marca"],
+                (
+                    formatar_numero_br(r["quantidade"])
+                    if r["quantidade"] is not None
+                    else ""
+                ),
+            ]
+        )
+
+        for idx, valor in enumerate(valores):
+            if idx >= 4:
+                pos = (idx - 4) % 3
+            else:
+                pos = None
+
+            alinhamento = (
+                WD_ALIGN_PARAGRAPH.CENTER
+                if idx in (0, 2, 3) or (idx >= 4 and pos in (1, 2))
+                else WD_ALIGN_PARAGRAPH.LEFT
+            )
+
+            _word_preencher_celula(
+                row[idx],
+                valor,
+                tamanho=fonte_linha,
+                negrito=(idx == 1),
+                alinhamento=alinhamento,
+            )
+            row[idx].width = Cm(larguras[idx])
+
+    documento.add_paragraph()
+
+    assinaturas = documento.add_table(rows=1, cols=2)
+    assinaturas.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    for idx, texto in enumerate(
+        [
+            (
+                f"{pregao.nome_pregoeiro or ''}\n"
+                "Responsável pela Chamada Pública"
+            ),
+            "Responsável / Comissão",
+        ]
+    ):
+        p = assinaturas.cell(0, idx).paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(24)
+
+        run = p.add_run("________________________________________\n")
+        _word_definir_fonte(run, "Arial", 9)
+
+        run2 = p.add_run(texto)
+        _word_definir_fonte(run2, "Arial", 9)
+
+    return documento
+
+
+def gerar_fornecedores_adjudicados_reserva_chamada_word(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:resultado_chamada_publica")
+
+    documento = montar_documento_fornecedores_adjudicados_reserva_chamada(
+        pregao
+    )
+
+    nome = (
+        f"Fornecedores_Adjudicados_Cadastro_Reserva_"
+        f"Chamada_Publica_{pregao.numero}_{pregao.ano}"
+    )
+
+    return resposta_download_docx(documento, nome)
+
+
+def gerar_fornecedores_adjudicados_reserva_chamada_pdf(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_documento_fornecedores_adjudicados_reserva_chamada(
+            pregao
+        )
+        nome = (
+            f"Fornecedores_Adjudicados_Cadastro_Reserva_"
+            f"Chamada_Publica_{pregao.numero}_{pregao.ano}"
+        )
+        return resposta_download_pdf(documento, nome)
+    except (FileNotFoundError, ValueError) as erro:
+        messages.error(request, str(erro))
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}"
+            f"?pregao={pregao.id}"
+        )
 
 
 def gerar_resultado_chamada_publica_word(request, pregao_id):

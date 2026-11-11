@@ -58,8 +58,8 @@
         <div><strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }}</div>
         <div><strong>Situação:</strong> {{ pregao.get_status_display }}</div>
         <div class="texto-ajuda">
-            Nesta tela aparecem somente os produtos com Média de Preços cadastrada.
-            O valor unitário é puxado automaticamente dessa média.
+            Nesta tela aparecem somente os produtos com Quantitativo do Certame e Média de Preços cadastrados.
+            O valor unitário é puxado automaticamente dessa média. O Cadastro Reserva é opcional e não altera o saldo adjudicado nem gera contrato.
         </div>
     </div>
 
@@ -74,7 +74,7 @@
                     <option
                         value="{{ fornecedor.id }}"
                         data-limite="{{ fornecedor.limite_anual_chamada_publica }}"
-                        {% if projeto and projeto.fornecedor_id == fornecedor.id %}selected{% endif %}
+                        {% if dados_post.fornecedor|stringformat:"s" == fornecedor.id|stringformat:"s" %}selected{% elif not dados_post.fornecedor and projeto and projeto.fornecedor_id == fornecedor.id %}selected{% endif %}
                     >
                         {{ fornecedor.razao_social }} — {{ fornecedor.get_tipo_fornecedor_chamada_display }} — Limite {{ fornecedor.get_limite_anual_chamada_publica_display }}
                     </option>
@@ -98,6 +98,11 @@
         </div>
 
         <h3>Produtos a Adjudicar</h3>
+        <p class="texto-ajuda" style="margin-bottom:10px;">
+            O fornecedor reserva e a quantidade reserva são opcionais. Se informar um deles,
+            informe também o outro. A marca/descrição do reserva também pode ser registrada.
+            O cadastro reserva não consome saldo do item neste momento.
+        </p>
 
         <div class="table-wrapper">
             <table>
@@ -112,6 +117,9 @@
                         <th>Preço de Aquisição</th>
                         <th>Marca</th>
                         <th>Quantidade Adjudicada</th>
+                        <th>Fornecedor Reserva</th>
+                        <th>Marca Reserva</th>
+                        <th>Quantidade Reserva</th>
                         <th>Total</th>
                     </tr>
                 </thead>
@@ -158,13 +166,43 @@
                                 >
                             </td>
                             <td>
+                                <select name="fornecedor_reserva_{{ item_pregao.id }}">
+                                    <option value="">Sem cadastro reserva</option>
+                                    {% for fornecedor in fornecedores %}
+                                        <option
+                                            value="{{ fornecedor.id }}"
+                                            {% if linha.fornecedor_reserva_id|stringformat:"s" == fornecedor.id|stringformat:"s" %}selected{% endif %}
+                                        >
+                                            {{ fornecedor.razao_social }} — {{ fornecedor.get_tipo_fornecedor_chamada_display }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+                            <td>
+                                <input
+                                    type="text"
+                                    name="marca_reserva_{{ item_pregao.id }}"
+                                    placeholder="Marca ou descrição"
+                                    value="{{ linha.marca_reserva_valor }}"
+                                >
+                            </td>
+                            <td>
+                                <input
+                                    type="text"
+                                    name="quantidade_reserva_{{ item_pregao.id }}"
+                                    placeholder="0"
+                                    inputmode="decimal"
+                                    value="{{ linha.quantidade_reserva_valor }}"
+                                >
+                            </td>
+                            <td>
                                 <span id="total_item_{{ item_pregao.id }}">R$ 0,00</span>
                             </td>
                         </tr>
                         {% endwith %}
                     {% empty %}
                         <tr>
-                            <td colspan="10">
+                            <td colspan="13">
                                 Nenhum item disponível. Cadastre primeiro o Quantitativo por Certame e a Média de Preços dos produtos que poderão ser adjudicados.
                             </td>
                         </tr>

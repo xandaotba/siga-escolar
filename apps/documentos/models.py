@@ -167,6 +167,19 @@ class ContratoItemGerado(models.Model):
         decimal_places=2,
     )
 
+    adjudicacao_reserva = models.ForeignKey(
+        "AdjudicacaoReservaChamadaPublica",
+        on_delete=models.PROTECT,
+        related_name="itens_contratados",
+        verbose_name="Adjudicação do Cadastro Reserva",
+        null=True,
+        blank=True,
+        help_text=(
+            "Preenchido somente quando o contrato foi gerado a partir de "
+            "uma adjudicação do Cadastro Reserva da Chamada Pública."
+        ),
+    )
+
     criado_em = models.DateTimeField(
         "Criado em",
         auto_now_add=True,
@@ -818,4 +831,360 @@ class ResultadoChamadaPublicaItem(models.Model):
 
     def __str__(self):
         return f"{self.pregao} - {self.item} - {self.fornecedor} - R$ {self.valor_total}"
+
+
+class CadastroReservaChamadaPublica(models.Model):
+    """
+    Cadastro reserva por item da Chamada Pública.
+
+    Não representa adjudicação nem contratação. O fornecedor e a quantidade
+    permanecem apenas como reserva até que uma futura substituição seja
+    formalmente adjudicada.
+    """
+
+    STATUS_ATIVO = "ativo"
+    STATUS_CANCELADO = "cancelado"
+
+    STATUS_CHOICES = [
+        (STATUS_ATIVO, "Ativo"),
+        (STATUS_CANCELADO, "Cancelado"),
+    ]
+
+    pregao = models.ForeignKey(
+        Pregao,
+        on_delete=models.PROTECT,
+        related_name="cadastros_reserva_chamada",
+        verbose_name="Chamada Pública",
+    )
+
+    pregao_item = models.OneToOneField(
+        PregaoItem,
+        on_delete=models.PROTECT,
+        related_name="cadastro_reserva_chamada",
+        verbose_name="Item da Chamada Pública",
+    )
+
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.PROTECT,
+        related_name="cadastros_reserva_chamada",
+        verbose_name="Produto",
+    )
+
+    fornecedor = models.ForeignKey(
+        Fornecedor,
+        on_delete=models.PROTECT,
+        related_name="cadastros_reserva_chamada",
+        verbose_name="Fornecedor Reserva",
+    )
+
+    quantidade_reserva = models.DecimalField(
+        "Quantidade no Cadastro Reserva",
+        max_digits=12,
+        decimal_places=3,
+        validators=[MinValueValidator(Decimal("0.001"))],
+    )
+
+    marca = models.CharField(
+        "Marca / Descrição do Cadastro Reserva",
+        max_length=150,
+        blank=True,
+        help_text=(
+            "Marca ou descrição apresentada pelo fornecedor do Cadastro Reserva. "
+            "Ex.: In natura."
+        ),
+    )
+
+    quantidade_utilizada = models.DecimalField(
+        "Quantidade já utilizada da reserva",
+        max_digits=12,
+        decimal_places=3,
+        default=Decimal("0.000"),
+    )
+
+    status = models.CharField(
+        "Status",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_ATIVO,
+    )
+
+    registrado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="cadastros_reserva_chamada_registrados",
+        verbose_name="Registrado por",
+        null=True,
+        blank=True,
+    )
+
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "Cadastro Reserva da Chamada Pública"
+        verbose_name_plural = "Cadastros Reserva da Chamada Pública"
+        ordering = ["pregao_item__ordem", "item__nome_item"]
+
+    @property
+    def saldo_reserva(self):
+        saldo = (self.quantidade_reserva or Decimal("0.000")) - (
+            self.quantidade_utilizada or Decimal("0.000")
+        )
+        return max(saldo, Decimal("0.000"))
+
+    def clean(self):
+        if self.pregao and self.pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA:
+            raise ValidationError(
+                "Cadastro reserva só pode ser registrado para Chamada Pública."
+            )
+
+        if self.pregao_item and self.pregao_item.pregao_id != self.pregao_id:
+            raise ValidationError(
+                "O item informado não pertence à Chamada Pública selecionada."
+            )
+
+        if self.item and self.pregao_item and self.item_id != self.pregao_item.item_id:
+            raise ValidationError(
+                "O produto informado não corresponde ao item da Chamada Pública."
+            )
+
+        if (
+            self.quantidade_reserva
+            and self.pregao_item
+            and self.quantidade_reserva > self.pregao_item.quantidade_total
+        ):
+            raise ValidationError(
+                "A quantidade do cadastro reserva não pode ser maior que "
+                "o quantitativo total do item no certame."
+            )
+
+        if (
+            self.quantidade_utilizada
+            and self.quantidade_reserva
+            and self.quantidade_utilizada > self.quantidade_reserva
+        ):
+            raise ValidationError(
+                "A quantidade utilizada da reserva não pode ultrapassar "
+                "a quantidade cadastrada na reserva."
+            )
+
+        if self.fornecedor and self.pregao:
+            if not self.pregao.fornecedores.filter(id=self.fornecedor_id).exists():
+                raise ValidationError(
+                    "O fornecedor reserva precisa estar vinculado à Chamada Pública."
+                )
+
+            if not self.fornecedor.eh_fornecedor_chamada_publica:
+                raise ValidationError(
+                    "O fornecedor reserva precisa ser Fornecedor Individual "
+                    "ou Grupo Formal/Cooperativa."
+                )
+
+    def save(self, *args, **kwargs):
+        if self.pregao_item_id:
+            self.pregao = self.pregao_item.pregao
+            self.item = self.pregao_item.item
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.pregao} - {self.item} - "
+            f"Reserva: {self.fornecedor} ({self.quantidade_reserva})"
+        )
+
+
+class AdjudicacaoReservaChamadaPublica(models.Model):
+    """
+    Transferência formal de uma quantidade distratada para o fornecedor
+    do Cadastro Reserva.
+
+    O registro preserva a ligação completa:
+    contrato original -> item distratado -> cadastro reserva -> nova contratação.
+    """
+
+    STATUS_REGISTRADO = "registrado"
+    STATUS_CANCELADO = "cancelado"
+
+    STATUS_CHOICES = [
+        (STATUS_REGISTRADO, "Registrado"),
+        (STATUS_CANCELADO, "Cancelado"),
+    ]
+
+    cadastro_reserva = models.ForeignKey(
+        CadastroReservaChamadaPublica,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes",
+        verbose_name="Cadastro Reserva",
+    )
+
+    distrato_item = models.ForeignKey(
+        DistratoContratoItem,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva",
+        verbose_name="Item Distratado de Origem",
+    )
+
+    pregao = models.ForeignKey(
+        Pregao,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_chamada",
+        verbose_name="Chamada Pública",
+    )
+
+    pregao_item = models.ForeignKey(
+        PregaoItem,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_chamada",
+        verbose_name="Item da Chamada Pública",
+    )
+
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_chamada",
+        verbose_name="Produto",
+    )
+
+    escola = models.ForeignKey(
+        Escola,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_chamada",
+        verbose_name="Escola",
+    )
+
+    fornecedor_original = models.ForeignKey(
+        Fornecedor,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_como_original",
+        verbose_name="Fornecedor Original",
+    )
+
+    fornecedor_reserva = models.ForeignKey(
+        Fornecedor,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_recebidas",
+        verbose_name="Fornecedor do Cadastro Reserva",
+    )
+
+    quantidade_adjudicada = models.DecimalField(
+        "Quantidade Adjudicada ao Cadastro Reserva",
+        max_digits=12,
+        decimal_places=3,
+        validators=[MinValueValidator(Decimal("0.001"))],
+    )
+
+    marca = models.CharField(
+        "Marca / Descrição",
+        max_length=150,
+        blank=True,
+    )
+
+    valor_unitario = models.DecimalField(
+        "Valor Unitário",
+        max_digits=12,
+        decimal_places=2,
+    )
+
+    valor_total = models.DecimalField(
+        "Valor Total",
+        max_digits=14,
+        decimal_places=2,
+    )
+
+    status = models.CharField(
+        "Status",
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_REGISTRADO,
+    )
+
+    registrado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="adjudicacoes_reserva_chamada_registradas",
+        verbose_name="Registrado por",
+        null=True,
+        blank=True,
+    )
+
+    criado_em = models.DateTimeField("Criado em", auto_now_add=True)
+    atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "Adjudicação do Cadastro Reserva"
+        verbose_name_plural = "Adjudicações do Cadastro Reserva"
+        ordering = ["pregao_item__ordem", "escola__nome_escola", "-criado_em"]
+
+    def clean(self):
+        if self.pregao and self.pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA:
+            raise ValidationError(
+                "Adjudicação de cadastro reserva só pode ser registrada "
+                "para Chamada Pública."
+            )
+
+        if self.cadastro_reserva and self.pregao_item:
+            if self.cadastro_reserva.pregao_item_id != self.pregao_item_id:
+                raise ValidationError(
+                    "O cadastro reserva não corresponde ao item informado."
+                )
+
+        if self.cadastro_reserva and self.fornecedor_reserva:
+            if self.cadastro_reserva.fornecedor_id != self.fornecedor_reserva_id:
+                raise ValidationError(
+                    "O fornecedor informado não corresponde ao Cadastro Reserva."
+                )
+
+        if self.distrato_item_id:
+            contrato_item = self.distrato_item.contrato_item
+            contrato = contrato_item.contrato
+
+            if self.pregao_id and contrato.pregao_id != self.pregao_id:
+                raise ValidationError(
+                    "O item distratado não pertence à Chamada Pública informada."
+                )
+
+            if self.escola_id and contrato.escola_id != self.escola_id:
+                raise ValidationError(
+                    "A escola não corresponde ao contrato distratado."
+                )
+
+            if self.item_id and contrato_item.item_id != self.item_id:
+                raise ValidationError(
+                    "O produto não corresponde ao item distratado."
+                )
+
+            if self.fornecedor_original_id and contrato.fornecedor_id != self.fornecedor_original_id:
+                raise ValidationError(
+                    "O fornecedor original não corresponde ao contrato distratado."
+                )
+
+        if self.quantidade_adjudicada and self.quantidade_adjudicada <= 0:
+            raise ValidationError(
+                "A quantidade adjudicada ao cadastro reserva deve ser maior que zero."
+            )
+
+    def save(self, *args, **kwargs):
+        if self.cadastro_reserva_id:
+            self.pregao = self.cadastro_reserva.pregao
+            self.pregao_item = self.cadastro_reserva.pregao_item
+            self.item = self.cadastro_reserva.item
+            self.fornecedor_reserva = self.cadastro_reserva.fornecedor
+
+        if self.distrato_item_id:
+            contrato = self.distrato_item.contrato_item.contrato
+            self.escola = contrato.escola
+            self.fornecedor_original = contrato.fornecedor
+
+        if self.quantidade_adjudicada and self.valor_unitario:
+            self.valor_total = self.quantidade_adjudicada * self.valor_unitario
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.pregao} - {self.item} - {self.escola} - "
+            f"{self.fornecedor_reserva} ({self.quantidade_adjudicada})"
+        )
 

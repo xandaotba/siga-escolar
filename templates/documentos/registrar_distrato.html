@@ -21,7 +21,7 @@
 
     <p>
         <strong>Nº Contrato:</strong> {{ contrato.numero_contrato }}<br>
-        <strong>Pregão:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
+        <strong>Certame:</strong> {{ contrato.pregao.numero }}/{{ contrato.pregao.ano }}<br>
         <strong>Escola:</strong> {{ contrato.escola.nome_escola }}<br>
         <strong>Município:</strong>
         {{ contrato.escola.municipio.nome }}{% if contrato.escola.municipio.uf %}/{{ contrato.escola.municipio.uf }}{% endif %}<br>
@@ -35,8 +35,15 @@
     <h2>Registrar Distrato</h2>
 
     <div class="alert alert-error">
-        Selecione os itens e informe a quantidade a distratar. Apenas a quantidade distratada deixará de contar como contratada
-        e voltará a ficar disponível para contratação futura.
+        Selecione os itens e informe a quantidade a distratar.
+        {% if eh_chamada_publica %}
+        Na Chamada Pública, a quantidade distratada volta ao saldo da escola e,
+        quando houver Cadastro Reserva ativo, ficará disponível para nova adjudicação
+        ao fornecedor reserva. Ela não volta automaticamente ao fornecedor original.
+        {% else %}
+        Apenas a quantidade distratada deixará de contar como contratada e voltará
+        a ficar disponível para contratação futura.
+        {% endif %}
     </div>
 
     <form method="post" onsubmit="return confirm('Tem certeza que deseja registrar este distrato? A quantidade informada voltará ao saldo disponível.');">
@@ -68,6 +75,10 @@
                         <th>Qtd. a Distratar</th>
                         <th>Valor Unitário</th>
                         <th>Valor Ativo</th>
+                        {% if eh_chamada_publica %}
+                        <th>Fornecedor Reserva</th>
+                        <th>Saldo Reserva</th>
+                        {% endif %}
                     </tr>
                 </thead>
 
@@ -113,11 +124,31 @@
                         </td>
                         <td>R$ {{ item.valor_unitario }}</td>
                         <td>R$ {{ item_ctx.valor_ativo }}</td>
+                        {% if eh_chamada_publica %}
+                        <td>
+                            {% if item_ctx.contrato_origem_reserva %}
+                                <span class="badge badge-warning">Contrato já originado da reserva</span>
+                            {% elif item_ctx.cadastro_reserva %}
+                                {{ item_ctx.cadastro_reserva.fornecedor.razao_social }}
+                            {% else %}
+                                <span style="color:#64748b;">Sem cadastro reserva</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item_ctx.contrato_origem_reserva %}
+                                -
+                            {% elif item_ctx.cadastro_reserva %}
+                                <strong>{{ item_ctx.saldo_reserva }}</strong>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        {% endif %}
                     </tr>
                     {% endwith %}
                     {% empty %}
                     <tr>
-                        <td colspan="10">Nenhum item encontrado neste contrato.</td>
+                        <td colspan="{% if eh_chamada_publica %}12{% else %}10{% endif %}">Nenhum item encontrado neste contrato.</td>
                     </tr>
                     {% endfor %}
                 </tbody>

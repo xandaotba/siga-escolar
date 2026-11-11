@@ -237,9 +237,13 @@ class QuantitativoPregao(models.Model):
         return f"{self.pregao} - {self.item} - {self.quantidade}"
 
     def clean(self):
-        if self.pregao and self.pregao.status != Pregao.STATUS_NAO_INICIADO:
+        if (
+            self.pregao
+            and self.pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA
+            and self.pregao.status != Pregao.STATUS_NAO_INICIADO
+        ):
             raise ValidationError(
-                "Não é permitido alterar quantitativos de pregão já iniciado ou finalizado."
+                "Não é permitido alterar quantitativos de Pregão Presencial já iniciado ou finalizado."
             )
 
 
@@ -287,9 +291,13 @@ class QuantitativoEscola(models.Model):
         return f"{self.pregao} - {self.escola} - {self.item} - {self.quantidade}"
 
     def clean(self):
-        if self.pregao and self.pregao.status != Pregao.STATUS_NAO_INICIADO:
+        if (
+            self.pregao
+            and self.pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA
+            and self.pregao.status != Pregao.STATUS_NAO_INICIADO
+        ):
             raise ValidationError(
-                "Não é permitido alterar quantitativos de escola em pregão já iniciado ou finalizado."
+                "Não é permitido alterar quantitativos por escola de Pregão Presencial já iniciado ou finalizado."
             )
 
 from django.utils import timezone

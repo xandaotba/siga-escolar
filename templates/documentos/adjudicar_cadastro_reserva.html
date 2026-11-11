@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Adjudicar ao Cadastro Reserva | Sistema de Certames{% endblock %}
+{% block page_title %}Adjudicar ao Cadastro Reserva{% endblock %}
+{% block page_subtitle %}Transfira uma quantidade liberada por distrato para o fornecedor reserva do item{% endblock %}
+
+{% block content %}
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <h2>{{ contrato_item.item.nome_item }}</h2>
+
+    <div class="grid grid-2" style="margin-bottom:18px;">
+        <div>
+            <p><strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }}</p>
+            <p><strong>Escola:</strong> {{ contrato.escola.nome_escola }}</p>
+            <p><strong>Fornecedor Original:</strong> {{ contrato.fornecedor.razao_social }}</p>
+            <p><strong>Contrato de Origem:</strong> {{ contrato.numero_contrato }}</p>
+        </div>
+        <div>
+            <p><strong>Fornecedor Reserva:</strong> {{ cadastro.fornecedor.razao_social }}</p>
+            <p><strong>Quantidade Distratada:</strong> {{ distrato_item.quantidade_distratada|quantidade_br }}</p>
+            <p><strong>Saldo deste Distrato:</strong> {{ saldo_distrato|quantidade_br }}</p>
+            <p><strong>Saldo do Cadastro Reserva:</strong> {{ saldo_reserva|quantidade_br }}</p>
+        </div>
+    </div>
+
+    <div class="alert alert-info">
+        Quantidade máxima que pode ser adjudicada agora:
+        <strong>{{ quantidade_maxima|quantidade_br }}</strong>.
+        Ao confirmar, essa quantidade será consumida do saldo do Cadastro Reserva
+        e ficará disponível para geração de novo contrato para esta escola.
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        <div class="grid grid-2">
+            <div class="form-group">
+                <label>Quantidade a Adjudicar ao Fornecedor Reserva</label>
+                <input
+                    type="text"
+                    name="quantidade_adjudicar"
+                    value="{{ quantidade_valor }}"
+                    inputmode="decimal"
+                    required
+                >
+            </div>
+
+            <div class="form-group">
+                <label>Marca / Descrição do Cadastro Reserva</label>
+                <input
+                    type="text"
+                    value="{{ marca_valor }}"
+                    readonly
+                >
+                <small>
+                    A marca acompanha automaticamente o Cadastro Reserva.
+                    Para alterá-la, edite o cadastro reserva antes da adjudicação.
+                </small>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button
+                class="btn btn-success"
+                type="submit"
+                onclick="return confirm('Confirmar a adjudicação desta quantidade ao fornecedor do Cadastro Reserva?');"
+            >
+                Confirmar Adjudicação ao Reserva
+            </button>
+
+            <a
+                class="btn btn-secondary"
+                href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}"
+            >
+                Voltar
+            </a>
+        </div>
+    </form>
+</div>
+
+{% endblock %}
