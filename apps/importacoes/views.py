@@ -2024,9 +2024,6 @@ def baixar_modelo_quantitativo_pregao(request):
     return response
 
 
-@login_required
-@user_passes_test(usuario_pode_importar, login_url="dashboard")
-
 def _certame_permite_importar_quantitativos(pregao):
     return bool(
         pregao
@@ -2049,6 +2046,8 @@ def _certame_permite_importar_media_precos(pregao):
         )
     )
 
+@login_required
+@user_passes_test(usuario_pode_importar, login_url="dashboard")
 def importar_quantitativo_pregao(request):
     linhas = []
     resumo = None
@@ -2141,10 +2140,10 @@ def importar_quantitativo_pregao(request):
                 messages.error(request, "Pregão da importação não encontrado.")
                 return redirect("importacoes:quantitativo_pregao")
 
-            if pregao.status != Pregao.STATUS_NAO_INICIADO:
+            if not _certame_permite_importar_quantitativos(pregao):
                 messages.error(
                     request,
-                    "Não é permitido importar quantitativos em pregão já iniciado ou finalizado.",
+                    "Não é permitido importar quantitativos em Pregão Presencial já iniciado ou finalizado.",
                 )
                 return redirect("importacoes:quantitativo_pregao")
 
