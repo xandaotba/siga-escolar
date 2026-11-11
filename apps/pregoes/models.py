@@ -111,6 +111,16 @@ class Pregao(models.Model):
         help_text="Percentual de alerta aplicado a todos os itens deste certame.",
     )
 
+    data_pesquisa_precos = models.DateField(
+        "Data da Pesquisa de Preços",
+        null=True,
+        blank=True,
+        help_text=(
+            "Data da pesquisa/orçamento estimado utilizada como referência "
+            "para as médias de preços do certame."
+        ),
+    )
+
     criado_em = models.DateTimeField("Criado em", auto_now_add=True)
     atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
 

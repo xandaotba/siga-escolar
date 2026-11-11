@@ -100,6 +100,26 @@ urlpatterns = [
         name="gerar_resultado_chamada_publica_word",
     ),
     path(
+        "chamada-publica/resultado/<int:pregao_id>/ata-fornecedores-participantes/word/",
+        views.gerar_ata_fornecedores_participantes_chamada_word,
+        name="gerar_ata_fornecedores_participantes_chamada_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/ata-fornecedores-participantes/pdf/",
+        views.gerar_ata_fornecedores_participantes_chamada_pdf,
+        name="gerar_ata_fornecedores_participantes_chamada_pdf",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/ata-adjudicacao/word/",
+        views.gerar_ata_adjudicacao_chamada_word,
+        name="gerar_ata_adjudicacao_chamada_word",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/ata-adjudicacao/pdf/",
+        views.gerar_ata_adjudicacao_chamada_pdf,
+        name="gerar_ata_adjudicacao_chamada_pdf",
+    ),
+    path(
         "chamada-publica/resultado/<int:pregao_id>/fornecedores-adjudicados-reserva/word/",
         views.gerar_fornecedores_adjudicados_reserva_chamada_word,
         name="gerar_fornecedores_adjudicados_reserva_chamada_word",

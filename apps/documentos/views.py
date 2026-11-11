@@ -5887,6 +5887,18 @@ def montar_documento_contrato_word(contrato):
     data_formatada = data_por_extenso(data_contrato)
     data_contrato_abreviada = data_contrato.strftime("%d/%m/%Y")
 
+    data_pesquisa_precos = getattr(
+        pregao,
+        "data_pesquisa_precos",
+        None,
+    )
+
+    data_pesquisa_precos_formatada = (
+        data_pesquisa_precos.strftime("%d/%m/%Y")
+        if data_pesquisa_precos
+        else ""
+    )
+
     numero_pregao = f"{pregao.numero}/{pregao.ano}"
     numero_contrato = contrato.numero_contrato or f"{contrato.id:04d}/{pregao.ano}"
 
@@ -5911,6 +5923,7 @@ def montar_documento_contrato_word(contrato):
 
         "{{NUMERO_CONTRATO}}": numero_contrato,
         "{{DATA_CONTRATO_ABREVIADA}}": data_contrato_abreviada,
+        "{{DATA_PESQUISA_PRECOS}}": data_pesquisa_precos_formatada,
         "{{NUMERO_PROCESSO}}": getattr(pregao, "numero_processo", "") or "",
         "{{ANO_CERTAME}}": str(pregao.ano or ""),
         "{{MUNICIPIOS_CHAMADA}}": municipios_chamada,
@@ -11489,6 +11502,515 @@ def gerar_fornecedores_adjudicados_reserva_chamada_pdf(request, pregao_id):
         )
 
 
+
+# ============================================================
+# CHAMADA PÚBLICA - ATAS DA SESSÃO
+# ============================================================
+
+def _fornecedor_cpf_cnpj_chamada(fornecedor):
+    if not fornecedor:
+        return ""
+
+    if (
+        getattr(fornecedor, "tipo_fornecedor_chamada", "")
+        == getattr(Fornecedor, "TIPO_INDIVIDUAL", "individual")
+    ):
+        return (
+            getattr(fornecedor, "cpf_fornecedor_individual", "")
+            or getattr(fornecedor, "cpf", "")
+            or ""
+        )
+
+    return (
+        getattr(fornecedor, "cnpj", "")
+        or getattr(fornecedor, "cpf_fornecedor_individual", "")
+        or ""
+    )
+
+
+def _tipo_fornecedor_chamada_texto(fornecedor):
+    if not fornecedor:
+        return ""
+
+    try:
+        return fornecedor.get_tipo_fornecedor_chamada_display()
+    except Exception:
+        return str(getattr(fornecedor, "tipo_fornecedor_chamada", "") or "")
+
+
+def _representante_participante_chamada(fornecedor):
+    """
+    Conforme o modelo da Ata de Fornecedores Participantes:
+    - se houver procurador cadastrado, usa o procurador;
+    - caso contrário, usa o representante legal.
+    """
+    procurador = (getattr(fornecedor, "procurador", "") or "").strip()
+
+    if procurador:
+        rg = (getattr(fornecedor, "rg_procurador", "") or "").strip()
+        orgao = (
+            getattr(fornecedor, "orgao_expedidor_procurador", "")
+            or ""
+        ).strip()
+        cpf = (getattr(fornecedor, "cpf_procurador", "") or "").strip()
+
+        documentos = []
+        if rg:
+            documentos.append(
+                f"RG: {rg}{f' {orgao}' if orgao else ''}"
+            )
+        if cpf:
+            documentos.append(f"CPF: {cpf}")
+
+        return procurador, " - ".join(documentos)
+
+    representante = (
+        getattr(fornecedor, "representante_legal", "")
+        or ""
+    ).strip()
+
+    rg = (getattr(fornecedor, "rg_representante", "") or "").strip()
+    orgao = (
+        getattr(fornecedor, "orgao_expedidor_representante", "")
+        or ""
+    ).strip()
+    cpf = (getattr(fornecedor, "cpf_representante", "") or "").strip()
+
+    documentos = []
+    if rg:
+        documentos.append(
+            f"RG: {rg}{f' {orgao}' if orgao else ''}"
+        )
+    if cpf:
+        documentos.append(f"CPF: {cpf}")
+
+    return representante, " - ".join(documentos)
+
+
+def _configurar_documento_ata_chamada(documento):
+    secao = documento.sections[0]
+    secao.top_margin = Cm(1.6)
+    secao.bottom_margin = Cm(1.6)
+    secao.left_margin = Cm(1.6)
+    secao.right_margin = Cm(1.6)
+
+    estilo = documento.styles["Normal"]
+    estilo.font.name = "Times New Roman"
+    estilo.font.size = Pt(10)
+
+    return documento
+
+
+def montar_ata_fornecedores_participantes_chamada_publica(pregao):
+    """
+    Gera a Ata da Sessão - Fornecedores Participantes conforme o modelo
+    encaminhado pelo usuário.
+    """
+    documento = _configurar_documento_ata_chamada(Document())
+
+    fornecedores = list(
+        pregao.fornecedores.filter(
+            tipo_fornecedor_chamada__in=[
+                Fornecedor.TIPO_INDIVIDUAL,
+                Fornecedor.TIPO_GRUPO_FORMAL,
+            ],
+        ).order_by("razao_social")
+    )
+
+    tabela = documento.add_table(rows=1, cols=5)
+    _word_configurar_tabela(tabela)
+    _word_bordas_tabela(tabela)
+
+    cabecalhos = [
+        "Fornecedor",
+        "CPF/CNPJ",
+        "Tipo (Grupo Formal / Informal / Individual)",
+        "Representante",
+        "Doc. Identificação (RG/CPF)",
+    ]
+
+    larguras = [3.5, 2.6, 3.6, 4.8, 4.1]
+
+    for indice, texto in enumerate(cabecalhos):
+        celula = tabela.rows[0].cells[indice]
+        _word_preencher_celula(
+            celula,
+            texto,
+            nome_fonte="Times New Roman",
+            tamanho=9.5,
+            negrito=False,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+        _word_sombrear_celula(celula, "D9E4F2")
+        celula.width = Cm(larguras[indice])
+
+    for fornecedor in fornecedores:
+        representante, documento_representante = (
+            _representante_participante_chamada(fornecedor)
+        )
+
+        valores = [
+            fornecedor.razao_social or "",
+            _fornecedor_cpf_cnpj_chamada(fornecedor),
+            _tipo_fornecedor_chamada_texto(fornecedor),
+            representante,
+            documento_representante,
+        ]
+
+        celulas = tabela.add_row().cells
+
+        for indice, valor in enumerate(valores):
+            _word_preencher_celula(
+                celulas[indice],
+                valor,
+                nome_fonte="Times New Roman",
+                tamanho=9,
+                alinhamento=WD_ALIGN_PARAGRAPH.LEFT,
+            )
+            celulas[indice].width = Cm(larguras[indice])
+
+    if not fornecedores:
+        celulas = tabela.add_row().cells
+        celula = celulas[0].merge(celulas[4])
+        _word_preencher_celula(
+            celula,
+            "Nenhum fornecedor participante cadastrado para esta Chamada Pública.",
+            nome_fonte="Times New Roman",
+            tamanho=9,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+
+    return documento
+
+
+def _agrupar_adjudicacao_chamada_por_fornecedor(pregao):
+    """
+    Agrupa as adjudicações PRINCIPAIS da sessão por fornecedor.
+    Não inclui adjudicações posteriores do Cadastro Reserva decorrentes
+    de distratos, preservando o caráter histórico da Ata da Sessão.
+    """
+    resultados = (
+        ResultadoChamadaPublicaItem.objects.filter(
+            pregao=pregao,
+            status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
+        )
+        .select_related(
+            "fornecedor",
+            "item",
+            "pregao_item",
+            "projeto_item",
+        )
+        .order_by(
+            "fornecedor__razao_social",
+            "pregao_item__ordem",
+            "item__nome_item",
+            "id",
+        )
+    )
+
+    grupos = []
+    por_fornecedor = {}
+
+    for resultado in resultados:
+        fornecedor_id = resultado.fornecedor_id
+
+        if fornecedor_id not in por_fornecedor:
+            grupo = {
+                "fornecedor": resultado.fornecedor,
+                "itens": [],
+                "valor_total": Decimal("0.00"),
+            }
+            por_fornecedor[fornecedor_id] = grupo
+            grupos.append(grupo)
+
+        grupo = por_fornecedor[fornecedor_id]
+
+        valor_total = (
+            resultado.valor_total
+            if resultado.valor_total is not None
+            else (
+                resultado.quantidade_adjudicada
+                * resultado.valor_unitario
+            )
+        )
+
+        grupo["itens"].append(
+            {
+                "produto": resultado.item.nome_item,
+                "marca": resultado.projeto_item.marca or "",
+                "unidade": resultado.item.get_unidade_medida_display(),
+                "preco": resultado.valor_unitario,
+                "quantidade": resultado.quantidade_adjudicada,
+                "valor_total": valor_total,
+            }
+        )
+
+        grupo["valor_total"] += valor_total
+
+    return grupos
+
+
+def montar_ata_adjudicacao_chamada_publica(pregao):
+    """
+    Gera a Ata da Sessão - da Adjudicação conforme o modelo encaminhado:
+    fornecedor + CPF/CNPJ, itens adjudicados e valor total geral por extenso.
+    """
+    documento = _configurar_documento_ata_chamada(Document())
+
+    grupos = _agrupar_adjudicacao_chamada_por_fornecedor(pregao)
+
+    tabela = documento.add_table(rows=0, cols=6)
+    _word_configurar_tabela(tabela)
+    _word_bordas_tabela(tabela)
+
+    larguras = [4.2, 2.8, 2.6, 2.8, 2.4, 3.4]
+    total_geral = Decimal("0.00")
+    primeiro_fornecedor = True
+
+    for grupo in grupos:
+        fornecedor = grupo["fornecedor"]
+
+        # Separação visual entre fornecedores, conforme o modelo.
+        if not primeiro_fornecedor:
+            celulas_espaco = tabela.add_row().cells
+            celula_espaco = celulas_espaco[0].merge(celulas_espaco[5])
+            _word_preencher_celula(
+                celula_espaco,
+                "",
+                nome_fonte="Times New Roman",
+                tamanho=3,
+            )
+        primeiro_fornecedor = False
+
+        celulas_fornecedor = tabela.add_row().cells
+        celula_fornecedor = celulas_fornecedor[0].merge(
+            celulas_fornecedor[5]
+        )
+
+        texto_fornecedor = (
+            f"Fornecedor: {fornecedor.razao_social or ''} - "
+            f"CNPJ/CPF: {_fornecedor_cpf_cnpj_chamada(fornecedor)}"
+        )
+
+        _word_preencher_celula(
+            celula_fornecedor,
+            texto_fornecedor,
+            nome_fonte="Times New Roman",
+            tamanho=10,
+            negrito=True,
+            alinhamento=WD_ALIGN_PARAGRAPH.LEFT,
+        )
+        _word_sombrear_celula(celula_fornecedor, "D9E4F2")
+
+        # O modelo mostra os títulos das colunas no início da tabela.
+        # Repetimos para cada fornecedor para manter legibilidade quando
+        # o documento ocupar mais de uma página.
+        celulas_header = tabela.add_row().cells
+        cabecalhos = [
+            "PRODUTO",
+            "MARCA",
+            "UNID.",
+            "PREÇO (R$)",
+            "QUANT.",
+            "VALOR TOTAL (R$)",
+        ]
+
+        for indice, texto in enumerate(cabecalhos):
+            _word_preencher_celula(
+                celulas_header[indice],
+                texto,
+                nome_fonte="Times New Roman",
+                tamanho=9.5,
+                negrito=True,
+                alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+            )
+            _word_sombrear_celula(
+                celulas_header[indice],
+                "D9E4F2",
+            )
+            celulas_header[indice].width = Cm(larguras[indice])
+
+        for item in grupo["itens"]:
+            celulas = tabela.add_row().cells
+
+            valores = [
+                item["produto"],
+                item["marca"],
+                item["unidade"],
+                formatar_moeda_br(item["preco"]).replace("R$ ", ""),
+                formatar_quantidade_chamada(item["quantidade"]),
+                formatar_moeda_br(item["valor_total"]),
+            ]
+
+            alinhamentos = [
+                WD_ALIGN_PARAGRAPH.LEFT,
+                WD_ALIGN_PARAGRAPH.CENTER,
+                WD_ALIGN_PARAGRAPH.CENTER,
+                WD_ALIGN_PARAGRAPH.CENTER,
+                WD_ALIGN_PARAGRAPH.CENTER,
+                WD_ALIGN_PARAGRAPH.CENTER,
+            ]
+
+            for indice, valor in enumerate(valores):
+                _word_preencher_celula(
+                    celulas[indice],
+                    valor,
+                    nome_fonte="Times New Roman",
+                    tamanho=9,
+                    alinhamento=alinhamentos[indice],
+                )
+                celulas[indice].width = Cm(larguras[indice])
+
+        total_geral += grupo["valor_total"]
+
+    if not grupos:
+        celulas = tabela.add_row().cells
+        celula = celulas[0].merge(celulas[5])
+        _word_preencher_celula(
+            celula,
+            "Nenhum produto adjudicado para esta Chamada Pública.",
+            nome_fonte="Times New Roman",
+            tamanho=9,
+            alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+
+    paragrafo_total = documento.add_paragraph()
+    paragrafo_total.paragraph_format.space_before = Pt(10)
+    paragrafo_total.paragraph_format.space_after = Pt(0)
+
+    run1 = paragrafo_total.add_run("VALOR TOTAL ADJUDICADO: ")
+    _word_definir_fonte(
+        run1,
+        "Times New Roman",
+        11,
+        True,
+    )
+
+    run2 = paragrafo_total.add_run(formatar_moeda_br(total_geral))
+    _word_definir_fonte(
+        run2,
+        "Times New Roman",
+        11,
+        True,
+    )
+
+    run3 = paragrafo_total.add_run(
+        f" - {valor_por_extenso(total_geral)}"
+    )
+    _word_definir_fonte(
+        run3,
+        "Times New Roman",
+        11,
+        False,
+    )
+
+    return documento
+
+
+def gerar_ata_fornecedores_participantes_chamada_word(
+    request,
+    pregao_id,
+):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:resultado_chamada_publica")
+
+    documento = montar_ata_fornecedores_participantes_chamada_publica(
+        pregao
+    )
+
+    nome = (
+        f"Ata_Sessao_Fornecedores_Participantes_"
+        f"Chamada_Publica_{pregao.numero}_{pregao.ano}"
+    )
+
+    return resposta_download_docx(documento, nome)
+
+
+def gerar_ata_fornecedores_participantes_chamada_pdf(
+    request,
+    pregao_id,
+):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_ata_fornecedores_participantes_chamada_publica(
+            pregao
+        )
+
+        nome = (
+            f"Ata_Sessao_Fornecedores_Participantes_"
+            f"Chamada_Publica_{pregao.numero}_{pregao.ano}"
+        )
+
+        return resposta_download_pdf(documento, nome)
+    except (FileNotFoundError, ValueError) as erro:
+        messages.error(request, str(erro))
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}"
+            f"?pregao={pregao.id}"
+        )
+
+
+def gerar_ata_adjudicacao_chamada_word(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:resultado_chamada_publica")
+
+    documento = montar_ata_adjudicacao_chamada_publica(pregao)
+
+    nome = (
+        f"Ata_Sessao_da_Adjudicacao_"
+        f"Chamada_Publica_{pregao.numero}_{pregao.ano}"
+    )
+
+    return resposta_download_docx(documento, nome)
+
+
+def gerar_ata_adjudicacao_chamada_pdf(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:resultado_chamada_publica")
+
+    try:
+        documento = montar_ata_adjudicacao_chamada_publica(pregao)
+
+        nome = (
+            f"Ata_Sessao_da_Adjudicacao_"
+            f"Chamada_Publica_{pregao.numero}_{pregao.ano}"
+        )
+
+        return resposta_download_pdf(documento, nome)
+    except (FileNotFoundError, ValueError) as erro:
+        messages.error(request, str(erro))
+        return redirect(
+            f"{reverse('documentos:resultado_chamada_publica')}"
+            f"?pregao={pregao.id}"
+        )
+
+
 def gerar_resultado_chamada_publica_word(request, pregao_id):
     pregao = get_object_or_404(Pregao, id=pregao_id, tipo_certame=Pregao.TIPO_CHAMADA_PUBLICA)
 
@@ -11873,6 +12395,42 @@ def gerar_certidao_regularidade_chamada_publica_pdf(request, pregao_id):
 # ------------------------------------------------------------
 
 
+def _chamada_lista_fornecedores_despacho_homologacao(fornecedores):
+    """
+    Retorna a relação dos fornecedores adjudicados para o novo modelo do
+    Despacho de Homologação, com CPF/CNPJ, valor total em moeda e por extenso.
+    """
+    linhas = []
+
+    for indice, item in enumerate(fornecedores):
+        fornecedor = item["fornecedor"]
+        valor_total = item["valor_total"] or Decimal("0.00")
+
+        if indice < 26:
+            rotulo = chr(ord("a") + indice)
+        else:
+            rotulo = str(indice + 1)
+
+        documento = _fornecedor_cpf_cnpj_chamada(fornecedor)
+
+        linhas.append(
+            f"{rotulo}) {fornecedor.razao_social or ''}, "
+            f"CNPJ/CPF: {documento or '-'}, "
+            f"Valor Total: {formatar_moeda_br(valor_total)} "
+            f"({valor_por_extenso(valor_total)});"
+        )
+
+    if not linhas:
+        raise ValueError(
+            "Não existem fornecedores adjudicados registrados nesta Chamada Pública."
+        )
+
+    # O último fornecedor encerra com ponto, conforme o novo modelo.
+    linhas[-1] = linhas[-1].rstrip(";") + "."
+
+    return "\n".join(linhas)
+
+
 def montar_despacho_homologacao_chamada_publica_word(pregao):
     caminho_modelo = _chamada_caminho_modelo(
         "modelo_despacho_homologacao_chamada_publica.docx"
@@ -11893,6 +12451,8 @@ def montar_despacho_homologacao_chamada_publica_word(pregao):
             "de gerar o Despacho de Homologação."
         )
 
+    dados = _chamada_dados_homologacao(pregao)
+
     municipios = list(pregao.municipios.all().order_by("nome"))
     texto_municipios = _chamada_texto_municipios(pregao)
 
@@ -11900,6 +12460,13 @@ def montar_despacho_homologacao_chamada_publica_word(pregao):
         f"ao município de {texto_municipios}"
         if len(municipios) == 1
         else f"aos municípios de {texto_municipios}"
+    )
+
+    texto_fornecedores = (
+        "e os fornecedores adjudicados abaixo relacionados:\n"
+        + _chamada_lista_fornecedores_despacho_homologacao(
+            dados["fornecedores"]
+        )
     )
 
     documento = Document(caminho_modelo)
@@ -11911,14 +12478,29 @@ def montar_despacho_homologacao_chamada_publica_word(pregao):
         "ao município de [Municípios da Chamada]/MT": trecho_atendimento,
         "[Municípios da Chamada]/MT": texto_municipios,
         "[Municípios da Chamada]": texto_municipios,
+        (
+            "e Fornecedor: [NOME DO FORNECEDOR], "
+            "CNPJ/CPF: [CNPJ/CPF DO FORNECEDOR], "
+            "Valor Total: R$[VALOR TORAL DO FORNECEDOR] "
+            "([Valor Por Extenso])."
+        ): texto_fornecedores,
+        "[NOME DO FORNECEDOR]": "",
+        "[CNPJ/CPF DO FORNECEDOR]": "",
+        "[VALOR TORAL DO FORNECEDOR]": "",
+        "[Valor Por Extenso]": "",
+        "[Data do Certame por extenso]": (
+            data_por_extenso(pregao.data_pregao)
+            if pregao.data_pregao
+            else ""
+        ),
         "[Nome do Ordenador de Despesas]": nome_ordenador,
         "[CPF DO ORDENADOR DE DESPESAS]": cpf_ordenador,
     }
 
-    _chamada_substituir_documento_preservando_runs(documento, substituicoes)
-
-    # O número do Parecer Jurídico 2543/2026 permanece exatamente como está
-    # no modelo oficial, conforme solicitado.
+    _chamada_substituir_documento_preservando_runs(
+        documento,
+        substituicoes,
+    )
     _chamada_normalizar_cor_preta(documento)
     _chamada_validar_modelo_sem_campos(
         documento,

@@ -84,6 +84,30 @@
                     </td>
                 </tr>
                 <tr>
+                    <td>
+                        <strong>Ata da Sessão - Fornecedores Participantes</strong><br>
+                        <small>Relação dos fornecedores participantes e seus representantes</small>
+                    </td>
+                    <td>
+                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_ata_fornecedores_participantes_chamada_word' pregao.id %}">Word</a>
+                    </td>
+                    <td>
+                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_ata_fornecedores_participantes_chamada_pdf' pregao.id %}">PDF</a>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <strong>Ata da Sessão - da Adjudicação</strong><br>
+                        <small>Produtos adjudicados por fornecedor e valor total adjudicado</small>
+                    </td>
+                    <td>
+                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_ata_adjudicacao_chamada_word' pregao.id %}">Word</a>
+                    </td>
+                    <td>
+                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_ata_adjudicacao_chamada_pdf' pregao.id %}">PDF</a>
+                    </td>
+                </tr>
+                <tr>
                     <td><strong>Certidão de Regularidade da Chamada Pública</strong></td>
                     <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_certidao_regularidade_chamada_publica_word' pregao.id %}">Word</a></td>
                     <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_certidao_regularidade_chamada_publica_pdf' pregao.id %}">PDF</a></td>

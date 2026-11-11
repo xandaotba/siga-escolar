@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from datetime import date
 import base64
 import binascii
 import hashlib
@@ -1307,6 +1308,24 @@ def media_precos(request):
         erros = []
         atualizados = 0
 
+        # Data da pesquisa/orçamento estimado do certame.
+        data_pesquisa_texto = request.POST.get(
+            "data_pesquisa_precos",
+            "",
+        ).strip()
+
+        data_pesquisa_precos = None
+
+        if not data_pesquisa_texto:
+            erros.append("Informe a data da pesquisa de preços do certame.")
+        else:
+            try:
+                data_pesquisa_precos = date.fromisoformat(
+                    data_pesquisa_texto
+                )
+            except ValueError:
+                erros.append("A data da pesquisa de preços é inválida.")
+
         # Percentual único do certame
         percentual_texto = request.POST.get("percentual_alerta_media", "").strip()
 
@@ -1326,6 +1345,12 @@ def media_precos(request):
                     erros.append("O percentual de alerta do certame não pode ser maior que 100%.")
         else:
             percentual_alerta = Decimal("50")
+
+        if erros:
+            for erro in erros:
+                messages.error(request, erro)
+
+            return redirect(f"{request.path}?pregao={pregao.id}")
 
         # Médias continuam sendo individuais por item
         for item_pregao in itens_pregao:
@@ -1360,11 +1385,20 @@ def media_precos(request):
             return redirect(f"{request.path}?pregao={pregao.id}")
 
         pregao.percentual_alerta_media = percentual_alerta
-        pregao.save(update_fields=["percentual_alerta_media", "atualizado_em"])
+        pregao.data_pesquisa_precos = data_pesquisa_precos
+        pregao.save(
+            update_fields=[
+                "percentual_alerta_media",
+                "data_pesquisa_precos",
+                "atualizado_em",
+            ]
+        )
 
         messages.success(
             request,
             f"Médias de preços salvas com sucesso. Itens atualizados: {atualizados}. "
+            f"Data da pesquisa de preços: "
+            f"{data_pesquisa_precos.strftime('%d/%m/%Y')}. "
             f"Percentual de alerta do certame: {percentual_alerta:.2f}%.",
         )
 

@@ -3,7 +3,7 @@
 
 {% block title %}Média de Preços | Sistema de Pregões{% endblock %}
 {% block page_title %}Média de Preços{% endblock %}
-{% block page_subtitle %}Cadastre a média de referência dos itens e o percentual de alerta do certame{% endblock %}
+{% block page_subtitle %}Cadastre a média de referência dos itens, a data da pesquisa de preços e o percentual de alerta do certame{% endblock %}
 
 {% block content %}
 
@@ -67,17 +67,40 @@
             {% csrf_token %}
             <input type="hidden" name="pregao" value="{{ pregao.id }}">
 
-            <div class="form-group" style="max-width:360px; margin-bottom:18px;">
-                <label><strong>Percentual de Alerta do Certame (%)</strong></label>
-                <input
-                    type="text"
-                    name="percentual_alerta_media"
-                    value="{{ pregao.percentual_alerta_media|default:'50'|percentual_br }}"
-                    placeholder="50,00"
-                    required
-                >
-                <div style="font-size:12px; color:#64748b; margin-top:4px;">
-                    Este percentual será aplicado a todos os itens do certame.
+            <div
+                style="
+                    display:grid;
+                    grid-template-columns:repeat(auto-fit, minmax(260px, 360px));
+                    gap:16px;
+                    align-items:start;
+                    margin-bottom:18px;
+                "
+            >
+                <div class="form-group" style="margin-bottom:0;">
+                    <label><strong>Percentual de Alerta do Certame (%)</strong></label>
+                    <input
+                        type="text"
+                        name="percentual_alerta_media"
+                        value="{{ pregao.percentual_alerta_media|default:'50'|percentual_br }}"
+                        placeholder="50,00"
+                        required
+                    >
+                    <div style="font-size:12px; color:#64748b; margin-top:4px;">
+                        Este percentual será aplicado a todos os itens do certame.
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom:0;">
+                    <label><strong>Data da Pesquisa de Preços</strong></label>
+                    <input
+                        type="date"
+                        name="data_pesquisa_precos"
+                        value="{% if pregao.data_pesquisa_precos %}{{ pregao.data_pesquisa_precos|date:'Y-m-d' }}{% endif %}"
+                        required
+                    >
+                    <div style="font-size:12px; color:#64748b; margin-top:4px;">
+                        Data da pesquisa/orçamento estimado usada como referência nos contratos.
+                    </div>
                 </div>
             </div>
 
