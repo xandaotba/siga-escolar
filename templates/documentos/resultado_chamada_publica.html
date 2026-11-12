@@ -3,9 +3,153 @@
 
 {% block title %}Resultado da Chamada Pública | Sistema de Certames{% endblock %}
 {% block page_title %}Resultado da Chamada Pública{% endblock %}
-{% block page_subtitle %}Visualize os fornecedores adjudicados por item na Chamada Pública{% endblock %}
+{% block page_subtitle %}Consulte o resultado, documentos, cadastro reserva e novas adjudicações da Chamada Pública{% endblock %}
 
 {% block content %}
+
+<style>
+    .menu-chamada {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 18px;
+        padding: 8px;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+    }
+
+    .menu-chamada a {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 38px;
+        padding: 8px 16px;
+        border-radius: 9px;
+        text-decoration: none;
+        font-weight: 800;
+        color: #334155;
+        border: 1px solid transparent;
+    }
+
+    .menu-chamada a:hover {
+        background: #eef2ff;
+    }
+
+    .menu-chamada a.ativo {
+        background: #1d4ed8;
+        color: #ffffff;
+        border-color: #1d4ed8;
+    }
+
+    .stack-cell > div {
+        padding: 3px 0;
+        min-height: 24px;
+        border-bottom: 1px dashed #e2e8f0;
+    }
+
+    .stack-cell > div:last-child {
+        border-bottom: 0;
+    }
+
+    .resultado-resumo {
+        margin-bottom: 14px;
+        color: #475569;
+    }
+
+    .cadastro-reserva-aviso {
+        margin: 10px 0 16px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        color: #9a3412;
+    }
+
+    .btn-disabled {
+        opacity: .55;
+        cursor: not-allowed;
+    }
+
+    .reserva-item-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        margin-bottom: 14px;
+        overflow: hidden;
+        background: #ffffff;
+    }
+
+    .reserva-item-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .reserva-item-titulo {
+        min-width: 0;
+    }
+
+    .reserva-item-titulo strong {
+        display: block;
+    }
+
+    .reserva-item-meta {
+        margin-top: 2px;
+        font-size: 12px;
+        color: #64748b;
+    }
+
+    .reserva-edicao-tabela {
+        width: 100%;
+        min-width: 980px;
+    }
+
+    .reserva-edicao-tabela th,
+    .reserva-edicao-tabela td {
+        padding: 6px 7px;
+        vertical-align: middle;
+    }
+
+    .reserva-edicao-tabela select,
+    .reserva-edicao-tabela input {
+        width: 100%;
+        min-height: 32px;
+        padding: 4px 6px;
+        font-size: 12px;
+    }
+
+    .reserva-col-fornecedor { min-width: 270px; }
+    .reserva-col-documento { min-width: 130px; }
+    .reserva-col-marca { min-width: 150px; }
+    .reserva-col-quantidade { min-width: 120px; }
+    .reserva-col-classificacao { width: 105px; min-width: 105px; }
+    .reserva-col-status { width: 110px; min-width: 110px; }
+    .reserva-col-acao { width: 90px; min-width: 90px; }
+
+    .reserva-vazio {
+        padding: 14px;
+        color: #64748b;
+        text-align: center;
+    }
+
+    .reserva-acoes-finais {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 12px;
+        margin-top: 16px;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, .96);
+    }
+</style>
 
 {% if messages %}
     {% for message in messages %}
@@ -27,33 +171,216 @@
                 <option value="">Selecione a Chamada Pública</option>
                 {% for chamada in chamadas_publicas %}
                     <option value="{{ chamada.id }}" {% if pregao and pregao.id == chamada.id %}selected{% endif %}>
-                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} — {% for municipio in chamada.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %} — {{ chamada.get_status_display }}
+                        Chamada Pública {{ chamada.numero }}/{{ chamada.ano }} —
+                        {% for municipio in chamada.municipios.all %}
+                            {{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}
+                        {% empty %}
+                            Sem município vinculado
+                        {% endfor %}
+                        — {{ chamada.get_status_display }}
                     </option>
                 {% endfor %}
             </select>
         </div>
 
+        <input type="hidden" name="aba" value="resultado">
+
         <div class="actions">
-            <button class="btn btn-primary" type="submit">Carregar Resultado</button>
-
-            {% if pregao %}
-                {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" or request.user.perfil_acesso.perfil == "pregoeiro" %}
-                <a class="btn btn-success" href="{% url 'documentos:projetos_venda' %}?pregao={{ pregao.id }}">
-                    Editar Adjudicação
-                </a>
-                {% endif %}
-
-            {% endif %}
+            <button class="btn btn-primary" type="submit">Carregar</button>
         </div>
     </form>
 </div>
 
 {% if pregao %}
+<div class="menu-chamada">
+    <a
+        href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=resultado"
+        class="{% if aba == 'resultado' %}ativo{% endif %}"
+    >
+        Resultado
+    </a>
+
+    <a
+        href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=documentos"
+        class="{% if aba == 'documentos' %}ativo{% endif %}"
+    >
+        Documentos
+    </a>
+
+    <a
+        href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=cadastro_reserva"
+        class="{% if aba == 'cadastro_reserva' %}ativo{% endif %}"
+    >
+        Cadastro Reserva
+    </a>
+
+    {% if request.user.perfil_acesso.perfil != "consulta_escola" %}
+    <a
+        href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=nova_adjudicacao"
+        class="{% if aba == 'nova_adjudicacao' %}ativo{% endif %}"
+    >
+        Nova Adjudicação
+    </a>
+    {% endif %}
+</div>
+
+{% if aba == "resultado" %}
+<div class="card">
+    <h2>Adjudicações Registradas</h2>
+
+    <div class="resultado-resumo">
+        <strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }} &nbsp;|&nbsp;
+        <strong>Status:</strong> {{ pregao.get_status_display }}
+    </div>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Chamada Pública</th>
+                    <th>Fornecedor</th>
+                    <th>Tipo</th>
+                    <th>Itens Adjudicados</th>
+                    <th>Valor Total</th>
+                    <th>Limite do Fornecedor</th>
+                    <th>Status</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for projeto in projetos %}
+                <tr>
+                    <td>{{ projeto.pregao.numero }}/{{ projeto.pregao.ano }}</td>
+                    <td>{{ projeto.fornecedor.razao_social }}</td>
+                    <td>{{ projeto.fornecedor.get_tipo_fornecedor_chamada_display }}</td>
+                    <td>{{ projeto.itens.count }}</td>
+                    <td>{{ projeto.valor_total|moeda_br }}</td>
+                    <td>{{ projeto.fornecedor.get_limite_anual_chamada_publica_display }}</td>
+                    <td>
+                        {% if projeto.status == "registrado" %}
+                            <span class="badge badge-success">Adjudicado</span>
+                        {% else %}
+                            <span class="badge badge-danger">Cancelado</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="actions">
+                            <a
+                                class="btn btn-secondary"
+                                href="{% url 'documentos:visualizar_projeto_venda' projeto.id %}"
+                            >
+                                Visualizar
+                            </a>
+
+                            {% if request.user.perfil_acesso.perfil != "consulta_escola" and projeto.status == "registrado" %}
+                                <a
+                                    class="btn btn-primary"
+                                    href="{% url 'documentos:editar_projeto_venda' projeto.id %}"
+                                >
+                                    Editar
+                                </a>
+
+                                <form
+                                    method="post"
+                                    action="{% url 'documentos:cancelar_projeto_venda' projeto.id %}"
+                                    style="display:inline;"
+                                >
+                                    {% csrf_token %}
+                                    <button
+                                        class="btn btn-danger"
+                                        type="submit"
+                                        onclick="return confirm('Deseja cancelar esta adjudicação?');"
+                                    >
+                                        Cancelar
+                                    </button>
+                                </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8">Nenhuma adjudicação registrada para esta Chamada Pública.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Resultado por Item</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ordem</th>
+                    <th>Item</th>
+                    <th>Unidade de Medida</th>
+                    <th>Fornecedores Adjudicados</th>
+                    <th>Quantidade</th>
+                    <th>Preço de Aquisição</th>
+                    <th>Valor Total</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for linha in resultado_por_item %}
+                <tr>
+                    <td>{{ linha.item_pregao.ordem }}</td>
+                    <td><strong>{{ linha.item_pregao.item.nome_item }}</strong></td>
+                    <td>{{ linha.item_pregao.item.get_unidade_medida_display }}</td>
+
+                    <td class="stack-cell">
+                        {% for adjudicacao in linha.adjudicacoes %}
+                            <div>{{ adjudicacao.fornecedor.razao_social }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for adjudicacao in linha.adjudicacoes %}
+                            <div>{{ adjudicacao.quantidade|quantidade_br }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for adjudicacao in linha.adjudicacoes %}
+                            <div>{{ adjudicacao.preco_aquisicao|moeda_br }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for adjudicacao in linha.adjudicacoes %}
+                            <div>{{ adjudicacao.valor_total|moeda_br }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7">Nenhum item encontrado para esta Chamada Pública.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% elif aba == "documentos" %}
 {% if request.user.perfil_acesso.perfil != "consulta_escola" %}
 <div class="card">
     <h2>Documentos da Chamada Pública</h2>
     <p style="margin-top:-4px; color:#64748b;">
-        Baixe os documentos do resultado em Word ou PDF. O Extrato de Contrato é único por Chamada Pública e reúne as escolas e fornecedores de todos os municípios vinculados ao certame.
+        Baixe os documentos do resultado em Word ou PDF.
     </p>
 
     <div class="table-wrapper">
@@ -76,36 +403,24 @@
                         <strong>Fornecedores Adjudicados e Cadastro Reserva</strong><br>
                         <small>Fornecedor, marca e quantidade por item</small>
                     </td>
-                    <td>
-                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_fornecedores_adjudicados_reserva_chamada_word' pregao.id %}">Word</a>
-                    </td>
-                    <td>
-                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_fornecedores_adjudicados_reserva_chamada_pdf' pregao.id %}">PDF</a>
-                    </td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_fornecedores_adjudicados_reserva_chamada_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_fornecedores_adjudicados_reserva_chamada_pdf' pregao.id %}">PDF</a></td>
                 </tr>
                 <tr>
                     <td>
                         <strong>Ata da Sessão - Fornecedores Participantes</strong><br>
                         <small>Relação dos fornecedores participantes e seus representantes</small>
                     </td>
-                    <td>
-                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_ata_fornecedores_participantes_chamada_word' pregao.id %}">Word</a>
-                    </td>
-                    <td>
-                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_ata_fornecedores_participantes_chamada_pdf' pregao.id %}">PDF</a>
-                    </td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_ata_fornecedores_participantes_chamada_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_ata_fornecedores_participantes_chamada_pdf' pregao.id %}">PDF</a></td>
                 </tr>
                 <tr>
                     <td>
                         <strong>Ata da Sessão - da Adjudicação</strong><br>
                         <small>Produtos adjudicados por fornecedor e valor total adjudicado</small>
                     </td>
-                    <td>
-                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_ata_adjudicacao_chamada_word' pregao.id %}">Word</a>
-                    </td>
-                    <td>
-                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_ata_adjudicacao_chamada_pdf' pregao.id %}">PDF</a>
-                    </td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_ata_adjudicacao_chamada_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_ata_adjudicacao_chamada_pdf' pregao.id %}">PDF</a></td>
                 </tr>
                 <tr>
                     <td><strong>Certidão de Regularidade da Chamada Pública</strong></td>
@@ -122,27 +437,52 @@
                     <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_homologacao_chamada_publica_word' pregao.id %}">Word</a></td>
                     <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_homologacao_chamada_publica_pdf' pregao.id %}">PDF</a></td>
                 </tr>
-
                 <tr>
                     <td>
                         <strong>Extrato de Contrato</strong><br>
                         <small>Documento consolidado de todos os municípios do certame</small>
                     </td>
-                    <td>
-                        <a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_word' pregao.id %}">Word</a>
-                    </td>
-                    <td>
-                        <a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_pdf' pregao.id %}">PDF</a>
-                    </td>
+                    <td><a class="btn btn-sm btn-primary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_word' pregao.id %}">Word</a></td>
+                    <td><a class="btn btn-sm btn-secondary" href="{% url 'documentos:gerar_extrato_contrato_chamada_publica_pdf' pregao.id %}">PDF</a></td>
                 </tr>
             </tbody>
         </table>
     </div>
 </div>
+{% else %}
+<div class="card">
+    <p>Seu perfil não possui permissão para gerar os documentos desta Chamada Pública.</p>
+</div>
 {% endif %}
 
+{% elif aba == "cadastro_reserva" %}
 <div class="card">
-    <h2>Resumo por Item</h2>
+    <div
+        style="
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            margin-bottom:14px;
+        "
+    >
+        <div>
+            <h2 style="margin-bottom:4px;">Fornecedores Reserva Cadastrados</h2>
+            <div style="color:#64748b;">
+                Relação dos fornecedores do Cadastro Reserva por item e ordem de classificação.
+            </div>
+        </div>
+
+        {% if request.user.perfil_acesso.perfil != "consulta_escola" %}
+        <a
+            class="btn btn-success"
+            href="{% url 'documentos:cadastrar_fornecedores_reserva_chamada_publica' pregao.id %}"
+        >
+            Cadastrar Fornecedor Reserva
+        </a>
+        {% endif %}
+    </div>
 
     <div class="table-wrapper">
         <table>
@@ -150,225 +490,110 @@
                 <tr>
                     <th>Ordem</th>
                     <th>Item</th>
-                    <th>Quantidade Total</th>
-                    <th>Quantidade Adjudicada</th>
-                    <th>Saldo</th>
+                    <th>Unidade de Medida</th>
                     <th>Fornecedor Reserva</th>
+                    <th>CPF/CNPJ</th>
                     <th>Quantidade Reserva</th>
-                    <th>Quantidade Utilizada</th>
-                    <th>Saldo Reserva</th>
-                    {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" or request.user.perfil_acesso.perfil == "pregoeiro" %}
-                    <th>Ações Reserva</th>
-                    {% endif %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for resumo in resumo_itens %}
-                    <tr>
-                        <td>{{ resumo.item_pregao.ordem }}</td>
-                        <td>{{ resumo.item_pregao.item.nome_item }}</td>
-                        <td>{{ resumo.item_pregao.quantidade_total|quantidade_br }}</td>
-                        <td>{{ resumo.adjudicado|quantidade_br }}</td>
-                        <td>{{ resumo.saldo|quantidade_br }}</td>
-                        <td>
-                            {% if resumo.cadastro_reserva %}
-                                {{ resumo.cadastro_reserva.fornecedor.razao_social }}
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if resumo.cadastro_reserva %}
-                                {{ resumo.cadastro_reserva.quantidade_reserva|quantidade_br }}
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if resumo.cadastro_reserva %}
-                                {{ resumo.quantidade_reserva_utilizada|quantidade_br }}
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if resumo.cadastro_reserva %}
-                                <strong>{{ resumo.saldo_reserva|quantidade_br }}</strong>
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                        {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" or request.user.perfil_acesso.perfil == "pregoeiro" %}
-                        <td style="white-space:nowrap;">
-                            {% if resumo.cadastro_reserva %}
-                                <a
-                                    class="btn btn-sm btn-primary"
-                                    href="{% url 'documentos:editar_cadastro_reserva_chamada_publica' resumo.item_pregao.id %}"
-                                >
-                                    Editar
-                                </a>
-                                <form
-                                    method="post"
-                                    action="{% url 'documentos:cancelar_cadastro_reserva_chamada_publica' resumo.item_pregao.id %}"
-                                    style="display:inline;"
-                                    onsubmit="return confirm('Cancelar o cadastro reserva deste item? O histórico será preservado.');"
-                                >
-                                    {% csrf_token %}
-                                    <button class="btn btn-sm btn-danger" type="submit">
-                                        Cancelar
-                                    </button>
-                                </form>
-                            {% else %}
-                                <a
-                                    class="btn btn-sm btn-success"
-                                    href="{% url 'documentos:editar_cadastro_reserva_chamada_publica' resumo.item_pregao.id %}"
-                                >
-                                    Cadastrar
-                                </a>
-                            {% endif %}
-                        </td>
-                        {% endif %}
-                    </tr>
-                {% empty %}
-                    <tr>
-                        <td colspan="11">Nenhum item encontrado.</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-
-
-<div class="card">
-    <h2>Itens Liberados por Distrato para Cadastro Reserva</h2>
-    <p style="color:#64748b; margin-top:-4px;">
-        As quantidades abaixo foram liberadas por distratos de contratos de fornecedores
-        principais. Quando houver Cadastro Reserva ativo, você pode adjudicar a quantidade
-        liberada ao fornecedor reserva. Somente depois dessa adjudicação o item aparecerá
-        para novo contrato.
-    </p>
-
-    <div class="table-wrapper">
-        <table>
-            <thead>
-                <tr>
-                    <th>Item</th>
-                    <th>Escola</th>
-                    <th>Fornecedor Original</th>
-                    <th>Qtd. Distratada Disponível</th>
-                    <th>Fornecedor Reserva</th>
-                    <th>Saldo Reserva</th>
-                    <th>Qtd. Máxima para Adjudicar</th>
-                    {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" or request.user.perfil_acesso.perfil == "pregoeiro" %}
-                    <th>Ação</th>
-                    {% endif %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for liberado in itens_liberados_reserva %}
-                <tr>
-                    <td><strong>{{ liberado.contrato_item.item.nome_item }}</strong></td>
-                    <td>{{ liberado.contrato.escola.nome_escola }}</td>
-                    <td>{{ liberado.contrato.fornecedor.razao_social }}</td>
-                    <td>{{ liberado.saldo_liberado|quantidade_br }}</td>
-                    <td>
-                        {% if liberado.cadastro_reserva %}
-                            {{ liberado.cadastro_reserva.fornecedor.razao_social }}
-                        {% else %}
-                            <span style="color:#92400e; font-weight:700;">Sem cadastro reserva</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if liberado.cadastro_reserva %}
-                            {{ liberado.saldo_reserva|quantidade_br }}
-                        {% else %}
-                            -
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if liberado.cadastro_reserva %}
-                            <strong>{{ liberado.quantidade_disponivel|quantidade_br }}</strong>
-                        {% else %}
-                            -
-                        {% endif %}
-                    </td>
-                    {% if request.user.is_superuser or request.user.perfil_acesso.perfil == "administrador" or request.user.perfil_acesso.perfil == "pregoeiro" %}
-                    <td>
-                        {% if liberado.cadastro_reserva and liberado.quantidade_disponivel > 0 %}
-                            <a
-                                class="btn btn-sm btn-success"
-                                href="{% url 'documentos:adjudicar_cadastro_reserva_chamada_publica' liberado.distrato_item.id %}"
-                            >
-                                Adjudicar ao Reserva
-                            </a>
-                        {% elif not liberado.cadastro_reserva %}
-                            {% if liberado.pregao_item %}
-                                <a
-                                    class="btn btn-sm btn-primary"
-                                    href="{% url 'documentos:editar_cadastro_reserva_chamada_publica' liberado.pregao_item.id %}"
-                                >
-                                    Cadastrar Reserva
-                                </a>
-                            {% else %}
-                                <span style="color:#64748b;">Item sem vínculo com o certame</span>
-                            {% endif %}
-                        {% else %}
-                            <span class="badge badge-warning">Sem saldo de reserva</span>
-                        {% endif %}
-                    </td>
-                    {% endif %}
-                </tr>
-                {% empty %}
-                <tr>
-                    <td colspan="8">
-                        Nenhuma quantidade distratada aguardando adjudicação ao Cadastro Reserva.
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-
-<div class="card">
-    <h2>Adjudicações do Cadastro Reserva</h2>
-    <p style="color:#64748b; margin-top:-4px;">
-        Histórico das quantidades que já foram transferidas formalmente dos fornecedores
-        originais para fornecedores do Cadastro Reserva.
-    </p>
-
-    <div class="table-wrapper">
-        <table>
-            <thead>
-                <tr>
-                    <th>Item</th>
-                    <th>Escola</th>
-                    <th>Fornecedor Original</th>
-                    <th>Fornecedor Reserva</th>
-                    <th>Quantidade</th>
-                    <th>Marca / Descrição</th>
-                    <th>Valor Unitário</th>
-                    <th>Valor Total</th>
+                    <th>Ordem de Classificação</th>
                     <th>Status</th>
+                    <th>Ação</th>
                 </tr>
             </thead>
+
             <tbody>
-                {% for adjudicacao in adjudicacoes_reserva %}
+                {% for linha in cadastro_reserva_itens %}
                 <tr>
-                    <td>{{ adjudicacao.item.nome_item }}</td>
-                    <td>{{ adjudicacao.escola.nome_escola }}</td>
-                    <td>{{ adjudicacao.fornecedor_original.razao_social }}</td>
-                    <td><strong>{{ adjudicacao.fornecedor_reserva.razao_social }}</strong></td>
-                    <td>{{ adjudicacao.quantidade_adjudicada|quantidade_br }}</td>
-                    <td>{{ adjudicacao.marca|default:"-" }}</td>
-                    <td>{{ adjudicacao.valor_unitario|moeda_br }}</td>
-                    <td>{{ adjudicacao.valor_total|moeda_br }}</td>
-                    <td>{{ adjudicacao.get_status_display }}</td>
+                    <td>{{ linha.item_pregao.ordem }}</td>
+                    <td>
+                        <strong>{{ linha.item_pregao.item.nome_item }}</strong>
+                    </td>
+                    <td>
+                        {{ linha.item_pregao.item.get_unidade_medida_display }}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for reserva in linha.reservas %}
+                            <div>{{ reserva.fornecedor.razao_social }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for reserva in linha.reservas %}
+                            <div>{{ reserva.documento|default:"-" }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for reserva in linha.reservas %}
+                            <div>{{ reserva.quantidade|quantidade_br }}</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for reserva in linha.reservas %}
+                            <div>{{ reserva.ordem_classificacao }}º</div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for reserva in linha.reservas %}
+                            <div>
+                                <span class="badge badge-{{ reserva.status_classe }}">
+                                    {{ reserva.status }}
+                                </span>
+                            </div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
+
+                    <td class="stack-cell">
+                        {% for reserva in linha.reservas %}
+                            <div style="white-space:nowrap;">
+                                {% if reserva.pode_acionar %}
+                                    <a
+                                        class="btn btn-sm btn-success"
+                                        href="{% url 'documentos:adjudicar_cadastro_reserva_classificado_chamada_publica' reserva.id reserva.distrato_item_id %}"
+                                    >
+                                        Convocar/Adjudicar
+                                    </a>
+
+                                    <form
+                                        method="post"
+                                        action="{% url 'documentos:desistir_cadastro_reserva_chamada_publica' reserva.id %}"
+                                        style="display:inline;"
+                                        onsubmit="return confirm('Confirmar a desistência deste fornecedor reserva? O próximo classificado será liberado automaticamente.');"
+                                    >
+                                        {% csrf_token %}
+                                        <button
+                                            class="btn btn-sm btn-danger"
+                                            type="submit"
+                                        >
+                                            Desistente
+                                        </button>
+                                    </form>
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </div>
+                        {% empty %}
+                            <div>-</div>
+                        {% endfor %}
+                    </td>
                 </tr>
                 {% empty %}
                 <tr>
-                    <td colspan="9">Nenhuma adjudicação do Cadastro Reserva registrada.</td>
+                    <td colspan="9">
+                        Nenhum item encontrado para esta Chamada Pública.
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -376,46 +601,16 @@
     </div>
 </div>
 
-<div class="card">
-    <h2>Fornecedores Adjudicados</h2>
+{% elif aba == "nova_adjudicacao" %}
+    {% if request.user.perfil_acesso.perfil != "consulta_escola" %}
+        {% include "documentos/_form_adjudicacao_chamada_publica.html" %}
+    {% else %}
+        <div class="card">
+            <p>Seu perfil permite apenas consultar informações.</p>
+        </div>
+    {% endif %}
+{% endif %}
 
-    <div class="table-wrapper">
-        <table>
-            <thead>
-                <tr>
-                    <th>Item</th>
-                    <th>Fornecedor</th>
-                    <th>Tipo</th>
-                    <th>Marca</th>
-                    <th>Quantidade</th>
-                    <th>Valor Unitário</th>
-                    <th>Valor Total</th>
-                </tr>
-            </thead>
-
-            <tbody>
-                {% for resultado in resultados %}
-                    <tr>
-                        <td>
-                            <strong>{{ resultado.item.nome_item }}</strong><br>
-                            <small>Ordem {{ resultado.pregao_item.ordem }}</small>
-                        </td>
-                        <td>{{ resultado.fornecedor.razao_social }}</td>
-                        <td>{{ resultado.fornecedor.get_tipo_fornecedor_chamada_display }}</td>
-                        <td>{{ resultado.projeto_item.marca|default:"-" }}</td>
-                        <td>{{ resultado.quantidade_adjudicada|quantidade_br }}</td>
-                        <td>{{ resultado.valor_unitario|moeda_br }}</td>
-                        <td>{{ resultado.valor_total|moeda_br }}</td>
-                    </tr>
-                {% empty %}
-                    <tr>
-                        <td colspan="7">Nenhum resultado adjudicado para esta Chamada Pública.</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
 {% endif %}
 
 {% endblock %}

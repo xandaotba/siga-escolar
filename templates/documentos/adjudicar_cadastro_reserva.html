@@ -28,7 +28,18 @@
             <p><strong>Contrato de Origem:</strong> {{ contrato.numero_contrato }}</p>
         </div>
         <div>
-            <p><strong>Fornecedor Reserva:</strong> {{ cadastro.fornecedor.razao_social }}</p>
+            <p>
+                <strong>Fornecedor Reserva:</strong>
+                {{ cadastro.fornecedor.razao_social }}
+            </p>
+            <p>
+                <strong>Classificação:</strong>
+                {{ cadastro.ordem_classificacao }}º
+            </p>
+            <p>
+                <strong>Status Atual:</strong>
+                {{ cadastro.get_status_display }}
+            </p>
             <p><strong>Quantidade Distratada:</strong> {{ distrato_item.quantidade_distratada|quantidade_br }}</p>
             <p><strong>Saldo deste Distrato:</strong> {{ saldo_distrato|quantidade_br }}</p>
             <p><strong>Saldo do Cadastro Reserva:</strong> {{ saldo_reserva|quantidade_br }}</p>
@@ -82,7 +93,7 @@
 
             <a
                 class="btn btn-secondary"
-                href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}"
+                href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=cadastro_reserva"
             >
                 Voltar
             </a>

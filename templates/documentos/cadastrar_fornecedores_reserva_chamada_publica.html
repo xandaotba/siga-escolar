@@ -1,0 +1,524 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Cadastrar Fornecedor Reserva | Sistema de Certames{% endblock %}
+{% block page_title %}Cadastrar Fornecedor Reserva{% endblock %}
+{% block page_subtitle %}Cadastre e organize os fornecedores reserva por produto e ordem de classificação{% endblock %}
+
+{% block content %}
+
+<style>
+    .reserva-resumo {
+        display:grid;
+        gap:6px;
+        padding:14px;
+        margin-bottom:16px;
+        border:1px solid #e2e8f0;
+        border-radius:12px;
+        background:#f8fafc;
+    }
+
+    .reserva-item-card {
+        border:1px solid #e2e8f0;
+        border-radius:12px;
+        margin-bottom:14px;
+        overflow:hidden;
+        background:#fff;
+    }
+
+    .reserva-item-header {
+        display:flex;
+        flex-wrap:wrap;
+        align-items:center;
+        justify-content:space-between;
+        gap:10px;
+        padding:10px 12px;
+        background:#f8fafc;
+        border-bottom:1px solid #e2e8f0;
+    }
+
+    .reserva-item-titulo {
+        min-width:0;
+    }
+
+    .reserva-item-titulo strong {
+        display:block;
+    }
+
+    .reserva-item-meta {
+        margin-top:2px;
+        font-size:12px;
+        color:#64748b;
+    }
+
+    .reserva-edicao-tabela {
+        width:100%;
+        min-width:980px;
+    }
+
+    .reserva-edicao-tabela th,
+    .reserva-edicao-tabela td {
+        padding:6px 7px;
+        vertical-align:middle;
+    }
+
+    .reserva-edicao-tabela select,
+    .reserva-edicao-tabela input {
+        width:100%;
+        min-height:32px;
+        padding:4px 6px;
+        font-size:12px;
+    }
+
+    .reserva-col-fornecedor { min-width:270px; }
+    .reserva-col-documento { min-width:130px; }
+    .reserva-col-marca { min-width:150px; }
+    .reserva-col-quantidade { min-width:120px; }
+    .reserva-col-classificacao { width:105px; min-width:105px; }
+    .reserva-col-status { width:110px; min-width:110px; }
+    .reserva-col-acao { width:90px; min-width:90px; }
+
+    .reserva-vazio {
+        padding:14px;
+        color:#64748b;
+        text-align:center;
+    }
+
+    .reserva-acoes-finais {
+        display:flex;
+        justify-content:flex-end;
+        gap:8px;
+        flex-wrap:wrap;
+        padding:12px;
+        margin-top:16px;
+        border:1px solid #e2e8f0;
+        border-radius:12px;
+        background:#fff;
+    }
+</style>
+
+{% if messages %}
+    {% for message in messages %}
+        {% if message.tags == "success" %}
+            <div class="alert alert-success">{{ message }}</div>
+        {% else %}
+            <div class="alert alert-error">{{ message }}</div>
+        {% endif %}
+    {% endfor %}
+{% endif %}
+
+<div class="card">
+    <div class="reserva-resumo">
+        <div>
+            <strong>Chamada Pública:</strong>
+            {{ pregao.numero }}/{{ pregao.ano }}
+        </div>
+        <div>
+            <strong>Situação:</strong>
+            {{ pregao.get_status_display }}
+        </div>
+        <div style="font-size:12px; color:#64748b;">
+            Para cada produto, você pode cadastrar um ou mais fornecedores reserva.
+            A ordem de classificação define a sequência de convocação.
+        </div>
+    </div>
+
+    <form
+        method="post"
+        action="{% url 'documentos:salvar_cadastros_reserva_lote' pregao.id %}"
+        id="form-cadastro-reserva-lote"
+    >
+        {% csrf_token %}
+
+        <select id="fonte-fornecedores-reserva" style="display:none;">
+            <option value="">Selecione o fornecedor</option>
+            {% for fornecedor in fornecedores_reserva %}
+            <option
+                value="{{ fornecedor.id }}"
+                data-documento="{% if fornecedor.cnpj %}{{ fornecedor.cnpj }}{% elif fornecedor.cpf_fornecedor_individual %}{{ fornecedor.cpf_fornecedor_individual }}{% else %}-{% endif %}"
+            >
+                {{ fornecedor.razao_social }} — {{ fornecedor.get_tipo_fornecedor_chamada_display }}
+            </option>
+            {% endfor %}
+        </select>
+
+        {% for linha in cadastro_reserva_itens %}
+        <div
+            class="reserva-item-card"
+            data-reserva-item="{{ linha.item_pregao.id }}"
+            data-proxima-ordem="{{ linha.proxima_ordem }}"
+        >
+            <div class="reserva-item-header">
+                <div class="reserva-item-titulo">
+                    <strong>
+                        {{ linha.item_pregao.ordem }} —
+                        {{ linha.item_pregao.item.nome_item }}
+                    </strong>
+
+                    <div class="reserva-item-meta">
+                        Unidade:
+                        {{ linha.item_pregao.item.get_unidade_medida_display }}
+                        · Quantidade do certame:
+                        {{ linha.item_pregao.quantidade_total|quantidade_br }}
+                    </div>
+                </div>
+
+                <button
+                    type="button"
+                    class="btn btn-sm btn-primary adicionar-reserva"
+                    data-item-id="{{ linha.item_pregao.id }}"
+                >
+                    + Adicionar fornecedor reserva
+                </button>
+            </div>
+
+            <div class="table-wrapper">
+                <table class="reserva-edicao-tabela">
+                    <thead>
+                        <tr>
+                            <th class="reserva-col-fornecedor">
+                                Fornecedor Reserva
+                            </th>
+                            <th class="reserva-col-documento">
+                                CPF/CNPJ
+                            </th>
+                            <th class="reserva-col-marca">
+                                Marca
+                            </th>
+                            <th class="reserva-col-quantidade">
+                                Quantidade Reserva
+                            </th>
+                            <th class="reserva-col-classificacao">
+                                Classificação
+                            </th>
+                            <th class="reserva-col-status">
+                                Status
+                            </th>
+                            <th class="reserva-col-acao">
+                                Ação
+                            </th>
+                        </tr>
+                    </thead>
+
+                    <tbody
+                        class="reservas-body"
+                        data-item-id="{{ linha.item_pregao.id }}"
+                    >
+                        {% for reserva in linha.reservas %}
+                        <tr class="reserva-row">
+                            <td>
+                                <input
+                                    type="hidden"
+                                    name="cadastro_id_{{ linha.item_pregao.id }}"
+                                    value="{{ reserva.id }}"
+                                >
+
+                                <select
+                                    name="fornecedor_reserva_{{ linha.item_pregao.id }}"
+                                    class="fornecedor-reserva-select"
+                                    required
+                                >
+                                    <option value="">
+                                        Selecione o fornecedor
+                                    </option>
+
+                                    {% for fornecedor in fornecedores_reserva %}
+                                    <option
+                                        value="{{ fornecedor.id }}"
+                                        data-documento="{% if fornecedor.cnpj %}{{ fornecedor.cnpj }}{% elif fornecedor.cpf_fornecedor_individual %}{{ fornecedor.cpf_fornecedor_individual }}{% else %}-{% endif %}"
+                                        {% if reserva.fornecedor.id == fornecedor.id %}selected{% endif %}
+                                    >
+                                        {{ fornecedor.razao_social }} —
+                                        {{ fornecedor.get_tipo_fornecedor_chamada_display }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+
+                            <td class="documento-fornecedor-reserva">
+                                {{ reserva.documento|default:"-" }}
+                            </td>
+
+                            <td>
+                                <input
+                                    type="text"
+                                    name="marca_reserva_{{ linha.item_pregao.id }}"
+                                    value="{{ reserva.marca }}"
+                                    placeholder="Marca ou descrição"
+                                >
+                            </td>
+
+                            <td>
+                                <input
+                                    type="text"
+                                    name="quantidade_reserva_{{ linha.item_pregao.id }}"
+                                    value="{{ reserva.quantidade|quantidade_br }}"
+                                    placeholder="0"
+                                    inputmode="decimal"
+                                    required
+                                >
+                            </td>
+
+                            <td>
+                                <input
+                                    type="number"
+                                    name="ordem_classificacao_{{ linha.item_pregao.id }}"
+                                    value="{{ reserva.ordem_classificacao }}"
+                                    min="1"
+                                    step="1"
+                                    required
+                                >
+                            </td>
+
+                            <td>
+                                <span class="badge badge-{{ reserva.status_classe }}">
+                                    {{ reserva.status }}
+                                </span>
+                            </td>
+
+                            <td>
+                                <span style="font-size:11px; color:#64748b;">
+                                    Cadastrado
+                                </span>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr class="reserva-vazio-row">
+                            <td colspan="7" class="reserva-vazio">
+                                Nenhum fornecedor reserva cadastrado para este item.
+                                Clique em
+                                <strong>+ Adicionar fornecedor reserva</strong>.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% empty %}
+        <div class="alert alert-info">
+            Nenhum item com quantitativo foi encontrado nesta Chamada Pública.
+        </div>
+        {% endfor %}
+
+        {% if cadastro_reserva_itens %}
+        <div class="reserva-acoes-finais">
+            <a
+                class="btn btn-secondary"
+                href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=cadastro_reserva"
+            >
+                Voltar
+            </a>
+
+            <button class="btn btn-success" type="submit">
+                Salvar Cadastros Reserva
+            </button>
+        </div>
+        {% endif %}
+    </form>
+</div>
+
+<script>
+(function () {
+    const form = document.getElementById('form-cadastro-reserva-lote');
+    const fonte = document.getElementById('fonte-fornecedores-reserva');
+
+    if (!form || !fonte) return;
+
+    function atualizarDocumento(select) {
+        const row = select.closest('.reserva-row');
+        if (!row) return;
+
+        const cell = row.querySelector('.documento-fornecedor-reserva');
+        const option = select.options[select.selectedIndex];
+
+        if (cell) {
+            cell.textContent = option
+                ? (option.dataset.documento || '-')
+                : '-';
+        }
+    }
+
+    function registrarSelect(select) {
+        if (!select || select.dataset.listenerReserva) return;
+
+        select.dataset.listenerReserva = '1';
+
+        select.addEventListener('change', function () {
+            atualizarDocumento(select);
+        });
+    }
+
+    document
+        .querySelectorAll('.fornecedor-reserva-select')
+        .forEach(registrarSelect);
+
+    document
+        .querySelectorAll('.adicionar-reserva')
+        .forEach(function (button) {
+            button.addEventListener('click', function () {
+                const itemId = button.dataset.itemId;
+                const card = button.closest('.reserva-item-card');
+                const tbody = card.querySelector('.reservas-body');
+
+                const vazio = tbody.querySelector('.reserva-vazio-row');
+                if (vazio) vazio.remove();
+
+                let proximaOrdem = Number(
+                    card.dataset.proximaOrdem || '1'
+                );
+
+                const ordensExistentes = Array.from(
+                    tbody.querySelectorAll(
+                        'input[name="ordem_classificacao_' + itemId + '"]'
+                    )
+                )
+                    .map(function (input) {
+                        return Number(input.value || '0');
+                    })
+                    .filter(function (valor) {
+                        return Number.isFinite(valor) && valor > 0;
+                    });
+
+                if (ordensExistentes.length) {
+                    proximaOrdem = Math.max(
+                        proximaOrdem,
+                        Math.max(...ordensExistentes) + 1
+                    );
+                }
+
+                const row = document.createElement('tr');
+                row.className = 'reserva-row reserva-row-nova';
+
+                row.innerHTML = `
+                    <td>
+                        <input
+                            type="hidden"
+                            name="cadastro_id_${itemId}"
+                            value=""
+                        >
+                        <select
+                            name="fornecedor_reserva_${itemId}"
+                            class="fornecedor-reserva-select"
+                            required
+                        ></select>
+                    </td>
+                    <td class="documento-fornecedor-reserva">-</td>
+                    <td>
+                        <input
+                            type="text"
+                            name="marca_reserva_${itemId}"
+                            value=""
+                            placeholder="Marca ou descrição"
+                        >
+                    </td>
+                    <td>
+                        <input
+                            type="text"
+                            name="quantidade_reserva_${itemId}"
+                            value=""
+                            placeholder="0"
+                            inputmode="decimal"
+                            required
+                        >
+                    </td>
+                    <td>
+                        <input
+                            type="number"
+                            name="ordem_classificacao_${itemId}"
+                            value="${proximaOrdem}"
+                            min="1"
+                            step="1"
+                            required
+                        >
+                    </td>
+                    <td>
+                        <span class="badge badge-warning">
+                            Aguardando
+                        </span>
+                    </td>
+                    <td>
+                        <button
+                            type="button"
+                            class="btn btn-sm btn-danger remover-reserva-nova"
+                        >
+                            Remover
+                        </button>
+                    </td>
+                `;
+
+                const select = row.querySelector(
+                    '.fornecedor-reserva-select'
+                );
+                select.innerHTML = fonte.innerHTML;
+
+                tbody.appendChild(row);
+                registrarSelect(select);
+                select.focus();
+
+                row
+                    .querySelector('.remover-reserva-nova')
+                    .addEventListener('click', function () {
+                        row.remove();
+
+                        if (!tbody.querySelector('.reserva-row')) {
+                            const tr = document.createElement('tr');
+                            tr.className = 'reserva-vazio-row';
+                            tr.innerHTML = `
+                                <td colspan="7" class="reserva-vazio">
+                                    Nenhum fornecedor reserva cadastrado para este item.
+                                    Clique em
+                                    <strong>+ Adicionar fornecedor reserva</strong>.
+                                </td>
+                            `;
+                            tbody.appendChild(tr);
+                        }
+                    });
+            });
+        });
+
+    form.addEventListener('submit', function (event) {
+        const linhas = form.querySelectorAll('.reserva-row');
+
+        for (const row of linhas) {
+            const fornecedor = row.querySelector(
+                '.fornecedor-reserva-select'
+            );
+            const quantidade = row.querySelector(
+                'input[name^="quantidade_reserva_"]'
+            );
+            const ordem = row.querySelector(
+                'input[name^="ordem_classificacao_"]'
+            );
+
+            if (
+                !fornecedor.value ||
+                !String(quantidade.value || '').trim() ||
+                !String(ordem.value || '').trim()
+            ) {
+                event.preventDefault();
+
+                alert(
+                    'Preencha fornecedor, quantidade e ordem de classificação ' +
+                    'em todas as linhas do Cadastro Reserva.'
+                );
+
+                row.scrollIntoView({
+                    behavior:'smooth',
+                    block:'center'
+                });
+
+                return;
+            }
+        }
+
+        if (!confirm(
+            'Salvar todos os cadastros reserva informados nesta tela?'
+        )) {
+            event.preventDefault();
+        }
+    });
+})();
+</script>
+
+{% endblock %}

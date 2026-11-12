@@ -269,6 +269,11 @@
                                                 <td>
                                                     {% if item.eh_cadastro_reserva %}
                                                         <span class="badge badge-warning">Cadastro Reserva</span>
+                                                        {% if item.classificacao_reserva %}
+                                                            <div class="texto-ajuda">
+                                                                {{ item.classificacao_reserva }}º classificado
+                                                            </div>
+                                                        {% endif %}
                                                     {% else %}
                                                         <span class="badge badge-success">Adjudicação Principal</span>
                                                     {% endif %}

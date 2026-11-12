@@ -583,6 +583,11 @@ class ProjetoVenda(models.Model):
         ordering = ["-data_entrega", "-criado_em"]
 
     def clean(self):
+        if not self.ordem_classificacao or self.ordem_classificacao < 1:
+            raise ValidationError(
+                "A ordem de classificação deve ser um número inteiro maior que zero."
+            )
+
         if self.pregao and self.pregao.tipo_certame != Pregao.TIPO_CHAMADA_PUBLICA:
             raise ValidationError("Projeto de venda só pode ser registrado para Chamada Pública.")
 
@@ -842,12 +847,24 @@ class CadastroReservaChamadaPublica(models.Model):
     formalmente adjudicada.
     """
 
+    # Novos status do Cadastro Reserva.
+    STATUS_AGUARDANDO = "aguardando"
+    STATUS_AGUARDANDO_CONTRATO = "aguardando_contrato"
+    STATUS_CONTRATADO = "contratado"
+    STATUS_DESISTENTE = "desistente"
+
+    # Status legados mantidos temporariamente para preservar os registros
+    # criados antes da implantação do cadastro reserva múltiplo.
     STATUS_ATIVO = "ativo"
     STATUS_CANCELADO = "cancelado"
 
     STATUS_CHOICES = [
-        (STATUS_ATIVO, "Ativo"),
-        (STATUS_CANCELADO, "Cancelado"),
+        (STATUS_AGUARDANDO, "Aguardando"),
+        (STATUS_AGUARDANDO_CONTRATO, "Aguardando Contrato"),
+        (STATUS_CONTRATADO, "Contratado"),
+        (STATUS_DESISTENTE, "Desistente"),
+        (STATUS_ATIVO, "Ativo (legado)"),
+        (STATUS_CANCELADO, "Cancelado (legado)"),
     ]
 
     pregao = models.ForeignKey(
@@ -857,10 +874,10 @@ class CadastroReservaChamadaPublica(models.Model):
         verbose_name="Chamada Pública",
     )
 
-    pregao_item = models.OneToOneField(
+    pregao_item = models.ForeignKey(
         PregaoItem,
         on_delete=models.PROTECT,
-        related_name="cadastro_reserva_chamada",
+        related_name="cadastros_reserva_chamada",
         verbose_name="Item da Chamada Pública",
     )
 
@@ -902,11 +919,18 @@ class CadastroReservaChamadaPublica(models.Model):
         default=Decimal("0.000"),
     )
 
+    ordem_classificacao = models.PositiveIntegerField(
+        "Ordem de Classificação",
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text="Ordem de convocação do fornecedor reserva para este item.",
+    )
+
     status = models.CharField(
         "Status",
         max_length=20,
         choices=STATUS_CHOICES,
-        default=STATUS_ATIVO,
+        default=STATUS_AGUARDANDO,
     )
 
     registrado_por = models.ForeignKey(
@@ -924,7 +948,21 @@ class CadastroReservaChamadaPublica(models.Model):
     class Meta:
         verbose_name = "Cadastro Reserva da Chamada Pública"
         verbose_name_plural = "Cadastros Reserva da Chamada Pública"
-        ordering = ["pregao_item__ordem", "item__nome_item"]
+        ordering = [
+            "pregao_item__ordem",
+            "ordem_classificacao",
+            "fornecedor__razao_social",
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pregao_item", "fornecedor"],
+                name="cad_reserva_fornecedor_unico_por_item",
+            ),
+            models.UniqueConstraint(
+                fields=["pregao_item", "ordem_classificacao"],
+                name="cad_reserva_classificacao_unica_por_item",
+            ),
+        ]
 
     @property
     def saldo_reserva(self):
@@ -991,7 +1029,8 @@ class CadastroReservaChamadaPublica(models.Model):
     def __str__(self):
         return (
             f"{self.pregao} - {self.item} - "
-            f"Reserva: {self.fornecedor} ({self.quantidade_reserva})"
+            f"{self.ordem_classificacao}º Reserva: "
+            f"{self.fornecedor} ({self.quantidade_reserva})"
         )
 
 

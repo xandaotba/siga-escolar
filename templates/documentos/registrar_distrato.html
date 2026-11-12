@@ -76,7 +76,7 @@
                         <th>Valor Unitário</th>
                         <th>Valor Ativo</th>
                         {% if eh_chamada_publica %}
-                        <th>Fornecedor Reserva</th>
+                        <th>Próximo Fornecedor Reserva</th>
                         <th>Saldo Reserva</th>
                         {% endif %}
                     </tr>
@@ -129,6 +129,7 @@
                             {% if item_ctx.contrato_origem_reserva %}
                                 <span class="badge badge-warning">Contrato já originado da reserva</span>
                             {% elif item_ctx.cadastro_reserva %}
+                                {{ item_ctx.cadastro_reserva.ordem_classificacao }}º —
                                 {{ item_ctx.cadastro_reserva.fornecedor.razao_social }}
                             {% else %}
                                 <span style="color:#64748b;">Sem cadastro reserva</span>

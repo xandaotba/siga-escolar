@@ -196,6 +196,26 @@ urlpatterns = [
         name="resultado_chamada_publica",
     ),
     path(
+        "chamada-publica/resultado/<int:pregao_id>/cadastro-reserva/cadastrar/",
+        views.cadastrar_fornecedores_reserva_chamada_publica,
+        name="cadastrar_fornecedores_reserva_chamada_publica",
+    ),
+    path(
+        "chamada-publica/resultado/<int:pregao_id>/cadastro-reserva/salvar/",
+        views.salvar_cadastros_reserva_lote,
+        name="salvar_cadastros_reserva_lote",
+    ),
+    path(
+        "chamada-publica/cadastro-reserva/<int:cadastro_id>/distrato-item/<int:distrato_item_id>/adjudicar/",
+        views.adjudicar_cadastro_reserva_chamada_publica,
+        name="adjudicar_cadastro_reserva_classificado_chamada_publica",
+    ),
+    path(
+        "chamada-publica/cadastro-reserva/<int:cadastro_id>/desistir/",
+        views.desistir_cadastro_reserva_chamada_publica,
+        name="desistir_cadastro_reserva_chamada_publica",
+    ),
+    path(
         "chamada-publica/cadastro-reserva/distrato-item/<int:distrato_item_id>/adjudicar/",
         views.adjudicar_cadastro_reserva_chamada_publica,
         name="adjudicar_cadastro_reserva_chamada_publica",
@@ -219,6 +239,11 @@ urlpatterns = [
         "chamada-publica/projetos-venda/<int:pregao_id>/registrar/",
         views.registrar_projeto_venda,
         name="registrar_projeto_venda",
+    ),
+    path(
+        "chamada-publica/projetos-venda/<int:projeto_id>/visualizar/",
+        views.visualizar_projeto_venda,
+        name="visualizar_projeto_venda",
     ),
     path(
         "chamada-publica/projetos-venda/<int:projeto_id>/editar/",

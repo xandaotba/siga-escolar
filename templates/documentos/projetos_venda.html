@@ -90,6 +90,10 @@
                         </td>
                         <td>
                             <div class="actions">
+                                <a class="btn btn-secondary" href="{% url 'documentos:visualizar_projeto_venda' projeto.id %}">
+                                    Visualizar
+                                </a>
+
                                 {% if projeto.status == "registrado" %}
                                     <a class="btn btn-primary" href="{% url 'documentos:editar_projeto_venda' projeto.id %}">
                                         Editar

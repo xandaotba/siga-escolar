@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Visualizar Adjudicação | Sistema de Certames{% endblock %}
+{% block page_title %}Visualizar Adjudicação{% endblock %}
+{% block page_subtitle %}Consulte os dados da adjudicação registrada para o fornecedor{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <div class="grid grid-2">
+        <div>
+            <p><strong>Fornecedor:</strong> {{ fornecedor.razao_social }}</p>
+            <p><strong>Tipo:</strong> {{ fornecedor.get_tipo_fornecedor_chamada_display }}</p>
+        </div>
+
+        <div>
+            <p><strong>Limite:</strong> {{ fornecedor.get_limite_anual_chamada_publica_display }}</p>
+            <p>
+                <strong>Valor Total Adjudicado para este fornecedor:</strong>
+                {{ valor_total_fornecedor_certame|moeda_br }}
+            </p>
+        </div>
+    </div>
+
+    <div style="margin-top:10px; color:#64748b;">
+        <strong>Chamada Pública:</strong> {{ pregao.numero }}/{{ pregao.ano }}
+        &nbsp;|&nbsp;
+        <strong>Status da Adjudicação:</strong> {{ projeto.get_status_display }}
+    </div>
+</div>
+
+<div class="card">
+    <h2>Itens da Adjudicação</h2>
+
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ordem</th>
+                    <th>Produto</th>
+                    <th>Unidade de Medida</th>
+                    <th>Marca</th>
+                    <th>Preço de Aquisição</th>
+                    <th>Quantidade Total do Certame</th>
+                    <th>Quantidade Adjudicada</th>
+                    <th>Saldo Restante</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for linha in linhas_itens %}
+                <tr>
+                    <td>{{ linha.ordem }}</td>
+                    <td><strong>{{ linha.produto.nome_item }}</strong></td>
+                    <td>{{ linha.unidade }}</td>
+                    <td>{{ linha.marca|default:"-" }}</td>
+                    <td>{{ linha.preco_aquisicao|moeda_br }}</td>
+                    <td>{{ linha.quantidade_total_certame|quantidade_br }}</td>
+                    <td>{{ linha.quantidade_adjudicada|quantidade_br }}</td>
+                    <td>{{ linha.saldo_restante|quantidade_br }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8">Nenhum item registrado nesta adjudicação.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="actions" style="margin-top:16px;">
+        <a
+            class="btn btn-secondary"
+            href="{% url 'documentos:resultado_chamada_publica' %}?pregao={{ pregao.id }}&aba=resultado"
+        >
+            Voltar ao Resultado
+        </a>
+
+        {% if request.user.perfil_acesso.perfil != "consulta_escola" and projeto.status == "registrado" %}
+        <a
+            class="btn btn-primary"
+            href="{% url 'documentos:editar_projeto_venda' projeto.id %}"
+        >
+            Editar Adjudicação
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
