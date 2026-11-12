@@ -286,6 +286,36 @@ urlpatterns = [
         name="resultado_final_word",
     ),
     path(
+        "pregoes-finalizados/<int:pregao_id>/ata-sessao-credenciamento/word/",
+        views.gerar_ata_sessao_credenciamento_word,
+        name="ata_sessao_credenciamento_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-sessao-credenciamento/pdf/",
+        views.gerar_ata_sessao_credenciamento_pdf,
+        name="ata_sessao_credenciamento_pdf",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-sessao-adjudicacao/word/",
+        views.gerar_ata_sessao_adjudicacao_word,
+        name="ata_sessao_adjudicacao_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-sessao-adjudicacao/pdf/",
+        views.gerar_ata_sessao_adjudicacao_pdf,
+        name="ata_sessao_adjudicacao_pdf",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-sessao-lances-classificacao/word/",
+        views.gerar_ata_sessao_lances_classificacao_word,
+        name="ata_sessao_lances_classificacao_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/ata-sessao-lances-classificacao/pdf/",
+        views.gerar_ata_sessao_lances_classificacao_pdf,
+        name="ata_sessao_lances_classificacao_pdf",
+    ),
+    path(
         "pregoes-finalizados/<int:pregao_id>/ata-registro-precos/word/",
         views.gerar_ata_registro_precos_word,
         name="ata_registro_precos_word",

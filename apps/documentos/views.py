@@ -1983,6 +1983,843 @@ def resultado_final_word(request, pregao_id):
 
 
 
+
+# ============================================================
+# ATAS DA SESSÃO - PREGÃO PRESENCIAL
+# ============================================================
+
+def caminho_modelo_ata_sessao_pregao(nome_arquivo):
+    caminho = (
+        Path(settings.BASE_DIR)
+        / "templates"
+        / "documentos"
+        / nome_arquivo
+    )
+
+    if not caminho.exists():
+        raise FileNotFoundError(
+            f"Modelo não encontrado: {caminho}"
+        )
+
+    return caminho
+
+
+def _ata_sessao_documento_fornecedor(fornecedor):
+    return (
+        (fornecedor.cnpj or "").strip()
+        or (fornecedor.cpf_fornecedor_individual or "").strip()
+        or "-"
+    )
+
+
+def _ata_sessao_tipo_empresa(fornecedor):
+    return "ME / EPP" if fornecedor.fornecedor_me_epp else "Demais"
+
+
+def _ata_sessao_representante_preferencial(fornecedor):
+    """
+    No Credenciamento, quando existir procurador cadastrado, os dados
+    exibidos no campo Representante vêm do procurador. Caso contrário,
+    utiliza o Representante Legal.
+    """
+    if (fornecedor.procurador or "").strip():
+        return {
+            "nome": (fornecedor.procurador or "").strip(),
+            "cpf": (fornecedor.cpf_procurador or "").strip(),
+            "rg": (fornecedor.rg_procurador or "").strip(),
+            "orgao": (
+                fornecedor.orgao_expedidor_procurador or ""
+            ).strip(),
+        }
+
+    return {
+        "nome": (fornecedor.representante_legal or "").strip(),
+        "cpf": (fornecedor.cpf_representante or "").strip(),
+        "rg": (fornecedor.rg_representante or "").strip(),
+        "orgao": (
+            fornecedor.orgao_expedidor_representante or ""
+        ).strip(),
+    }
+
+
+def _ata_sessao_identificacao_representante(dados):
+    rg = dados.get("rg", "")
+    orgao = dados.get("orgao", "")
+    cpf = dados.get("cpf", "")
+
+    identidade = ""
+
+    if rg and orgao:
+        identidade = f"{rg} - {orgao}"
+    else:
+        identidade = rg or orgao
+
+    partes = []
+
+    if identidade:
+        partes.append(f"RG: {identidade}")
+
+    if cpf:
+        partes.append(f"CPF: {cpf}")
+
+    return " | ".join(partes) or "-"
+
+
+def _ata_sessao_preencher_celula(celula, texto, tamanho=9):
+    _word_preencher_celula(
+        celula,
+        "" if texto is None else str(texto),
+        nome_fonte="Times New Roman",
+        tamanho=tamanho,
+        negrito=False,
+        alinhamento=WD_ALIGN_PARAGRAPH.CENTER,
+    )
+
+
+def _ata_sessao_clonar_linha(tabela, linha_xml):
+    nova_linha_xml = deepcopy(linha_xml)
+    tabela._tbl.append(nova_linha_xml)
+    return tabela.rows[-1]
+
+
+def _ata_sessao_remover_linhas_depois_cabecalho(tabela):
+    for linha in list(tabela.rows[1:]):
+        tabela._tbl.remove(linha._tr)
+
+
+def _ata_sessao_fornecedores_credenciamento(pregao):
+    vinculos = (
+        PregaoFornecedor.objects.filter(pregao=pregao)
+        .select_related("fornecedor")
+        .order_by(
+            "ordem_inicial",
+            "fornecedor__razao_social",
+        )
+    )
+
+    return [vinculo.fornecedor for vinculo in vinculos]
+
+
+def montar_ata_sessao_credenciamento_pregao(pregao):
+    caminho_modelo = caminho_modelo_ata_sessao_pregao(
+        "modelo_ata_sessao_credenciamento.docx"
+    )
+    documento = Document(caminho_modelo)
+
+    fornecedores = _ata_sessao_fornecedores_credenciamento(
+        pregao
+    )
+
+    if documento.tables:
+        tabela = documento.tables[0]
+
+        if len(tabela.rows) < 2:
+            raise ValueError(
+                "O modelo da Ata de Credenciamento não possui "
+                "linha-base para preenchimento."
+            )
+
+        linha_modelo = deepcopy(tabela.rows[1]._tr)
+        _ata_sessao_remover_linhas_depois_cabecalho(tabela)
+
+        for fornecedor in fornecedores:
+            representante = (
+                _ata_sessao_representante_preferencial(
+                    fornecedor
+                )
+            )
+            linha = _ata_sessao_clonar_linha(
+                tabela,
+                linha_modelo,
+            )
+
+            valores = [
+                fornecedor.razao_social,
+                _ata_sessao_documento_fornecedor(fornecedor),
+                _ata_sessao_tipo_empresa(fornecedor),
+                representante["nome"] or "-",
+                _ata_sessao_identificacao_representante(
+                    representante
+                ),
+            ]
+
+            for indice, valor in enumerate(valores):
+                _ata_sessao_preencher_celula(
+                    linha.cells[indice],
+                    valor,
+                    tamanho=9,
+                )
+
+    # O modelo traz um bloco detalhado de fornecedor abaixo da tabela.
+    # Preservamos exatamente esse bloco e o repetimos para cada fornecedor.
+    paragrafos_modelo = [
+        paragrafo
+        for paragrafo in documento.paragraphs
+        if any(
+            marcador in paragrafo.text
+            for marcador in [
+                "[Razão Social]",
+                "[00.000.000/0000-00]",
+                "[Endereço Completo]",
+                "[Nome Completo]",
+                "[000.000.000-00]",
+                "[Telefone]",
+                "[Banco]",
+            ]
+        )
+    ]
+
+    if paragrafos_modelo:
+        nos_modelo = [
+            deepcopy(paragrafo._p)
+            for paragrafo in paragrafos_modelo
+        ]
+
+        primeiro_no = paragrafos_modelo[0]._p
+        pai = primeiro_no.getparent()
+        indice_insercao = pai.index(primeiro_no)
+
+        for paragrafo in paragrafos_modelo:
+            pai.remove(paragrafo._p)
+
+        for fornecedor in fornecedores:
+            representante = (
+                _ata_sessao_representante_preferencial(
+                    fornecedor
+                )
+            )
+
+            rg = representante["rg"]
+            orgao = representante["orgao"]
+
+            if rg and orgao:
+                identidade = f"{rg} - {orgao}"
+            else:
+                identidade = rg or orgao or "-"
+
+            substituicoes = {
+                "[Razão Social]": fornecedor.razao_social or "-",
+                "[00.000.000/0000-00]": (
+                    _ata_sessao_documento_fornecedor(
+                        fornecedor
+                    )
+                ),
+                "[Endereço Completo]": (
+                    fornecedor.endereco or "-"
+                ),
+                "[Nome Completo]": (
+                    representante["nome"] or "-"
+                ),
+                "[000.000.000-00]": (
+                    representante["cpf"] or "-"
+                ),
+                "[RG / Órgão Expedidor]": identidade,
+                "[Telefone]": fornecedor.telefone or "-",
+                "[E-mail]": fornecedor.email or "-",
+                "[Banco]": fornecedor.nome_banco or "-",
+                "[Agência]": fornecedor.agencia or "-",
+                "[Conta Corrente]": (
+                    fornecedor.conta_corrente or "-"
+                ),
+                "[PIX]": fornecedor.pix or "-",
+            }
+
+            for no_modelo in nos_modelo:
+                novo_no = deepcopy(no_modelo)
+                pai.insert(indice_insercao, novo_no)
+                indice_insercao += 1
+
+                paragrafo = Paragraph(novo_no, pai)
+                substituir_texto_em_paragrafo(
+                    paragrafo,
+                    substituicoes,
+                )
+
+            # Separa visualmente os fornecedores, sem alterar
+            # a estrutura dos parágrafos do modelo.
+            separador = OxmlElement("w:p")
+            pai.insert(indice_insercao, separador)
+            indice_insercao += 1
+
+    return documento
+
+
+def _ata_sessao_dados_adjudicacao(pregao):
+    itens = (
+        PregaoItem.objects.filter(pregao=pregao)
+        .select_related("item")
+        .order_by("ordem")
+    )
+
+    resultados = {
+        resultado.pregao_item_id: resultado
+        for resultado in ResultadoItem.objects.filter(
+            pregao=pregao
+        ).select_related("primeiro_fornecedor")
+    }
+
+    propostas = {
+        (proposta.pregao_item_id, proposta.fornecedor_id): proposta
+        for proposta in PropostaInicialItem.objects.filter(
+            pregao=pregao
+        ).select_related("fornecedor", "pregao_item")
+    }
+
+    linhas = []
+    total_geral = Decimal("0.00")
+
+    for item_pregao in itens:
+        resultado = resultados.get(item_pregao.id)
+
+        fornecedor_texto = "-"
+        marca = "-"
+        valor_unitario = None
+        valor_total = None
+
+        if item_pregao.status == PregaoItem.STATUS_DESERTO:
+            fornecedor_texto = "DESERTO"
+        elif item_pregao.status == PregaoItem.STATUS_FRACASSADO:
+            fornecedor_texto = "FRACASSADO"
+        elif resultado and resultado.primeiro_fornecedor:
+            fornecedor = resultado.primeiro_fornecedor
+            proposta = propostas.get(
+                (item_pregao.id, fornecedor.id)
+            )
+            marca = proposta.marca if proposta else "-"
+            valor_unitario = resultado.primeiro_valor
+
+            fornecedor_texto = (
+                f"{fornecedor.razao_social} / "
+                f"{_ata_sessao_documento_fornecedor(fornecedor)}"
+            )
+
+            if valor_unitario is not None:
+                valor_total = (
+                    item_pregao.quantidade_total
+                    * valor_unitario
+                ).quantize(Decimal("0.01"))
+                total_geral += valor_total
+
+        linhas.append(
+            {
+                "item": item_pregao.ordem,
+                "produto": item_pregao.item.nome_item,
+                "fornecedor": fornecedor_texto,
+                "marca": marca,
+                "unidade": (
+                    item_pregao.item
+                    .get_unidade_medida_display()
+                ),
+                "quantidade": formatar_numero_br(
+                    item_pregao.quantidade_total
+                ),
+                "valor_unitario": (
+                    formatar_moeda_br(valor_unitario)
+                    if valor_unitario is not None
+                    else "-"
+                ),
+                "valor_total": (
+                    formatar_moeda_br(valor_total)
+                    if valor_total is not None
+                    else "-"
+                ),
+            }
+        )
+
+    return linhas, total_geral
+
+
+def montar_ata_sessao_adjudicacao_pregao(pregao):
+    caminho_modelo = caminho_modelo_ata_sessao_pregao(
+        "modelo_ata_sessao_adjudicacao.docx"
+    )
+    documento = Document(caminho_modelo)
+
+    if not documento.tables:
+        raise ValueError(
+            "O modelo da Ata da Adjudicação não possui tabela."
+        )
+
+    tabela = documento.tables[0]
+
+    if len(tabela.rows) < 4:
+        raise ValueError(
+            "O modelo da Ata da Adjudicação não possui "
+            "as linhas-base esperadas."
+        )
+
+    linha_modelo = deepcopy(tabela.rows[1]._tr)
+    linha_total_modelo = deepcopy(tabela.rows[-1]._tr)
+    _ata_sessao_remover_linhas_depois_cabecalho(tabela)
+
+    linhas, total_geral = _ata_sessao_dados_adjudicacao(
+        pregao
+    )
+
+    for dados in linhas:
+        linha = _ata_sessao_clonar_linha(
+            tabela,
+            linha_modelo,
+        )
+
+        valores = [
+            dados["item"],
+            dados["produto"],
+            dados["fornecedor"],
+            dados["marca"],
+            dados["unidade"],
+            dados["quantidade"],
+            dados["valor_unitario"],
+            dados["valor_total"],
+        ]
+
+        for indice, valor in enumerate(valores):
+            _ata_sessao_preencher_celula(
+                linha.cells[indice],
+                valor,
+                tamanho=9,
+            )
+
+    linha_total = _ata_sessao_clonar_linha(
+        tabela,
+        linha_total_modelo,
+    )
+
+    # A linha total do modelo possui células mescladas.
+    _ata_sessao_preencher_celula(
+        linha_total.cells[0],
+        "TOTAL:",
+        tamanho=10,
+    )
+    _ata_sessao_preencher_celula(
+        linha_total.cells[-1],
+        formatar_moeda_br(total_geral),
+        tamanho=9,
+    )
+
+    return documento
+
+
+def _ata_sessao_dados_classificacao(pregao):
+    itens = (
+        PregaoItem.objects.filter(pregao=pregao)
+        .select_related("item", "fornecedor_vencedor")
+        .order_by("ordem")
+    )
+
+    resultados = {
+        resultado.pregao_item_id: resultado
+        for resultado in ResultadoItem.objects.filter(
+            pregao=pregao
+        ).select_related(
+            "primeiro_fornecedor",
+            "segundo_fornecedor",
+            "terceiro_fornecedor",
+        )
+    }
+
+    propostas = {
+        (proposta.pregao_item_id, proposta.fornecedor_id): proposta
+        for proposta in PropostaInicialItem.objects.filter(
+            pregao=pregao
+        ).select_related("fornecedor", "pregao_item")
+    }
+
+    linhas = []
+
+    for item_pregao in itens:
+        unidade = (
+            item_pregao.item.get_unidade_medida_display()
+        )
+
+        if item_pregao.status == PregaoItem.STATUS_DESERTO:
+            linhas.append(
+                {
+                    "item": item_pregao.ordem,
+                    "produto": item_pregao.item.nome_item,
+                    "classificacao": "-",
+                    "fornecedor": "DESERTO",
+                    "status": "DESERTO",
+                    "marca": "-",
+                    "unidade": unidade,
+                    "valor_unitario": "-",
+                }
+            )
+            continue
+
+        if item_pregao.status == PregaoItem.STATUS_FRACASSADO:
+            linhas.append(
+                {
+                    "item": item_pregao.ordem,
+                    "produto": item_pregao.item.nome_item,
+                    "classificacao": "-",
+                    "fornecedor": "FRACASSADO",
+                    "status": "FRACASSADO",
+                    "marca": "-",
+                    "unidade": unidade,
+                    "valor_unitario": "-",
+                }
+            )
+            continue
+
+        resultado = resultados.get(item_pregao.id)
+
+        classificados = []
+
+        if resultado:
+            classificados = [
+                (
+                    1,
+                    resultado.primeiro_fornecedor,
+                    resultado.primeiro_valor,
+                    "VENCEDOR",
+                ),
+                (
+                    2,
+                    resultado.segundo_fornecedor,
+                    resultado.segundo_valor,
+                    "CLASSIFICADO",
+                ),
+                (
+                    3,
+                    resultado.terceiro_fornecedor,
+                    resultado.terceiro_valor,
+                    "CLASSIFICADO",
+                ),
+            ]
+        elif item_pregao.fornecedor_vencedor:
+            classificados = [
+                (
+                    1,
+                    item_pregao.fornecedor_vencedor,
+                    item_pregao.menor_lance,
+                    "VENCEDOR",
+                )
+            ]
+
+        for ordem, fornecedor, valor, status in classificados:
+            if not fornecedor:
+                continue
+
+            proposta = propostas.get(
+                (item_pregao.id, fornecedor.id)
+            )
+
+            linhas.append(
+                {
+                    "item": item_pregao.ordem,
+                    "produto": item_pregao.item.nome_item,
+                    "classificacao": f"{ordem}º",
+                    "fornecedor": (
+                        f"{fornecedor.razao_social} / "
+                        f"{_ata_sessao_documento_fornecedor(fornecedor)}"
+                    ),
+                    "status": status,
+                    "marca": (
+                        proposta.marca
+                        if proposta and proposta.marca
+                        else "-"
+                    ),
+                    "unidade": unidade,
+                    "valor_unitario": (
+                        formatar_moeda_br(valor)
+                        if valor is not None
+                        else "-"
+                    ),
+                }
+            )
+
+    return linhas
+
+
+def montar_ata_sessao_lances_classificacao_pregao(pregao):
+    caminho_modelo = caminho_modelo_ata_sessao_pregao(
+        "modelo_ata_sessao_lances_classificacao.docx"
+    )
+    documento = Document(caminho_modelo)
+
+    if not documento.tables:
+        raise ValueError(
+            "O modelo da Ata de Lances e Classificação "
+            "não possui tabela."
+        )
+
+    tabela = documento.tables[0]
+
+    if len(tabela.rows) < 2:
+        raise ValueError(
+            "O modelo da Ata de Lances e Classificação "
+            "não possui linha-base."
+        )
+
+    linha_modelo = deepcopy(tabela.rows[1]._tr)
+    _ata_sessao_remover_linhas_depois_cabecalho(tabela)
+
+    linhas = _ata_sessao_dados_classificacao(pregao)
+
+    for dados in linhas:
+        linha = _ata_sessao_clonar_linha(
+            tabela,
+            linha_modelo,
+        )
+
+        valores = [
+            dados["item"],
+            dados["produto"],
+            dados["classificacao"],
+            dados["fornecedor"],
+            dados["status"],
+            dados["marca"],
+            dados["unidade"],
+            dados["valor_unitario"],
+        ]
+
+        for indice, valor in enumerate(valores):
+            _ata_sessao_preencher_celula(
+                linha.cells[indice],
+                valor,
+                tamanho=9,
+            )
+
+    return documento
+
+
+def _ata_sessao_obter_pregao_finalizado(pregao_id):
+    return get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+
+def gerar_ata_sessao_credenciamento_word(
+    request,
+    pregao_id,
+):
+    pregao = _ata_sessao_obter_pregao_finalizado(
+        pregao_id
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(
+        request,
+        pregao,
+    ):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_ata_sessao_credenciamento_pregao(
+            pregao
+        )
+        return resposta_download_docx(
+            documento,
+            f"Ata_Sessao_Credenciamento_"
+            f"{pregao.numero}_{pregao.ano}",
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Ata da Sessão - Credenciamento "
+            "do pregão %s.",
+            pregao.id,
+        )
+        messages.error(
+            request,
+            "Não foi possível gerar a Ata da Sessão - "
+            f"Credenciamento: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_ata_sessao_credenciamento_pdf(
+    request,
+    pregao_id,
+):
+    pregao = _ata_sessao_obter_pregao_finalizado(
+        pregao_id
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(
+        request,
+        pregao,
+    ):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_ata_sessao_credenciamento_pregao(
+            pregao
+        )
+        return resposta_download_pdf(
+            documento,
+            f"Ata_Sessao_Credenciamento_"
+            f"{pregao.numero}_{pregao.ano}",
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar PDF da Ata da Sessão - "
+            "Credenciamento do pregão %s.",
+            pregao.id,
+        )
+        messages.error(
+            request,
+            "Não foi possível gerar a Ata da Sessão - "
+            f"Credenciamento em PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_ata_sessao_adjudicacao_word(
+    request,
+    pregao_id,
+):
+    pregao = _ata_sessao_obter_pregao_finalizado(
+        pregao_id
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(
+        request,
+        pregao,
+    ):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_ata_sessao_adjudicacao_pregao(
+            pregao
+        )
+        return resposta_download_docx(
+            documento,
+            f"Ata_Sessao_Adjudicacao_"
+            f"{pregao.numero}_{pregao.ano}",
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Ata da Sessão - Adjudicação "
+            "do pregão %s.",
+            pregao.id,
+        )
+        messages.error(
+            request,
+            "Não foi possível gerar a Ata da Sessão - "
+            f"Adjudicação: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_ata_sessao_adjudicacao_pdf(
+    request,
+    pregao_id,
+):
+    pregao = _ata_sessao_obter_pregao_finalizado(
+        pregao_id
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(
+        request,
+        pregao,
+    ):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_ata_sessao_adjudicacao_pregao(
+            pregao
+        )
+        return resposta_download_pdf(
+            documento,
+            f"Ata_Sessao_Adjudicacao_"
+            f"{pregao.numero}_{pregao.ano}",
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar PDF da Ata da Sessão - "
+            "Adjudicação do pregão %s.",
+            pregao.id,
+        )
+        messages.error(
+            request,
+            "Não foi possível gerar a Ata da Sessão - "
+            f"Adjudicação em PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_ata_sessao_lances_classificacao_word(
+    request,
+    pregao_id,
+):
+    pregao = _ata_sessao_obter_pregao_finalizado(
+        pregao_id
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(
+        request,
+        pregao,
+    ):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = (
+            montar_ata_sessao_lances_classificacao_pregao(
+                pregao
+            )
+        )
+        return resposta_download_docx(
+            documento,
+            f"Ata_Sessao_Lances_Classificacao_"
+            f"{pregao.numero}_{pregao.ano}",
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Ata da Sessão - Lances e "
+            "Classificação do pregão %s.",
+            pregao.id,
+        )
+        messages.error(
+            request,
+            "Não foi possível gerar a Ata da Sessão - "
+            f"Lances e Classificação: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_ata_sessao_lances_classificacao_pdf(
+    request,
+    pregao_id,
+):
+    pregao = _ata_sessao_obter_pregao_finalizado(
+        pregao_id
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(
+        request,
+        pregao,
+    ):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = (
+            montar_ata_sessao_lances_classificacao_pregao(
+                pregao
+            )
+        )
+        return resposta_download_pdf(
+            documento,
+            f"Ata_Sessao_Lances_Classificacao_"
+            f"{pregao.numero}_{pregao.ano}",
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar PDF da Ata da Sessão - Lances e "
+            "Classificação do pregão %s.",
+            pregao.id,
+        )
+        messages.error(
+            request,
+            "Não foi possível gerar a Ata da Sessão - "
+            f"Lances e Classificação em PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+
 # ============================================================
 # ATA DE REGISTRO DE PREÇOS
 # ============================================================

@@ -342,7 +342,7 @@
     }
 
     .documentos-dropdown {
-        width: 245px;
+        width: 330px;
     }
 
     .documentos-trigger {
@@ -441,6 +441,68 @@
                                     {# Consulta/Escola não pode baixar documentos administrativos nem gerar contratos #}
                                     {% if perfil != "consulta_escola" %}
                                     <div class="documentos-separador"></div>
+
+                                    {% if pregao.tipo_certame == "pregao_presencial" %}
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Ata da Sessão - Credenciamento
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_sessao_credenciamento_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
+
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_sessao_credenciamento_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Ata da Sessão - Lances e Classificação
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_sessao_lances_classificacao_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
+
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_sessao_lances_classificacao_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Ata da Sessão - Da Adjudicação
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_sessao_adjudicacao_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
+
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:ata_sessao_adjudicacao_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {% endif %}
 
                                     <div class="documentos-submenu">
                                         <span class="documentos-submenu-trigger documentos-item-destaque">
