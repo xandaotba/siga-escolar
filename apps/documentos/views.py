@@ -12774,6 +12774,96 @@ def configurar_largura_tabela(tabela, largura_pct=5000):
     tblW.set(qn("w:type"), "pct")
 
 
+
+def montar_linhas_cadastro_reserva_resultado_final_chamada_publica(pregao):
+    """
+    Monta a relação do Cadastro Reserva exibida no Resultado Final da
+    Chamada Pública.
+
+    A seção é apenas informativa e, por isso, os valores do Cadastro Reserva
+    não são somados ao VALOR TOTAL DA CHAMADA PÚBLICA.
+    """
+    status_cancelado = getattr(
+        CadastroReservaChamadaPublica,
+        "STATUS_CANCELADO",
+        "cancelado",
+    )
+
+    cadastros = (
+        CadastroReservaChamadaPublica.objects.filter(
+            pregao=pregao,
+        )
+        .exclude(status=status_cancelado)
+        .select_related(
+            "pregao_item",
+            "pregao_item__item",
+            "item",
+            "fornecedor",
+        )
+        .order_by(
+            "pregao_item__ordem",
+            "ordem_classificacao",
+            "fornecedor__razao_social",
+        )
+    )
+
+    linhas = []
+
+    for cadastro in cadastros:
+        fornecedor = cadastro.fornecedor
+        pregao_item = cadastro.pregao_item
+        item = cadastro.item or pregao_item.item
+
+        documento_fornecedor = (
+            (getattr(fornecedor, "cnpj", "") or "").strip()
+            or (
+                getattr(
+                    fornecedor,
+                    "cpf_fornecedor_individual",
+                    "",
+                )
+                or ""
+            ).strip()
+        )
+
+        fornecedor_documento = (
+            f"{fornecedor.razao_social} - {documento_fornecedor}"
+            if documento_fornecedor
+            else fornecedor.razao_social
+        )
+
+        preco_aquisicao = (
+            pregao_item.media_preco
+            if pregao_item and pregao_item.media_preco is not None
+            else Decimal("0.00")
+        )
+
+        quantidade_reserva = (
+            cadastro.quantidade_reserva
+            or Decimal("0.000")
+        )
+
+        valor_total_reserva = (
+            quantidade_reserva * preco_aquisicao
+        ).quantize(Decimal("0.01"))
+
+        linhas.append(
+            {
+                "classificacao": cadastro.ordem_classificacao,
+                "produto": item.nome_item,
+                "marca": cadastro.marca or "",
+                "fornecedor": fornecedor_documento,
+                "unidade": obter_unidade_resultado_chamada(item),
+                "quantidade": quantidade_reserva,
+                "preco_aquisicao": preco_aquisicao,
+                "valor_total": valor_total_reserva,
+            }
+        )
+
+    return linhas
+
+
+
 def montar_documento_resultado_final_chamada_publica(pregao):
     linhas = montar_linhas_resultado_final_chamada_publica(pregao)
 
@@ -12810,7 +12900,7 @@ def montar_documento_resultado_final_chamada_publica(pregao):
         f"n°{pregao.numero}/{pregao.ano} para Aquisição de Gêneros Alimentícios da Agricultura Familiar e do "
         "Empreendedor Familiar Rural, e de suas organizações, para atendimento dos alunos matriculados Rede Pública "
         f"Estadual, do município de {municipio_texto}, em observância, ao FNDE/PNAE, Resolução CD/FNDE nº 04 de "
-        "26/02/2026, IN nº 011/2024/GS/SEDUC/MT, nos termos do Edital, declarado (s) vencedor (es) :"
+        "26/02/2026 e nº 17 de 23/10/2026, IN nº 011/2024/GS/SEDUC/MT, nos termos do Edital, declarado (s) vencedor (es) :"
     )
 
     run = introducao.add_run(texto_intro)
@@ -12883,6 +12973,123 @@ def montar_documento_resultado_final_chamada_publica(pregao):
 
         ajustar_largura_celula(cells[7], larguras[7])
         configurar_celula_texto_resultado(cells[7], "R$ 0,00", tamanho=8)
+
+    # Cadastro de Fornecedores Reserva.
+    # Esta parte só é exibida quando houver pelo menos um cadastro reserva
+    # vigente para a Chamada Pública.
+    linhas_cadastro_reserva = (
+        montar_linhas_cadastro_reserva_resultado_final_chamada_publica(
+            pregao
+        )
+    )
+
+    if linhas_cadastro_reserva:
+        paragrafo_reserva = documento.add_paragraph()
+        paragrafo_reserva.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        paragrafo_reserva.paragraph_format.space_before = Pt(10)
+        paragrafo_reserva.paragraph_format.space_after = Pt(8)
+        paragrafo_reserva.paragraph_format.line_spacing = 1
+
+        run = paragrafo_reserva.add_run(
+            "Abaixo segue a ordem de classificação dos fornecedores "
+            "habilitados não selecionados inicialmente, para fins de "
+            "constituição de cadastro de reserva, a ser utilizado em caso "
+            "de inexecução contratual, observada a ordem de classificação "
+            "estabelecida no edital."
+        )
+        aplicar_fonte_run_resultado(
+            run,
+            tamanho=10,
+            negrito=False,
+        )
+
+        tabela_reserva = documento.add_table(
+            rows=1,
+            cols=8,
+        )
+        tabela_reserva.style = "Table Grid"
+        tabela_reserva.alignment = WD_TABLE_ALIGNMENT.CENTER
+        tabela_reserva.autofit = False
+        configurar_largura_tabela(tabela_reserva)
+
+        larguras_reserva = [
+            1.35,  # Classificação
+            3.25,  # Produto
+            1.75,  # Marca
+            4.70,  # Fornecedor/CNPJ ou CPF
+            1.40,  # Unidade de Medida
+            1.25,  # Quant.
+            2.00,  # Preço Aquisição
+            2.21,  # Valor Total
+        ]
+
+        cabecalhos_reserva = [
+            "Classificação",
+            "Produto",
+            "Marca",
+            "Fornecedor/CNPJ ou CPF",
+            "Unidade de\nMedida",
+            "Quant.",
+            "Preço\nAquisição",
+            "Valor Total",
+        ]
+
+        for indice, cabecalho in enumerate(
+            cabecalhos_reserva
+        ):
+            celula = tabela_reserva.rows[0].cells[indice]
+            ajustar_largura_celula(
+                celula,
+                larguras_reserva[indice],
+            )
+            configurar_celula_texto_resultado(
+                celula,
+                cabecalho,
+                negrito=True,
+                tamanho=8,
+            )
+
+        for linha_reserva in linhas_cadastro_reserva:
+            cells = tabela_reserva.add_row().cells
+
+            valores_reserva = [
+                linha_reserva["classificacao"],
+                linha_reserva["produto"],
+                linha_reserva["marca"],
+                linha_reserva["fornecedor"],
+                linha_reserva["unidade"],
+                formatar_quantidade_chamada(
+                    linha_reserva["quantidade"]
+                ),
+                formatar_moeda_br(
+                    linha_reserva["preco_aquisicao"]
+                ),
+                formatar_moeda_br(
+                    linha_reserva["valor_total"]
+                ),
+            ]
+
+            for indice, valor in enumerate(
+                valores_reserva
+            ):
+                ajustar_largura_celula(
+                    cells[indice],
+                    larguras_reserva[indice],
+                )
+
+                alinhamento = (
+                    WD_ALIGN_PARAGRAPH.LEFT
+                    if indice in [1, 3]
+                    else WD_ALIGN_PARAGRAPH.CENTER
+                )
+
+                configurar_celula_texto_resultado(
+                    cells[indice],
+                    valor,
+                    negrito=False,
+                    tamanho=8,
+                    alinhamento=alinhamento,
+                )
 
     # Valor total geral da Chamada Pública, com valor numérico e por extenso.
     # O total é a soma da coluna "Valor Total" de todas as linhas adjudicadas
