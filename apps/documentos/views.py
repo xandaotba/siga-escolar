@@ -6629,7 +6629,7 @@ def montar_contratos_chamada_publica_possiveis(pregao):
             status=ResultadoChamadaPublicaItem.STATUS_REGISTRADO,
         )
         .select_related("fornecedor", "item", "pregao_item", "projeto_item")
-        .order_by("fornecedor__razao_social", "pregao_item__ordem", "item__nome_item")
+        .order_by("item__nome_item", "fornecedor__razao_social", "pregao_item__ordem")
     )
 
     resultados_por_item = {}
@@ -12968,7 +12968,8 @@ def obter_resultados_chamada_publica(pregao):
 def montar_linhas_resultado_final_chamada_publica(pregao):
     """
     Monta a tabela conforme o modelo:
-    1. Primeiro todos os itens adjudicados, agrupados por fornecedor.
+    1. Primeiro todos os itens adjudicados, ordenados por Gênero Alimentício
+       e, dentro do mesmo gênero, por Fornecedor.
     2. Depois os itens desertos/saldos não adjudicados, ao final da tabela.
     3. A coluna Item é sequencial no documento, não necessariamente a ordem original do cadastro.
     """
