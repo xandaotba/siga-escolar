@@ -566,10 +566,18 @@
         <strong>Item:</strong> {{ item_pregao.ordem }} - {{ item_pregao.item.nome_item }}
     </p>
 
+    {% if pregao.status == "finalizado" %}
+    <div class="alert alert-warning">
+        <strong>Ajuste de marca pós-pregão:</strong> este pregão está finalizado.
+        Somente a <strong>Marca</strong> das propostas já registradas pode ser alterada.
+        Participação, preço inicial, fornecedores, itens, lances e resultado permanecem bloqueados.
+    </div>
+    {% else %}
     <div class="alert alert-success">
         Marque apenas os fornecedores que participarão deste item. Fornecedor desmarcado não precisará de marca/preço
         e não entrará na disputa deste item.
     </div>
+    {% endif %}
 
     <form method="post">
         {% csrf_token %}
@@ -597,9 +605,14 @@
                                 <input
                                     type="checkbox"
                                     name="participa_{{ fornecedor.id }}"
-                                    class="check-participa-fornecedor"
+                                    class="{% if pregao.status != 'finalizado' %}check-participa-fornecedor{% endif %}"
                                     data-fornecedor="{{ fornecedor.id }}"
-                                    {% if not proposta or proposta.participa %}checked{% endif %}
+                                    {% if pregao.status == "finalizado" %}
+                                        {% if proposta and proposta.participa %}checked{% endif %}
+                                        disabled
+                                    {% else %}
+                                        {% if not proposta or proposta.participa %}checked{% endif %}
+                                    {% endif %}
                                 >
                             </td>
 
@@ -622,6 +635,8 @@
                                     id="marca_fornecedor_{{ fornecedor.id }}"
                                     value="{% if proposta and proposta.participa %}{{ proposta.marca }}{% endif %}"
                                     placeholder="Marca do produto"
+                                    {% if pregao.status == "finalizado" and not proposta %}disabled{% endif %}
+                                    {% if pregao.status == "finalizado" and proposta and not proposta.participa %}disabled{% endif %}
                                 >
                             </td>
 
@@ -632,6 +647,7 @@
                                     id="preco_fornecedor_{{ fornecedor.id }}"
                                     value="{% if proposta and proposta.participa and proposta.preco_inicial %}{{ proposta.preco_inicial }}{% endif %}"
                                     placeholder="0,00"
+                                    {% if pregao.status == "finalizado" %}disabled{% endif %}
                                 >
                             </td>
                         </tr>
@@ -649,11 +665,19 @@
 
         <div class="actions">
             <button class="btn btn-success" type="submit" name="acao" value="salvar">
-                Salvar Propostas Iniciais
+                {% if pregao.status == "finalizado" %}
+                    Salvar Alterações de Marca
+                {% else %}
+                    Salvar Propostas Iniciais
+                {% endif %}
             </button>
 
             <button class="btn btn-primary" type="submit" name="acao" value="salvar_avancar">
-                Salvar e Avançar para Próximo Item
+                {% if pregao.status == "finalizado" %}
+                    Salvar Marca e Avançar para Próximo Item
+                {% else %}
+                    Salvar e Avançar para Próximo Item
+                {% endif %}
             </button>
         </div>
     </form>
@@ -673,6 +697,7 @@
 
     <div class="pd-importacao-card"
          id="pd-importacao-card"
+         {% if pregao.status == "finalizado" %}style="display:none;"{% endif %}
          data-pregao-id="{{ pregao.id }}"
          data-fornecedor-id="{{ fornecedor_selecionado.id }}"
          data-fornecedor-cnpj="{{ fornecedor_selecionado.cnpj|default:'' }}">
@@ -740,10 +765,18 @@
         </div>
     </div>
 
+    {% if pregao.status == "finalizado" %}
+    <div class="alert alert-warning">
+        <strong>Ajuste de marca pós-pregão:</strong> este pregão está finalizado.
+        Somente a <strong>Marca</strong> dos itens em que este fornecedor já possuía proposta participante pode ser alterada.
+        Participação e preço inicial permanecem bloqueados.
+    </div>
+    {% else %}
     <div class="alert alert-success">
         Marque os itens em que este fornecedor participará. Para os itens marcados, informe a marca e o preço inicial.
         Os itens desmarcados ficarão registrados como não participantes para este fornecedor.
     </div>
+    {% endif %}
 
     <form method="post" id="form-propostas-fornecedor">
         {% csrf_token %}
@@ -777,9 +810,10 @@
                                 <input
                                     type="checkbox"
                                     name="participa_item_{{ pi.id }}"
-                                    class="check-participa-item"
+                                    class="{% if pregao.status != 'finalizado' %}check-participa-item{% endif %}"
                                     data-item="{{ pi.id }}"
                                     {% if proposta and proposta.participa %}checked{% endif %}
+                                    {% if pregao.status == "finalizado" %}disabled{% endif %}
                                 >
                             </td>
 
@@ -806,6 +840,8 @@
                                     id="marca_item_{{ pi.id }}"
                                     value="{% if proposta and proposta.participa %}{{ proposta.marca }}{% endif %}"
                                     placeholder="Marca do produto"
+                                    {% if pregao.status == "finalizado" and not proposta %}disabled{% endif %}
+                                    {% if pregao.status == "finalizado" and proposta and not proposta.participa %}disabled{% endif %}
                                 >
                             </td>
 
@@ -817,6 +853,7 @@
                                     id="preco_item_{{ pi.id }}"
                                     value="{% if proposta and proposta.participa and proposta.preco_inicial %}{{ proposta.preco_inicial }}{% endif %}"
                                     placeholder="0,00"
+                                    {% if pregao.status == "finalizado" %}disabled{% endif %}
                                 >
                             </td>
                         </tr>
@@ -834,7 +871,11 @@
 
         <div class="actions">
             <button class="btn btn-success" type="submit" name="acao" value="salvar">
-                Salvar Propostas do Fornecedor
+                {% if pregao.status == "finalizado" %}
+                    Salvar Alterações de Marca
+                {% else %}
+                    Salvar Propostas do Fornecedor
+                {% endif %}
             </button>
         </div>
     </form>

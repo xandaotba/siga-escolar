@@ -1101,8 +1101,12 @@ def itens_por_pregao(request, pregao_id):
         tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
     )
 
-    # Mantém a relação de itens sincronizada com o quantitativo atual.
-    garantir_itens_pregao_para_propostas(pregao)
+    # Mantém a relação de itens sincronizada apenas enquanto o pregão ainda
+    # pode receber alterações operacionais. Em pregão finalizado, esta tela
+    # pode ser usada para ajuste pós-pregão de MARCA, sem tocar na estrutura
+    # dos itens, quantitativos ou resultado do certame.
+    if pregao.status != Pregao.STATUS_FINALIZADO:
+        garantir_itens_pregao_para_propostas(pregao)
 
     itens = (
         PregaoItem.objects.filter(pregao=pregao)
@@ -2597,6 +2601,7 @@ def propostas_iniciais(request):
             status__in=[
                 Pregao.STATUS_NAO_INICIADO,
                 Pregao.STATUS_EM_ANDAMENTO,
+                Pregao.STATUS_FINALIZADO,
             ],
         )
         .prefetch_related("municipios")
@@ -2633,17 +2638,11 @@ def propostas_iniciais(request):
             tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
         )
 
-        if pregao.status not in [
-            Pregao.STATUS_NAO_INICIADO,
-            Pregao.STATUS_EM_ANDAMENTO,
-        ]:
-            messages.error(
-                request,
-                "Só é possível cadastrar propostas iniciais em pregões não iniciados ou em andamento.",
-            )
-            return redirect("pregoes:propostas_iniciais")
-
-        garantir_itens_pregao_para_propostas(pregao)
+        # Pregões finalizados podem ser abertos somente para ajuste posterior
+        # de MARCA. Não sincronizamos/criamos PregaoItem nesse estado, pois a
+        # estrutura do certame e seus quantitativos devem permanecer imutáveis.
+        if pregao.status != Pregao.STATUS_FINALIZADO:
+            garantir_itens_pregao_para_propostas(pregao)
 
         itens_pregao = list(
             PregaoItem.objects.filter(pregao=pregao)
@@ -2716,13 +2715,168 @@ def propostas_iniciais(request):
             messages.error(request, "Selecione o pregão.")
             return redirect("pregoes:propostas_iniciais")
 
+        # ========================================================
+        # AJUSTE DE MARCA APÓS FINALIZAÇÃO DO PREGÃO
+        # ========================================================
+        # Após a finalização, somente a marca de propostas JÁ EXISTENTES e
+        # participantes pode ser alterada. Preço inicial, participação,
+        # fornecedor, itens, lances e resultado permanecem intocados.
+        if pregao.status == Pregao.STATUS_FINALIZADO:
+            # ----------------------------------------------------
+            # AJUSTE POR ITEM
+            # ----------------------------------------------------
+            if modo == "item":
+                if not item_pregao:
+                    messages.error(request, "Selecione o pregão e o item.")
+                    return redirect(
+                        f"{request.path}?modo=item&pregao={pregao.id}"
+                    )
+
+                propostas_existentes = list(
+                    PropostaInicialItem.objects.filter(
+                        pregao=pregao,
+                        pregao_item=item_pregao,
+                        participa=True,
+                    ).select_related("fornecedor")
+                )
+
+                erros = []
+                alteradas = []
+
+                for proposta in propostas_existentes:
+                    nome_campo = f"marca_{proposta.fornecedor_id}"
+
+                    # Só processa propostas exibidas no formulário. Isso
+                    # impede qualquer criação/alteração por POST forjado.
+                    if nome_campo not in request.POST:
+                        continue
+
+                    marca = (request.POST.get(nome_campo) or "").strip()
+
+                    if not marca:
+                        erros.append(
+                            f"Informe a marca para o fornecedor "
+                            f"{proposta.fornecedor.razao_social}."
+                        )
+                        continue
+
+                    if marca != (proposta.marca or "").strip():
+                        alteradas.append((proposta, marca))
+
+                if erros:
+                    for erro in erros:
+                        messages.error(request, erro)
+                    return redirect(
+                        f"{request.path}?modo=item&pregao={pregao.id}"
+                        f"&item={item_pregao.id}"
+                    )
+
+                with transaction.atomic():
+                    for proposta, marca in alteradas:
+                        proposta.marca = marca
+                        proposta.save(update_fields=["marca", "atualizado_em"])
+
+                messages.success(
+                    request,
+                    f"Alteração de marca pós-pregão salva com sucesso. "
+                    f"Marcas alteradas: {len(alteradas)}.",
+                )
+
+                if request.POST.get("acao") == "salvar_avancar":
+                    proximo_item = (
+                        PregaoItem.objects.filter(
+                            pregao=pregao,
+                            ordem__gt=item_pregao.ordem,
+                        )
+                        .select_related("item")
+                        .order_by("ordem", "item__nome_item")
+                        .first()
+                    )
+                    if proximo_item:
+                        return redirect(
+                            f"{request.path}?modo=item&pregao={pregao.id}"
+                            f"&item={proximo_item.id}"
+                        )
+
+                return redirect(
+                    f"{request.path}?modo=item&pregao={pregao.id}"
+                    f"&item={item_pregao.id}"
+                )
+
+            # ----------------------------------------------------
+            # AJUSTE POR FORNECEDOR
+            # ----------------------------------------------------
+            if modo == "fornecedor":
+                if not fornecedor_selecionado:
+                    messages.error(
+                        request,
+                        "Selecione o pregão e o fornecedor.",
+                    )
+                    return redirect(
+                        f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                    )
+
+                propostas_existentes = list(
+                    PropostaInicialItem.objects.filter(
+                        pregao=pregao,
+                        fornecedor=fornecedor_selecionado,
+                        participa=True,
+                    ).select_related("pregao_item", "pregao_item__item")
+                )
+
+                erros = []
+                alteradas = []
+
+                for proposta in propostas_existentes:
+                    nome_campo = f"marca_item_{proposta.pregao_item_id}"
+
+                    if nome_campo not in request.POST:
+                        continue
+
+                    marca = (request.POST.get(nome_campo) or "").strip()
+
+                    if not marca:
+                        erros.append(
+                            f"Informe a marca do item "
+                            f"{proposta.pregao_item.ordem} - "
+                            f"{proposta.pregao_item.item.nome_item}."
+                        )
+                        continue
+
+                    if marca != (proposta.marca or "").strip():
+                        alteradas.append((proposta, marca))
+
+                if erros:
+                    for erro in erros:
+                        messages.error(request, erro)
+                    return redirect(
+                        f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                        f"&fornecedor={fornecedor_selecionado.id}"
+                    )
+
+                with transaction.atomic():
+                    for proposta, marca in alteradas:
+                        proposta.marca = marca
+                        proposta.save(update_fields=["marca", "atualizado_em"])
+
+                messages.success(
+                    request,
+                    f"Alteração de marca pós-pregão salva com sucesso para "
+                    f"{fornecedor_selecionado.razao_social}. "
+                    f"Marcas alteradas: {len(alteradas)}.",
+                )
+                return redirect(
+                    f"{request.path}?modo=fornecedor&pregao={pregao.id}"
+                    f"&fornecedor={fornecedor_selecionado.id}"
+                )
+
         if pregao.status not in [
             Pregao.STATUS_NAO_INICIADO,
             Pregao.STATUS_EM_ANDAMENTO,
         ]:
             messages.error(
                 request,
-                "Só é possível alterar propostas iniciais em pregões não iniciados ou em andamento.",
+                "Este pregão não permite alteração de propostas iniciais.",
             )
             return redirect("pregoes:propostas_iniciais")
 
@@ -3192,6 +3346,9 @@ def propostas_iniciais(request):
             "propostas_salvas": propostas_salvas,
             "proposta_digital_import_token": proposta_digital_import_token,
             "pode_controlar_propostas_digitais": pode_controlar_propostas_digitais,
+            "ajuste_marca_pos_pregao": bool(
+                pregao and pregao.status == Pregao.STATUS_FINALIZADO
+            ),
         },
     )
 
