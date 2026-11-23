@@ -12961,7 +12961,7 @@ def obter_resultados_chamada_publica(pregao):
             "projeto",
             "projeto_item",
         )
-        .order_by("fornecedor__razao_social", "pregao_item__ordem", "item__nome_item")
+        .order_by("item__nome_item", "fornecedor__razao_social", "pregao_item__ordem")
     )
 
 
@@ -12974,6 +12974,17 @@ def montar_linhas_resultado_final_chamada_publica(pregao):
     3. A coluna Item é sequencial no documento, não necessariamente a ordem original do cadastro.
     """
     resultados = list(obter_resultados_chamada_publica(pregao))
+
+    # Garante explicitamente a ordem da tabela principal:
+    # 1º Gênero Alimentício / item; 2º Fornecedor.
+    # Assim, todos os fornecedores do mesmo produto ficam em linhas consecutivas.
+    resultados.sort(
+        key=lambda resultado: (
+            (resultado.item.nome_item or "").casefold(),
+            (resultado.fornecedor.razao_social or "").casefold(),
+            resultado.pregao_item.ordem or 0,
+        )
+    )
 
     quantidade_adjudicada_por_item = {}
 
