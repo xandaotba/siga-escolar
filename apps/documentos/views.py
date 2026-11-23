@@ -4147,41 +4147,19 @@ def _homologacao_texto_municipios(pregao):
 
 def _homologacao_dados_certame(pregao):
     """
-    Consolida o valor adjudicado dos vencedores considerando TODOS os
-    municípios vinculados ao certame.
+    Consolida o valor homologado dos vencedores usando a MESMA base
+    utilizada pelo Resultado Final do Pregão.
 
-    Para cada item, soma o quantitativo distribuído às escolas dos municípios
-    do certame e multiplica pelo valor final adjudicado do item no Resultado
-    Final. Em seguida, consolida os valores por fornecedor.
+    Regra:
+    - quantidade = PregaoItem.quantidade_total;
+    - valor unitário = ResultadoItem.primeiro_valor;
+    - valor do item = quantidade_total x primeiro_valor;
+    - os valores são consolidados por fornecedor vencedor.
+
+    Dessa forma, o Extrato de Homologação permanece coerente com o
+    Resultado Final e não depende de uma nova soma dos quantitativos
+    distribuídos por escola.
     """
-    municipios_ids = list(
-        pregao.municipios.values_list("id", flat=True)
-    )
-
-    if not municipios_ids:
-        raise ValueError(
-            "Este certame não possui municípios vinculados."
-        )
-
-    quantidades_por_item = {
-        linha["item_id"]: linha["quantidade_total"] or Decimal("0")
-        for linha in (
-            QuantitativoEscola.objects.filter(
-                pregao=pregao,
-                escola__municipio_id__in=municipios_ids,
-                quantidade__gt=0,
-            )
-            .values("item_id")
-            .annotate(quantidade_total=Sum("quantidade"))
-        )
-    }
-
-    if not quantidades_por_item:
-        raise ValueError(
-            "Não existem quantitativos distribuídos às escolas dos municípios "
-            "deste certame."
-        )
-
     resultados = (
         ResultadoItem.objects.filter(
             pregao=pregao,
@@ -4201,17 +4179,28 @@ def _homologacao_dados_certame(pregao):
     valor_total_certame = Decimal("0")
 
     for resultado in resultados:
-        item_id = resultado.pregao_item.item_id
-        quantidade_certame = quantidades_por_item.get(
-            item_id,
-            Decimal("0"),
+        item_pregao = resultado.pregao_item
+
+        if not item_pregao:
+            continue
+
+        quantidade_certame = (
+            item_pregao.quantidade_total
+            or Decimal("0")
         )
 
         if quantidade_certame <= 0:
             continue
 
-        valor_unitario = resultado.primeiro_valor or Decimal("0")
-        valor_adjudicado = quantidade_certame * valor_unitario
+        valor_unitario = (
+            resultado.primeiro_valor
+            or Decimal("0")
+        )
+
+        valor_adjudicado = (
+            quantidade_certame * valor_unitario
+        )
+
         fornecedor = resultado.primeiro_fornecedor
 
         if fornecedor.id not in fornecedores:
@@ -4223,7 +4212,12 @@ def _homologacao_dados_certame(pregao):
         fornecedores[fornecedor.id]["valor_total"] += valor_adjudicado
         valor_total_certame += valor_adjudicado
 
-    lista_fornecedores = list(fornecedores.values())
+    lista_fornecedores = sorted(
+        fornecedores.values(),
+        key=lambda item: (
+            item["fornecedor"].razao_social or ""
+        ).casefold(),
+    )
 
     if not lista_fornecedores:
         raise ValueError(
