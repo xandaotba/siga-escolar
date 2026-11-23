@@ -245,12 +245,48 @@ def abrir_execucao(request, pregao_id):
         tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
     )
 
+    # Se o pregão continua "Em andamento", mas todos os itens já foram
+    # encerrados/desertos/fracassados, não existe item PENDENTE ou EM_DISPUTA
+    # para a rotina iniciar_ou_continuar_pregao() abrir.
+    #
+    # Nesse estágio o fluxo correto é a Conferência Final, onde o usuário
+    # poderá revisar os resultados e finalizar oficialmente o pregão.
+    if pregao.status == Pregao.STATUS_EM_ANDAMENTO:
+        possui_itens = PregaoItem.objects.filter(
+            pregao=pregao,
+        ).exists()
+
+        possui_itens_abertos = PregaoItem.objects.filter(
+            pregao=pregao,
+            status__in=[
+                PregaoItem.STATUS_PENDENTE,
+                PregaoItem.STATUS_EM_DISPUTA,
+            ],
+        ).exists()
+
+        if possui_itens and not possui_itens_abertos:
+            return redirect(
+                "execucao:conferencia_pregao",
+                pregao_id=pregao.id,
+            )
+
     try:
         item_atual = iniciar_ou_continuar_pregao(pregao)
-        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+        return redirect(
+            "execucao:tela_lances",
+            pregao_id=pregao.id,
+            item_id=item_atual.id,
+        )
 
     except Exception as erro:
-        messages.error(request, str(erro))
+        mensagens_erro = getattr(erro, "messages", None)
+
+        if mensagens_erro:
+            mensagem = " ".join(str(item) for item in mensagens_erro)
+        else:
+            mensagem = str(erro)
+
+        messages.error(request, mensagem)
         return redirect("execucao:execucao_pregao")
 
 
