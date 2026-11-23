@@ -347,6 +347,16 @@ urlpatterns = [
         name="extrato_contrato_pdf_legado",
     ),
     path(
+        "pregoes-finalizados/<int:pregao_id>/despacho-homologacao/word/",
+        views.gerar_despacho_homologacao_pregao_word,
+        name="despacho_homologacao_pregao_word",
+    ),
+    path(
+        "pregoes-finalizados/<int:pregao_id>/despacho-homologacao/pdf/",
+        views.gerar_despacho_homologacao_pregao_pdf,
+        name="despacho_homologacao_pregao_pdf",
+    ),
+    path(
         "pregoes-finalizados/<int:pregao_id>/extrato-homologacao/word/",
         views.gerar_extrato_homologacao_word,
         name="extrato_homologacao_word",

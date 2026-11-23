@@ -3293,19 +3293,18 @@ def gerar_ata_registro_precos_pdf(request, pregao_id):
 # EXTRATO DE CONTRATO - UM DOCUMENTO POR CERTAME
 # ============================================================
 
+
 def caminho_modelo_extrato_contrato():
     """
-    Localiza o modelo Word do Extrato de Contrato.
-
-    Aceita o nome padronizado do sistema e também o nome original
-    fornecido pelo usuário.
+    Localiza o novo modelo Word do Extrato dos Contratos do Pregão Presencial.
     """
     pasta_modelos = Path(settings.BASE_DIR) / "templates" / "documentos"
 
     candidatos = [
+        pasta_modelos / "modelo_extrato_contratos_pregao.docx",
         pasta_modelos / "modelo_extrato_contrato.docx",
-        pasta_modelos / "Modelo extrato contrato.docx",
-        pasta_modelos / "MODELO EXTRATO CONTRATO.docx",
+        pasta_modelos / "EXTRATO DOS CONTRATOS pregão.docx",
+        pasta_modelos / "EXTRATO DOS CONTRATOS pregao.docx",
     ]
 
     for caminho in candidatos:
@@ -3313,6 +3312,87 @@ def caminho_modelo_extrato_contrato():
             return caminho
 
     return candidatos[0]
+
+
+
+
+def _remover_realce_documento(documento):
+    """
+    Remove marca-texto/realce dos placeholders do modelo após o preenchimento.
+    O modelo do Despacho usa realce amarelo para identificar campos editáveis,
+    mas o documento final deve sair limpo.
+    """
+    def limpar_paragrafo(paragrafo):
+        for run in paragrafo.runs:
+            run.font.highlight_color = None
+
+    for paragrafo in documento.paragraphs:
+        limpar_paragrafo(paragrafo)
+
+    for tabela in documento.tables:
+        for linha in tabela.rows:
+            for celula in linha.cells:
+                for paragrafo in celula.paragraphs:
+                    limpar_paragrafo(paragrafo)
+
+    for secao in documento.sections:
+        for paragrafo in secao.header.paragraphs:
+            limpar_paragrafo(paragrafo)
+        for paragrafo in secao.footer.paragraphs:
+            limpar_paragrafo(paragrafo)
+
+
+def caminho_modelo_despacho_homologacao_pregao():
+    """
+    Localiza o novo modelo Word do Despacho de Adjudicação e Homologação
+    do Pregão Presencial.
+    """
+    pasta_modelos = Path(settings.BASE_DIR) / "templates" / "documentos"
+
+    candidatos = [
+        pasta_modelos / "modelo_despacho_homologacao_pregao.docx",
+        pasta_modelos / "DESPACHO DE HOMOLOGAÇÃO PREGÃO.docx",
+        pasta_modelos / "DESPACHO DE HOMOLOGACAO PREGAO.docx",
+    ]
+
+    for caminho in candidatos:
+        if caminho.exists():
+            return caminho
+
+    return candidatos[0]
+
+
+def _data_um_ano_depois(data):
+    """
+    Retorna a mesma data no ano seguinte.
+    Trata 29/02 usando 28/02 quando o ano seguinte não for bissexto.
+    """
+    if not data:
+        return None
+
+    try:
+        return data.replace(year=data.year + 1)
+    except ValueError:
+        return data.replace(year=data.year + 1, day=28)
+
+
+def _remover_paragrafos_intervalo(documento, inicio, fim_exclusivo):
+    """
+    Remove parágrafos top-level do documento pelo intervalo de índices atual.
+    Remove de trás para frente para não invalidar os índices.
+    """
+    paragrafos = list(documento.paragraphs)
+
+    for indice in range(fim_exclusivo - 1, inicio - 1, -1):
+        _extrato_remover_paragrafo(paragrafos[indice])
+
+
+def _indice_paragrafo(documento, predicado):
+    for indice, paragrafo in enumerate(documento.paragraphs):
+        if predicado(paragrafo.text or ""):
+            return indice
+
+    return None
 
 
 def _extrato_rotulo_lista(indice):
@@ -3523,46 +3603,72 @@ def _extrato_encontrar_paragrafo(documento, predicado):
     return None
 
 
+
+
 def _extrato_inserir_blocos_escolas(documento, escolas):
-    paragrafo_contratante = _extrato_encontrar_paragrafo(
-        documento,
-        lambda texto: "{{NOME DA ESCOLA}}" in texto,
-    )
-    paragrafo_contratadas = _extrato_encontrar_paragrafo(
-        documento,
-        lambda texto: texto.strip().startswith("Contratadas"),
-    )
-    paragrafo_fornecedor = _extrato_encontrar_paragrafo(
-        documento,
-        lambda texto: (
-            "{{NOME DO FORNECEDOR}}" in texto
-            and "{{VALOR TOTAL CONTRATOS}}" in texto
+    """
+    Substitui todos os blocos-exemplo Contratante/Contratada do novo modelo
+    por um bloco real para cada escola com contratos vigentes.
+    """
+    paragrafos_originais = list(documento.paragraphs)
+
+    indice_inicio = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos_originais)
+            if "{{NOME DA ESCOLA}}" in (paragrafo.text or "")
         ),
+        None,
+    )
+    indice_fim = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos_originais)
+            if (paragrafo.text or "").strip().startswith(
+                "IDENTIFICAÇÃO DOS FORNECEDORES"
+            )
+        ),
+        None,
     )
 
-    if not paragrafo_contratante or not paragrafo_contratadas or not paragrafo_fornecedor:
+    if indice_inicio is None or indice_fim is None or indice_inicio >= indice_fim:
         raise ValueError(
-            "O modelo do Extrato de Contrato não possui o bloco-base "
-            "Contratante/Contratadas esperado."
+            "O novo modelo do Extrato de Contratos não possui o bloco-base "
+            "Contratante/Contratada esperado."
         )
 
-    paragrafos_atuais = documento.paragraphs
-    indice_fornecedor = next(
-        indice
-        for indice, paragrafo in enumerate(paragrafos_atuais)
-        if paragrafo._p is paragrafo_fornecedor._p
+    bloco_modelo = paragrafos_originais[indice_inicio:indice_fim]
+    paragrafo_contratante = bloco_modelo[0]
+
+    paragrafo_contratada = next(
+        (
+            paragrafo
+            for paragrafo in bloco_modelo
+            if (paragrafo.text or "").strip().startswith("Contratada")
+        ),
+        None,
+    )
+    paragrafo_fornecedor = next(
+        (
+            paragrafo
+            for paragrafo in bloco_modelo
+            if (
+                "{{NOME DO FORNECEDOR}}" in (paragrafo.text or "")
+                and "{{VALOR TOTAL CONTRATOS}}" in (paragrafo.text or "")
+            )
+        ),
+        None,
     )
 
-    paragrafo_espaco = (
-        paragrafos_atuais[indice_fornecedor + 1]
-        if indice_fornecedor + 1 < len(paragrafos_atuais)
-        else None
-    )
+    if paragrafo_contratada is None or paragrafo_fornecedor is None:
+        raise ValueError(
+            "O novo modelo do Extrato de Contratos não possui as linhas-base "
+            "de Contratada/Fornecedor esperadas."
+        )
 
     modelo_contratante = deepcopy(paragrafo_contratante._p)
-    modelo_contratadas = deepcopy(paragrafo_contratadas._p)
+    modelo_contratada = deepcopy(paragrafo_contratada._p)
     modelo_fornecedor = deepcopy(paragrafo_fornecedor._p)
-    modelo_espaco = deepcopy(paragrafo_espaco._p) if paragrafo_espaco else None
 
     ancora = paragrafo_contratante._p
 
@@ -3571,94 +3677,107 @@ def _extrato_inserir_blocos_escolas(documento, escolas):
 
         elemento = deepcopy(modelo_contratante)
         ancora.addprevious(elemento)
-        novo_paragrafo = Paragraph(elemento, paragrafo_contratante._parent)
+        novo_contratante = Paragraph(elemento, paragrafo_contratante._parent)
         substituir_texto_em_paragrafo(
-            novo_paragrafo,
+            novo_contratante,
             {"{{NOME DA ESCOLA}}": escola.nome_escola or ""},
         )
 
-        elemento = deepcopy(modelo_contratadas)
+        elemento = deepcopy(modelo_contratada)
         ancora.addprevious(elemento)
 
-        for indice, item_fornecedor in enumerate(grupo_escola["fornecedores"]):
+        for item_fornecedor in grupo_escola["fornecedores"]:
             fornecedor = item_fornecedor["fornecedor"]
             valor_total = item_fornecedor["valor_total"]
 
             elemento = deepcopy(modelo_fornecedor)
             ancora.addprevious(elemento)
-            novo_paragrafo = Paragraph(elemento, paragrafo_fornecedor._parent)
-
-            # O modelo usa lista automática no exemplo-base. Para que a letra
-            # volte para "a)" em cada escola, a letra é escrita manualmente.
-            _extrato_remover_numeracao_paragrafo(novo_paragrafo)
-
-            novo_paragrafo.text = (
-                f"{_extrato_rotulo_lista(indice)}) "
-                f"{fornecedor.razao_social}, "
-                f"{formatar_moeda_br(valor_total)};"
+            novo_fornecedor = Paragraph(
+                elemento,
+                paragrafo_fornecedor._parent,
+            )
+            _extrato_remover_numeracao_paragrafo(novo_fornecedor)
+            novo_fornecedor.text = (
+                f"{fornecedor.razao_social}. Valor contratado: "
+                f"{formatar_moeda_br(valor_total)}."
             )
 
-            for run in novo_paragrafo.runs:
-                run.font.size = Pt(12)
+        ancora.addprevious(OxmlElement("w:p"))
 
-        if modelo_espaco is not None:
-            ancora.addprevious(deepcopy(modelo_espaco))
+    # Remove exatamente os parágrafos originais usados como exemplos.
+    for paragrafo in bloco_modelo:
+        _extrato_remover_paragrafo(paragrafo)
 
-    _extrato_remover_paragrafo(paragrafo_contratante)
-    _extrato_remover_paragrafo(paragrafo_contratadas)
-    _extrato_remover_paragrafo(paragrafo_fornecedor)
-
-    if paragrafo_espaco is not None:
-        _extrato_remover_paragrafo(paragrafo_espaco)
 
 
 def _extrato_inserir_fornecedores_consolidados(documento, fornecedores):
-    paragrafo_modelo = _extrato_encontrar_paragrafo(
-        documento,
-        lambda texto: "{{VALOR TOTAL DO FORNECEDOR}}" in texto,
+    """
+    Preenche a seção IDENTIFICAÇÃO DOS FORNECEDORES E VALORES CONTRATADOS
+    do novo modelo, removendo todas as linhas de exemplo.
+    """
+    paragrafos = list(documento.paragraphs)
+    indice_titulo = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos)
+            if (paragrafo.text or "").strip().startswith(
+                "IDENTIFICAÇÃO DOS FORNECEDORES"
+            )
+        ),
+        None,
+    )
+    indice_total = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos)
+            if (paragrafo.text or "").strip().startswith(
+                "VALOR TOTAL DOS CONTRATOS"
+            )
+        ),
+        None,
     )
 
-    if not paragrafo_modelo:
+    if indice_titulo is None or indice_total is None or indice_titulo >= indice_total:
         raise ValueError(
-            "O modelo do Extrato de Contrato não possui a linha-base "
+            "O novo modelo do Extrato de Contratos não possui a seção "
+            "de identificação dos fornecedores esperada."
+        )
+
+    candidatos = [
+        paragrafo
+        for paragrafo in paragrafos[indice_titulo + 1:indice_total]
+        if "{{NOME DO FORNECEDOR}}" in (paragrafo.text or "")
+    ]
+
+    if not candidatos:
+        raise ValueError(
+            "O novo modelo do Extrato de Contratos não possui a linha-base "
             "da relação consolidada de fornecedores."
         )
 
+    paragrafo_modelo = candidatos[0]
     modelo_xml = deepcopy(paragrafo_modelo._p)
     ancora = paragrafo_modelo._p
 
-    for indice, item_fornecedor in enumerate(fornecedores):
+    for indice, item_fornecedor in enumerate(fornecedores, start=1):
         fornecedor = item_fornecedor["fornecedor"]
         valor_total = item_fornecedor["valor_total"]
 
         elemento = deepcopy(modelo_xml)
         ancora.addprevious(elemento)
-
         paragrafo = Paragraph(elemento, paragrafo_modelo._parent)
-        paragrafo.text = ""
+        _extrato_remover_numeracao_paragrafo(paragrafo)
 
-        run = paragrafo.add_run(
-            f"{_extrato_rotulo_lista(indice)}) Fornecedor – "
-            f"{fornecedor.razao_social}"
+        paragrafo.text = (
+            f"{indice}. {fornecedor.razao_social} – CNPJ nº "
+            f"{_extrato_documento_fornecedor(fornecedor)} – "
+            f"Valor contratado: {formatar_moeda_br(valor_total)} "
+            f"({valor_por_extenso(valor_total)})."
         )
-        run.bold = True
-        run.font.size = Pt(13)
 
-        run = paragrafo.add_run(
-            f", CNPJ: {_extrato_documento_fornecedor(fornecedor)}, Valor Total "
-        )
-        run.font.size = Pt(13)
+    for paragrafo in candidatos:
+        _extrato_remover_paragrafo(paragrafo)
 
-        run = paragrafo.add_run(formatar_moeda_br(valor_total))
-        run.bold = True
-        run.font.size = Pt(13)
-
-        run = paragrafo.add_run(
-            f" ({valor_por_extenso(valor_total)})."
-        )
-        run.font.size = Pt(13)
-
-    _extrato_remover_paragrafo(paragrafo_modelo)
 
 
 def montar_extrato_contrato_word(pregao):
@@ -3666,22 +3785,19 @@ def montar_extrato_contrato_word(pregao):
 
     if not caminho_modelo.exists():
         raise FileNotFoundError(
-            "Modelo do Extrato de Contrato não encontrado. "
+            "Modelo do Extrato dos Contratos do Pregão não encontrado. "
             f"Salve o arquivo em {caminho_modelo}."
         )
 
-    # Também valida a existência de pelo menos um município vinculado.
     _extrato_municipios_certame(pregao)
     dados = _extrato_agrupar_dados(pregao)
 
     nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
-    rg_ordenador = (pregao.rg_ordenador_despesas or "").strip()
-    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
 
-    if not nome_ordenador or not rg_ordenador or not cpf_ordenador:
+    if not nome_ordenador:
         raise ValueError(
-            "Cadastre Nome, RG e CPF do Ordenador de Despesas neste certame "
-            "antes de gerar o Extrato de Contrato."
+            "Cadastre o Nome do Ordenador de Despesas neste certame "
+            "antes de gerar o Extrato dos Contratos."
         )
 
     documento = Document(caminho_modelo)
@@ -3695,28 +3811,35 @@ def montar_extrato_contrato_word(pregao):
         dados["fornecedores"],
     )
 
+    data_atual = timezone.localdate()
+
     substituicoes = {
         "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
         "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
-        "{{ABRANGÊNCIA MUNICÍPIOS}}": _extrato_abrangencia_municipios_certame(pregao),
+        "{{MUNICÍPIOS DO PREGÃO}}": _extrato_texto_municipios_certame(pregao),
         "{{VALOR TOTAL CONTRATOS}}": _extrato_valor_sem_cifrao(
             dados["valor_total_geral"]
         ),
+        "{{VALOR TOTAL CONTRATOS POR EXTENSO}}":
+            valor_por_extenso(dados["valor_total_geral"]),
+        "{{data atual por extenso}}": data_por_extenso(data_atual),
         "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
-        "{{RG ORDENADOR DESPESAS}}": rg_ordenador,
-        "{{CPF ORDENADOR DESPESAS}}": cpf_ordenador,
     }
 
     substituir_placeholders_documento(documento, substituicoes)
 
-    placeholders_pendentes = encontrar_placeholders_pendentes_documento(documento)
+    placeholders_pendentes = encontrar_placeholders_pendentes_documento(
+        documento
+    )
 
     if placeholders_pendentes:
         raise ValueError(
-            "O Extrato de Contrato ainda possui campos não preenchidos: "
+            "O Extrato dos Contratos ainda possui campos não preenchidos: "
             + ", ".join(placeholders_pendentes)
             + "."
         )
+
+    _remover_realce_documento(documento)
 
     return documento
 
@@ -3783,20 +3906,154 @@ def gerar_extrato_contrato_pdf(request, pregao_id, municipio_id=None):
         return redirect("documentos:pregoes_finalizados")
 
 
+
+# ============================================================
+# DESPACHO DE ADJUDICAÇÃO E HOMOLOGAÇÃO - PREGÃO PRESENCIAL
+# ============================================================
+
+def montar_despacho_homologacao_pregao_word(pregao):
+    caminho_modelo = caminho_modelo_despacho_homologacao_pregao()
+
+    if not caminho_modelo.exists():
+        raise FileNotFoundError(
+            "Modelo do Despacho de Homologação do Pregão não encontrado. "
+            f"Salve o arquivo em {caminho_modelo}."
+        )
+
+    numero_processo = (getattr(pregao, "numero_processo", "") or "").strip()
+    nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
+    cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
+
+    if not numero_processo:
+        raise ValueError(
+            "Cadastre o Número do Processo neste certame antes de gerar "
+            "o Despacho de Homologação."
+        )
+
+    if not nome_ordenador or not cpf_ordenador:
+        raise ValueError(
+            "Cadastre Nome e CPF do Ordenador de Despesas neste certame "
+            "antes de gerar o Despacho de Homologação."
+        )
+
+    documento = Document(caminho_modelo)
+    data_atual = timezone.localdate()
+
+    substituicoes = {
+        "[número do certame]": str(pregao.numero or ""),
+        "[ano do certame]": str(pregao.ano or ""),
+        "[Número do processo]": numero_processo,
+        "[Municípios do Certame]": _extrato_texto_municipios_certame(pregao),
+        "[data atual por extenso]": data_por_extenso(data_atual),
+        "[Ordenador de Despesas]": nome_ordenador,
+        "[CPF do Ordenador]": cpf_ordenador,
+    }
+
+    substituir_placeholders_documento(documento, substituicoes)
+
+    # Validação dos marcadores em colchetes próprios deste modelo.
+    pendentes = set()
+    padrao = re.compile(
+        r"\[(?:número do certame|ano do certame|Número do processo|"
+        r"Municípios do Certame|data atual por extenso|"
+        r"Ordenador de Despesas|CPF do Ordenador)\]"
+    )
+
+    for paragrafo in documento.paragraphs:
+        pendentes.update(padrao.findall(paragrafo.text or ""))
+
+    if pendentes:
+        raise ValueError(
+            "O Despacho de Homologação ainda possui campos não preenchidos: "
+            + ", ".join(sorted(pendentes))
+            + "."
+        )
+
+    _remover_realce_documento(documento)
+
+    return documento
+
+
+def _despacho_homologacao_pregao_nome_base(pregao):
+    return (
+        f"Despacho_Adjudicacao_Homologacao_Pregao_"
+        f"{pregao.numero}_{pregao.ano}"
+    )
+
+
+def gerar_despacho_homologacao_pregao_word(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_despacho_homologacao_pregao_word(pregao)
+        return resposta_download_docx(
+            documento,
+            _despacho_homologacao_pregao_nome_base(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Despacho de Homologação Word - pregão %s",
+            pregao_id,
+        )
+        messages.error(
+            request,
+            f"Não foi possível gerar o Despacho de Homologação em Word: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
+def gerar_despacho_homologacao_pregao_pdf(request, pregao_id):
+    pregao = get_object_or_404(
+        Pregao,
+        id=pregao_id,
+        status=Pregao.STATUS_FINALIZADO,
+        tipo_certame=Pregao.TIPO_PREGAO_PRESENCIAL,
+    )
+
+    if not usuario_pode_acessar_pregao_documentos(request, pregao):
+        return redirect("documentos:pregoes_finalizados")
+
+    try:
+        documento = montar_despacho_homologacao_pregao_word(pregao)
+        return resposta_download_pdf(
+            documento,
+            _despacho_homologacao_pregao_nome_base(pregao),
+        )
+    except Exception as erro:
+        logger.exception(
+            "Erro ao gerar Despacho de Homologação PDF - pregão %s",
+            pregao_id,
+        )
+        messages.error(
+            request,
+            f"Não foi possível gerar o Despacho de Homologação em PDF: {erro}",
+        )
+        return redirect("documentos:pregoes_finalizados")
+
+
 # ============================================================
 # EXTRATO DE HOMOLOGAÇÃO - UM DOCUMENTO POR CERTAME
 # ============================================================
 
+
 def caminho_modelo_extrato_homologacao():
     """
-    Localiza o modelo Word do Extrato de Homologação do Pregão.
+    Localiza o novo modelo Word do Extrato de Homologação do Pregão Presencial.
     """
     pasta_modelos = Path(settings.BASE_DIR) / "templates" / "documentos"
 
     candidatos = [
         pasta_modelos / "modelo_extrato_homologacao_pregao.docx",
-        pasta_modelos / "Modelo Extrato Homologação do Pregão.docx",
-        pasta_modelos / "Modelo Extrato Homologacao do Pregao.docx",
+        pasta_modelos / "EXTRATO DE HOMOLOGAÇÃO DO PREGÃO PRESENCIAL.docx",
+        pasta_modelos / "EXTRATO DE HOMOLOGACAO DO PREGAO PRESENCIAL.docx",
     ]
 
     for caminho in candidatos:
@@ -3997,18 +4254,56 @@ def _homologacao_lista_resumida_fornecedores(fornecedores):
     return "; ".join(partes)
 
 
-def _homologacao_inserir_fornecedores_detalhados(documento, fornecedores):
-    paragrafo_modelo = _extrato_encontrar_paragrafo(
-        documento,
-        lambda texto: "{{VALOR TOTAL DO FORNECEDOR}}" in texto,
+
+def _homologacao_inserir_fornecedores_resumidos(documento, fornecedores):
+    """
+    Preenche o bloco FORNECEDORES HOMOLOGADOS E VALORES do novo modelo.
+    """
+    paragrafos = list(documento.paragraphs)
+
+    indice_titulo = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos)
+            if (paragrafo.text or "").strip().startswith(
+                "FORNECEDORES HOMOLOGADOS E VALORES"
+            )
+        ),
+        None,
+    )
+    indice_fim = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos)
+            if (paragrafo.text or "").strip().startswith(
+                "EXTRATO DA ATA DE REGISTRO DE PREÇOS"
+            )
+        ),
+        None,
     )
 
-    if not paragrafo_modelo:
+    if indice_titulo is None or indice_fim is None or indice_titulo >= indice_fim:
         raise ValueError(
-            "O modelo do Extrato de Homologação não possui a linha-base "
-            "da relação detalhada de fornecedores."
+            "O novo modelo do Extrato de Homologação não possui o bloco "
+            "FORNECEDORES HOMOLOGADOS E VALORES esperado."
         )
 
+    candidatos = [
+        paragrafo
+        for paragrafo in paragrafos[indice_titulo + 1:indice_fim]
+        if (
+            "{{NOME DO FORNECEDOR}}" in (paragrafo.text or "")
+            and "{{VALOR TOTAL DO FORNECEDOR}}" in (paragrafo.text or "")
+        )
+    ]
+
+    if not candidatos:
+        raise ValueError(
+            "O novo modelo do Extrato de Homologação não possui a linha-base "
+            "dos fornecedores homologados."
+        )
+
+    paragrafo_modelo = candidatos[0]
     modelo_xml = deepcopy(paragrafo_modelo._p)
     ancora = paragrafo_modelo._p
 
@@ -4018,46 +4313,80 @@ def _homologacao_inserir_fornecedores_detalhados(documento, fornecedores):
 
         elemento = deepcopy(modelo_xml)
         ancora.addprevious(elemento)
-
         paragrafo = Paragraph(elemento, paragrafo_modelo._parent)
         _extrato_remover_numeracao_paragrafo(paragrafo)
-
-        # Limpa apenas o conteúdo; o XML do parágrafo mantém alinhamento,
-        # recuos, espaçamento e demais propriedades do modelo.
-        for run in paragrafo.runs:
-            run.text = ""
-
-        if not paragrafo.runs:
-            paragrafo.add_run()
-
-        run = paragrafo.runs[0]
-        run.text = (
-            f"{_extrato_rotulo_lista(indice)}) Fornecedor – "
+        paragrafo.text = (
+            f"{_extrato_rotulo_lista(indice)}) "
+            f"{fornecedor.razao_social} – "
+            f"{formatar_moeda_br(valor_total)};"
         )
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(10)
-        run.bold = True
 
-        run = paragrafo.add_run(
-            f"{fornecedor.razao_social}, "
-            f"CNPJ: {_extrato_documento_fornecedor(fornecedor)}, "
-            f"Valor Total "
+    for paragrafo in candidatos:
+        _extrato_remover_paragrafo(paragrafo)
+
+
+
+def _homologacao_inserir_fornecedores_detalhados(documento, fornecedores):
+    """
+    Preenche o bloco IDENTIFICAÇÃO COMPLETA DOS FORNECEDORES do novo modelo.
+    """
+    paragrafos = list(documento.paragraphs)
+
+    indice_titulo = next(
+        (
+            indice
+            for indice, paragrafo in enumerate(paragrafos)
+            if (paragrafo.text or "").strip().startswith(
+                "IDENTIFICAÇÃO COMPLETA DOS FORNECEDORES"
+            )
+        ),
+        None,
+    )
+
+    if indice_titulo is None:
+        raise ValueError(
+            "O novo modelo do Extrato de Homologação não possui a seção "
+            "IDENTIFICAÇÃO COMPLETA DOS FORNECEDORES."
         )
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(10)
 
-        run = paragrafo.add_run(formatar_moeda_br(valor_total))
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(10)
-        run.bold = True
-
-        run = paragrafo.add_run(
-            f" ({valor_por_extenso(valor_total)})."
+    candidatos = [
+        paragrafo
+        for paragrafo in paragrafos[indice_titulo + 1:]
+        if (
+            "{{NOME DO FORNECEDOR}}" in (paragrafo.text or "")
+            and "{{CNPJ DO FORNECEDOR}}" in (paragrafo.text or "")
         )
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(10)
+    ]
 
-    _extrato_remover_paragrafo(paragrafo_modelo)
+    if not candidatos:
+        raise ValueError(
+            "O novo modelo do Extrato de Homologação não possui a linha-base "
+            "da identificação completa dos fornecedores."
+        )
+
+    paragrafo_modelo = candidatos[0]
+    modelo_xml = deepcopy(paragrafo_modelo._p)
+    ancora = paragrafo_modelo._p
+
+    for indice, item in enumerate(fornecedores):
+        fornecedor = item["fornecedor"]
+        valor_total = item["valor_total"]
+
+        elemento = deepcopy(modelo_xml)
+        ancora.addprevious(elemento)
+        paragrafo = Paragraph(elemento, paragrafo_modelo._parent)
+        _extrato_remover_numeracao_paragrafo(paragrafo)
+        paragrafo.text = (
+            f"{_extrato_rotulo_lista(indice)}) "
+            f"{fornecedor.razao_social}, CNPJ nº "
+            f"{_extrato_documento_fornecedor(fornecedor)}, "
+            f"valor registrado de {formatar_moeda_br(valor_total)} "
+            f"({valor_por_extenso(valor_total)});"
+        )
+
+    for paragrafo in candidatos:
+        _extrato_remover_paragrafo(paragrafo)
+
 
 
 def montar_extrato_homologacao_word(pregao):
@@ -4065,18 +4394,22 @@ def montar_extrato_homologacao_word(pregao):
 
     if not caminho_modelo.exists():
         raise FileNotFoundError(
-            "Modelo do Extrato de Homologação não encontrado. "
+            "Modelo do Extrato de Homologação do Pregão não encontrado. "
             f"Salve o arquivo em {caminho_modelo}."
         )
 
     nome_ordenador = (pregao.nome_ordenador_despesas or "").strip()
-    rg_ordenador = (pregao.rg_ordenador_despesas or "").strip()
     cpf_ordenador = (pregao.cpf_ordenador_despesas or "").strip()
 
-    if not nome_ordenador or not rg_ordenador or not cpf_ordenador:
+    if not nome_ordenador or not cpf_ordenador:
         raise ValueError(
-            "Cadastre Nome, RG e CPF do Ordenador de Despesas neste certame "
+            "Cadastre Nome e CPF do Ordenador de Despesas neste certame "
             "antes de gerar o Extrato de Homologação."
+        )
+
+    if not pregao.data_pregao:
+        raise ValueError(
+            "Cadastre a Data do Pregão antes de gerar o Extrato de Homologação."
         )
 
     dados = _homologacao_dados_certame(pregao)
@@ -4086,70 +4419,55 @@ def montar_extrato_homologacao_word(pregao):
 
     documento = Document(caminho_modelo)
 
-    if not documento.paragraphs:
-        raise ValueError(
-            "O modelo do Extrato de Homologação está vazio."
-        )
-
-    # O primeiro parágrafo possui vários estilos em runs. Fazemos as
-    # substituições nele sem reconstruí-lo para preservar a formatação.
-    paragrafo_abertura = documento.paragraphs[0]
-
-    lista_resumida = _homologacao_lista_resumida_fornecedores(
-        fornecedores
+    _homologacao_inserir_fornecedores_resumidos(
+        documento,
+        fornecedores,
     )
-
-    quantidade_municipios = pregao.municipios.count()
-    trecho_municipios = (
-        f"do Município {texto_municipios}"
-        if quantidade_municipios == 1
-        else f"dos Municípios {texto_municipios}"
-    )
-
-    substituicoes_abertura = {
-        "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
-        "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
-        "do Município {{NOME DO MUNICÍPIO}}/{{ESTADO DO MUNICÍPIO}}":
-            trecho_municipios,
-        "a) {{NOME DO FORNECEDOR}}, R$ {{VALOR TOTAL ADJUDICADO}};":
-            lista_resumida,
-        "{{VALOR TOTAL CONSOLIDADO}}":
-            _extrato_valor_sem_cifrao(valor_total),
-        "{{DATA DO PREGÃO POR EXTENSO}}":
-            data_por_extenso(pregao.data_pregao) if pregao.data_pregao else "",
-        "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
-        "SINOP/MT/2025": f"SINOP/MT/{pregao.ano}",
-    }
-
-    for chave, valor in substituicoes_abertura.items():
-        _homologacao_substituir_preservando_runs(
-            paragrafo_abertura,
-            chave,
-            valor,
-        )
-
     _homologacao_inserir_fornecedores_detalhados(
         documento,
         fornecedores,
     )
 
-    # Demais marcadores, fora do parágrafo de abertura.
-    substituicoes_restantes = {
+    data_certame = pregao.data_pregao
+    data_fim_vigencia = _data_um_ano_depois(data_certame)
+    data_atual = timezone.localdate()
+
+    # Corrige a ausência de espaço do próprio modelo em dois pontos,
+    # preservando o texto oficial fornecido.
+    substituicoes = {
         "{{NUMERO DO PREGÃO}}": str(pregao.numero or ""),
         "{{ANO DO PREGÃO}}": str(pregao.ano or ""),
-        "{{VALOR TOTAL FORNECEDORES}}":
-            _extrato_valor_sem_cifrao(valor_total),
-        "{{DATA DO PREGÃO POR EXTENSO}}":
-            data_por_extenso(pregao.data_pregao) if pregao.data_pregao else "",
+        "{{MUNICÍPIOS DO PREGÃO}}": texto_municipios,
+        "{{DATA DO CERTAME}}": data_certame.strftime("%d/%m/%Y"),
+        "{{DOZE MESES APÓS A DATA DO CERTAME}}":
+            data_fim_vigencia.strftime("%d/%m/%Y") + " ",
+        "{{VALOR TOTAL DO PREGÃO}}": _extrato_valor_sem_cifrao(
+            valor_total
+        ),
+        "{{VALOR TOTAL DO PREGÃO POR EXTENSO}}":
+            valor_por_extenso(valor_total),
+        "{{data atual por extenso}}": data_por_extenso(data_atual),
         "{{NOME ORDENADOR DESPESAS}}": nome_ordenador,
-        "{{RG ORDENADOR DESPESAS}}": rg_ordenador,
         "{{CPF ORDENADOR DESPESAS}}": cpf_ordenador,
     }
 
     substituir_placeholders_documento(
         documento,
-        substituicoes_restantes,
+        substituicoes,
     )
+
+    # O modelo contém "assinada em{{DATA...}}" sem espaço.
+    for paragrafo in documento.paragraphs:
+        if "foi assinada em" in (paragrafo.text or ""):
+            texto = paragrafo.text.replace(
+                "assinada em" + data_certame.strftime("%d/%m/%Y"),
+                "assinada em " + data_certame.strftime("%d/%m/%Y"),
+            )
+            if texto != paragrafo.text:
+                substituir_texto_em_paragrafo(
+                    paragrafo,
+                    {paragrafo.text: texto},
+                )
 
     placeholders_pendentes = encontrar_placeholders_pendentes_documento(
         documento
@@ -4161,6 +4479,8 @@ def montar_extrato_homologacao_word(pregao):
             + ", ".join(placeholders_pendentes)
             + "."
         )
+
+    _remover_realce_documento(documento)
 
     return documento
 

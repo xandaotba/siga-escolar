@@ -527,6 +527,26 @@
                                     {% if pregao.tipo_certame == "pregao_presencial" %}
                                     <div class="documentos-submenu">
                                         <span class="documentos-submenu-trigger documentos-item-destaque">
+                                            Despacho de Homologação
+                                        </span>
+
+                                        <div class="documentos-submenu-painel">
+                                            <div class="documentos-submenu-caixa">
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:despacho_homologacao_pregao_word' pregao.id %}">
+                                                    Baixar em Word
+                                                </a>
+
+                                                <a class="documentos-item"
+                                                    href="{% url 'documentos:despacho_homologacao_pregao_pdf' pregao.id %}">
+                                                    Baixar em PDF
+                                                </a>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="documentos-submenu">
+                                        <span class="documentos-submenu-trigger documentos-item-destaque">
                                             Extrato de Homologação
                                         </span>
 
