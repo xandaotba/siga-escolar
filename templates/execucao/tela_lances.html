@@ -964,7 +964,7 @@
             <p>{{ alerta_acima_media.alerta_percentual.mensagem }}
                 (Alerta percentual: {{ alerta_acima_media.alerta_percentual.percentual|percentual_br }}%).</p>
             {% endif %}
-            
+         
         </div>
         <div class="alerta-media-lance-footer">
             <a class="btn btn-secondary" href="{% url 'execucao:tela_lances' pregao.id item_atual.id %}">Voltar à disputa</a>
@@ -1239,6 +1239,17 @@
 
                             {% if fornecedor.id in fornecedores_desistentes_ids %}
                             <span class="badge badge-danger">Desistiu</span>
+                            {% if pode_editar_lances_execucao and pregao.status == "em_andamento" %}
+                            <form method="post" action="{% url 'execucao:tela_lances' pregao.id item_atual.id %}" style="margin-top: 10px;"
+                                  onsubmit="return confirm('Cancelar a desistência de {{ fornecedor.razao_social|escapejs }} e reintegrar o fornecedor à disputa deste item?');">
+                                {% csrf_token %}
+                                <input type="hidden" name="acao" value="cancelar_desistencia">
+                                <input type="hidden" name="fornecedor_id" value="{{ fornecedor.id }}">
+                                <button class="btn btn-primary" type="submit" style="font-size: 12px; padding: 7px 10px;">
+                                    Cancelar Desistência
+                                </button>
+                            </form>
+                            {% endif %}
                             {% elif fornecedor_atual and fornecedor.id == fornecedor_atual.id %}
                             <span class="badge badge-success">Fornecedor atual</span>
                             {% elif proximo_fornecedor and fornecedor.id == proximo_fornecedor.id %}

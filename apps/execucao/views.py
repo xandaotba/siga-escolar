@@ -304,6 +304,11 @@ def tela_lances(request, pregao_id, item_id):
     pregao = get_object_or_404(Pregao, id=pregao_id)
     item_atual = get_object_or_404(PregaoItem, id=item_id, pregao=pregao)
 
+    # Processa o cancelamento antes de qualquer alteração automática de status
+    # ou de fornecedor atual ao abrir a tela de lances.
+    if request.method == "POST" and request.POST.get("acao") == "cancelar_desistencia":
+        return cancelar_desistencia_fornecedor(request, pregao, item_atual)
+
     # Ao navegar diretamente para um item ainda pendente, ele passa
     # automaticamente a ficar disponível para disputa.
     # Isso permite pular itens, disputar fornecedores específicos e
@@ -830,6 +835,59 @@ def registrar_desistencia_fornecedor_atual(request, pregao, item_atual):
 
     messages.success(request, f"Desistência registrada para {nome_fornecedor}.")
     return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+
+@transaction.atomic
+def cancelar_desistencia_fornecedor(request, pregao, item_atual):
+    """Reintegra um desistente ao item sem apagar lances nem reiniciar a rodada."""
+    destino = {"pregao_id": pregao.id, "item_id": item_atual.id}
+    if request.method != "POST" or not request.user.is_authenticated:
+        messages.error(request, "Operação não autorizada.")
+        return redirect("execucao:tela_lances", **destino)
+
+    # Confere o estado persistido do certame e do item antes de modificar dados.
+    pregao = get_object_or_404(Pregao.objects.select_for_update(), id=pregao.id)
+    item_atual = get_object_or_404(
+        PregaoItem.objects.select_for_update(), id=item_atual.id, pregao=pregao,
+    )
+    if (
+        pregao.tipo_certame != Pregao.TIPO_PREGAO_PRESENCIAL
+        or pregao.status != Pregao.STATUS_EM_ANDAMENTO
+        or item_atual.status != PregaoItem.STATUS_EM_DISPUTA
+    ):
+        messages.error(request, "Só é possível cancelar desistências de itens em disputa de um pregão em andamento.")
+        return redirect("execucao:tela_lances", **destino)
+
+    fornecedor_id = request.POST.get("fornecedor_id", "")
+    # A lista de participantes inclui desistentes, mas exclui fornecedores
+    # não vinculados, inativos ou que não participam do item.
+    fornecedor = next(
+        (f for f in fornecedores_participantes_do_item(pregao, item_atual)
+         if str(f.id) == fornecedor_id),
+        None,
+    )
+    if fornecedor is None:
+        messages.error(request, "Fornecedor não participante deste item.")
+        return redirect("execucao:tela_lances", **destino)
+
+    desistencia = DesistenciaItem.objects.filter(
+        pregao=pregao, pregao_item=item_atual, fornecedor=fornecedor,
+    ).first()
+    if desistencia is None:
+        messages.warning(request, "Este fornecedor não possui desistência registrada neste item.")
+        return redirect("execucao:tela_lances", **destino)
+
+    # A existência deste registro é o que exclui o fornecedor da disputa.
+    # Removemos apenas a desistência; propostas e lances permanecem intactos.
+    desistencia.delete()
+
+    ativos = list(fornecedores_ativos_do_item(pregao, item_atual))
+    if not any(f.id == item_atual.fornecedor_atual_id for f in ativos):
+        item_atual.fornecedor_atual = ativos[0] if ativos else None
+        item_atual.save(update_fields=["fornecedor_atual"])
+
+    messages.success(request, f"Desistência cancelada para {fornecedor.razao_social}. O fornecedor voltou à disputa.")
+    return redirect("execucao:tela_lances", **destino)
 
 
 def finalizar_item(request, pregao, item_atual):
