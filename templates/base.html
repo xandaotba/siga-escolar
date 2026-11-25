@@ -786,6 +786,11 @@
                             <span>Quantitativo por Escola</span>
                         </a>
 
+                        <a class="sidebar-link {% if namespace == 'documentos' and url_name == 'relatorios_media_precos_certame' %}active{% endif %}" href="{% url 'documentos:relatorios_media_precos_certame' %}">
+                            <span class="sidebar-icon">💲</span>
+                            <span>Média de Preços por Certame</span>
+                        </a>
+
                         <a class="sidebar-link {% if namespace == 'documentos' and url_name == 'relatorios_saldo_certame' %}active{% endif %}" href="{% url 'documentos:relatorios_saldo_certame' %}">
                             <span class="sidebar-icon">📊</span>
                             <span>Saldo por Certame</span>

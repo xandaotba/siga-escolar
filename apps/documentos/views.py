@@ -15680,6 +15680,237 @@ def relatorios_quantitativo_certame(request):
     )
 
 
+# ============================================================
+# RELATÓRIOS BÁSICOS - MÉDIA DE PREÇOS POR CERTAME
+# ============================================================
+
+def _relatorios_media_formatar_unitario(valor):
+    # Preserva as quatro casas do preço cadastrado quando necessárias.
+    if valor is None:
+        return "Não cadastrada"
+    texto = f"{valor:,.4f}"
+    inteiro, decimal = texto.rsplit(".", 1)
+    decimal = decimal.rstrip("0").ljust(2, "0")
+    return "R$ " + inteiro.replace(",", ".") + "," + decimal
+
+
+def _relatorios_media_dados(request, pregao):
+    from decimal import ROUND_HALF_UP
+
+    # A mesma base do relatório Quantitativo por Certame, sem sincronizar
+    # ou criar PregaoItem durante uma consulta de leitura.
+    restrito = relatorios_usuario_eh_consulta_escola(request)
+    escola = relatorios_escola_vinculada_usuario(request) if restrito else None
+    if restrito:
+        quantitativos = QuantitativoEscola.objects.filter(
+            pregao=pregao, escola=escola, quantidade__gt=0,
+        ) if escola else QuantitativoEscola.objects.none()
+    else:
+        quantitativos = QuantitativoPregao.objects.filter(
+            pregao=pregao, quantidade__gt=0,
+        )
+    quantitativos = list(quantitativos.select_related("item").order_by("item__nome_item", "item_id"))
+    medias = dict(PregaoItem.objects.filter(
+        pregao=pregao, item_id__in=[q.item_id for q in quantitativos],
+    ).values_list("item_id", "media_preco"))
+
+    linhas = []
+    total = Decimal("0.00")
+    sem_media = 0
+    for numero, q in enumerate(quantitativos, 1):
+        media = medias.get(q.item_id)
+        if media is None or media <= 0:
+            media = None
+            valor_total = None
+            sem_media += 1
+        else:
+            valor_total = (q.quantidade * media).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            total += valor_total
+        linhas.append({
+            "numero": numero,
+            "item": q.item,
+            "unidade": relatorios_unidade_item(q.item),
+            "quantidade": q.quantidade,
+            "media": media,
+            "media_texto": _relatorios_media_formatar_unitario(media),
+            "valor_total": valor_total,
+            "valor_total_texto": formatar_moeda_br(valor_total) if valor_total is not None else "—",
+            "sem_media": media is None,
+        })
+    return {
+        "linhas": linhas, "total_itens": len(linhas),
+        "sem_media": sem_media, "com_media": len(linhas) - sem_media,
+        "valor_total": total, "valor_total_texto": formatar_moeda_br(total),
+        "escola_vinculada": escola, "restrito_escola": restrito,
+    }
+
+
+def _relatorios_media_metadados(pregao, dados):
+    return [
+        f"Certame: {pregao.get_tipo_certame_display()} {pregao.numero}/{pregao.ano}",
+        "Municípios: " + (", ".join(m.nome for m in pregao.municipios.all()) or "—"),
+        f"Situação: {pregao.get_status_display()}",
+        "Data da pesquisa de preços: " + (pregao.data_pesquisa_precos.strftime("%d/%m/%Y") if pregao.data_pesquisa_precos else "Não informada"),
+    ] + ([f"Escola: {dados['escola_vinculada'].nome_escola}"] if dados["escola_vinculada"] else [])
+
+
+def _relatorios_media_resumo(dados):
+    rotulo = "Subtotal dos itens com média" if dados["sem_media"] else "Valor total estimado"
+    return [
+        f"Itens: {dados['total_itens']} | Com média: {dados['com_media']} | Sem média: {dados['sem_media']}",
+        f"{rotulo}: {dados['valor_total_texto']}",
+        "Valores totais calculados por item e arredondados a centavos. Itens sem média não compõem a soma.",
+    ]
+
+
+def _relatorios_media_exportar_excel(pregao, dados, nome_base):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Média de Preços"
+    ws.append(["MÉDIA DE PREÇOS POR CERTAME"])
+    ws.merge_cells("A1:F1")
+    ws["A1"].font = Font(bold=True, size=15, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="17365D")
+    ws.row_dimensions[1].height = 25
+    for texto in _relatorios_media_metadados(pregao, dados):
+        ws.append([texto])
+        n = ws.max_row
+        ws.merge_cells(start_row=n, start_column=1, end_row=n, end_column=6)
+        ws.cell(n, 1).data_type = "s"
+    ws.append(["Nº", "Gênero Alimentício", "Unidade", "Quantidade", "Média de Preço", "Valor Total"])
+    cabecalho = ws.max_row
+    for cell in ws[cabecalho]:
+        cell.fill = PatternFill("solid", fgColor="DCE8F5")
+        cell.font = Font(bold=True, color="17365D")
+    for linha in dados["linhas"]:
+        ws.append([linha["numero"], str(linha["item"].nome_item), str(linha["unidade"]), linha["quantidade"], linha["media"] if not linha["sem_media"] else "Não cadastrada", linha["valor_total"]])
+        n = ws.max_row
+        # Texto cadastral é texto literal, nunca fórmula de planilha.
+        ws.cell(n, 2).data_type = "s"
+        ws.cell(n, 3).data_type = "s"
+        ws.cell(n, 2).alignment = Alignment(wrap_text=True, vertical="center")
+        ws.cell(n, 4).number_format = '#,##0.###'
+        if linha["sem_media"]:
+            ws.cell(n, 5).fill = PatternFill("solid", fgColor="FFF2CC")
+            ws.cell(n, 5).font = Font(color="9C5700")
+        else:
+            ws.cell(n, 5).number_format = '"R$ "#,##0.00##'
+        ws.cell(n, 6).number_format = '"R$ "#,##0.00'
+    ultima_linha = ws.max_row
+    ws.auto_filter.ref = f"A{cabecalho}:F{ultima_linha}"
+    ws.freeze_panes = f"C{cabecalho + 1}"
+    ws.append([None, "Subtotal dos itens com média" if dados["sem_media"] else "Valor total estimado", None, None, None, dados["valor_total"]])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="DCE8F5")
+    ws.cell(ws.max_row, 6).number_format = '"R$ "#,##0.00'
+    for texto in _relatorios_media_resumo(dados)[::2]:
+        ws.append([texto])
+        n = ws.max_row
+        ws.merge_cells(start_row=n, start_column=1, end_row=n, end_column=6)
+        ws.cell(n, 1).alignment = Alignment(wrap_text=True)
+        ws.row_dimensions[n].height = 30
+    for i, largura in enumerate([8, 58, 22, 18, 22, 22], 1):
+        ws.column_dimensions[get_column_letter(i)].width = largura
+    ws.sheet_view.showGridLines = False
+    arquivo = BytesIO()
+    wb.save(arquivo)
+    response = HttpResponse(arquivo.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response["Content-Disposition"] = f'attachment; filename="{limpar_nome_download(nome_base)}.xlsx"'
+    return response
+
+
+def _relatorios_media_exportar_pdf(pregao, dados, nome_base):
+    documento = Document()
+    secao = documento.sections[0]
+    secao.orientation = WD_ORIENT.LANDSCAPE
+    secao.page_width, secao.page_height = Cm(29.7), Cm(21)
+    secao.left_margin = secao.right_margin = Cm(1.5)
+    secao.top_margin = secao.bottom_margin = Cm(1.5)
+    normal = documento.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10)
+    titulo = documento.add_heading("Média de Preços por Certame", 0)
+    titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for texto in _relatorios_media_metadados(pregao, dados):
+        p = documento.add_paragraph(texto)
+        p.paragraph_format.space_after = Pt(2)
+    tabela = documento.add_table(rows=1, cols=6)
+    tabela.style = "Table Grid"
+    tabela.autofit = False
+    larguras = [1.2, 10.5, 3.3, 3.4, 4.0, 4.3]
+    for coluna, largura in zip(tabela.columns, larguras):
+        coluna.width = Cm(largura)
+    cabecalho = tabela.rows[0]
+    cabecalho._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
+    for i, texto in enumerate(["Nº", "Gênero Alimentício", "Unidade", "Quantidade", "Média de Preço", "Valor Total"]):
+        definir_texto_celula(cabecalho.cells[i], texto, negrito=True, tamanho=9)
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), "DCE8F5")
+        cabecalho.cells[i]._tc.get_or_add_tcPr().append(shading)
+    for linha in dados["linhas"]:
+        row = tabela.add_row()
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        valores = [str(linha["numero"]), linha["item"].nome_item, linha["unidade"], formatar_decimal_br(linha["quantidade"]), linha["media_texto"], linha["valor_total_texto"]]
+        for i, texto in enumerate(valores):
+            definir_texto_celula(row.cells[i], texto, tamanho=9, alinhamento=WD_ALIGN_PARAGRAPH.LEFT if i == 1 else WD_ALIGN_PARAGRAPH.RIGHT if i >= 3 else WD_ALIGN_PARAGRAPH.CENTER)
+    for row in tabela.rows:
+        for celula, largura in zip(row.cells, larguras):
+            celula.width = Cm(largura)
+    if not dados["linhas"]:
+        documento.add_paragraph("Nenhum quantitativo encontrado para este certame.")
+    for i, texto in enumerate(_relatorios_media_resumo(dados)):
+        p = documento.add_paragraph()
+        p.add_run(texto).bold = i == 1
+    return resposta_download_pdf(documento, nome_base)
+
+
+def relatorios_media_precos_certame(request):
+    from django.contrib.auth.views import redirect_to_login
+
+    if not request.user.is_authenticated:
+        return redirect_to_login(request.get_full_path())
+    certames = relatorios_certames_permitidos(request)
+    tipo = request.GET.get("tipo", "")
+    tipos_validos = (Pregao.TIPO_PREGAO_PRESENCIAL, Pregao.TIPO_CHAMADA_PUBLICA)
+    if tipo not in tipos_validos:
+        tipo = ""
+    if tipo:
+        certames = certames.filter(tipo_certame=tipo)
+    pregao_id = request.GET.get("pregao")
+    pregao = None
+    dados = {
+        "linhas": [], "total_itens": 0, "com_media": 0, "sem_media": 0,
+        "valor_total_texto": formatar_moeda_br(Decimal("0")),
+        "restrito_escola": relatorios_usuario_eh_consulta_escola(request),
+        "escola_vinculada": relatorios_escola_vinculada_usuario(request),
+    }
+    if pregao_id:
+        if not pregao_id.isdigit():
+            from django.http import Http404
+            raise Http404("Certame inválido.")
+        pregao = get_object_or_404(certames, id=pregao_id)
+        dados = _relatorios_media_dados(request, pregao)
+        formato = request.GET.get("exportar")
+        if formato in ("excel", "pdf"):
+            nome_base = f"Media_Precos_{pregao.tipo_certame}_{pregao.numero}_{pregao.ano}"
+            try:
+                if formato == "excel":
+                    return _relatorios_media_exportar_excel(pregao, dados, nome_base)
+                return _relatorios_media_exportar_pdf(pregao, dados, nome_base)
+            except Exception:
+                logger.exception("Erro ao exportar médias de preços (%s) do certame %s", formato, pregao.id)
+                messages.error(request, "Não foi possível exportar o relatório. Tente novamente ou utilize a opção Imprimir.")
+                return redirect(f"{reverse('documentos:relatorios_media_precos_certame')}?pregao={pregao.id}&tipo={tipo}")
+    return render(request, "documentos/relatorios_media_precos_certame.html", {
+        "certames": certames, "pregao": pregao, "tipo": tipo, **dados,
+    })
+
+
 def relatorios_quantitativo_escola(request):
     certames = relatorios_certames_permitidos(request)
     pregao_id = request.GET.get("pregao")

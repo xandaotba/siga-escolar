@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% load pregoes_extras %}
+
+{% block title %}Média de Preços por Certame | SIGA Escolar{% endblock %}
+{% block page_title %}Média de Preços por Certame{% endblock %}
+{% block page_subtitle %}Consulte as médias cadastradas e o valor estimado dos itens{% endblock %}
+{% block content %}
+<style>
+    .mp-filtros { display:grid; grid-template-columns:minmax(180px,1fr) minmax(240px,3fr); gap:14px; }
+    .mp-resumo { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:16px 0; }
+    .mp-indicador { border:1px solid #dce4ef; background:#fff; border-radius:12px; padding:15px; }
+    .mp-indicador span { display:block; font-size:12px; color:#64748b; margin-bottom:6px; }
+    .mp-indicador strong { font-size:21px; color:#17365d; overflow-wrap:anywhere; }
+    .mp-pendente { color:#92400e; font-weight:700; }
+    .mp-num { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+    .mp-table tfoot td { font-weight:800; background:#eef4fa; }
+    .mp-info { color:#64748b; font-size:13px; line-height:1.5; margin:6px 0; }
+    .mp-print-title { display:none; }
+    @media(max-width:900px) { .mp-resumo { grid-template-columns:repeat(2,minmax(0,1fr)); } .mp-filtros { grid-template-columns:1fr; } }
+    @media print {
+        @page { size:A4 landscape; margin:10mm; }
+        .sidebar,.topbar,.siga-footer,.footer-space,.no-print { display:none !important; }
+        body,.main,.content,.app { background:#fff !important; color:#000 !important; display:block !important; width:100% !important; margin:0 !important; padding:0 !important; }
+        .mp-print-title { display:block; text-align:center; margin-bottom:12px; }
+        .mp-resumo { grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; }
+        .mp-indicador { padding:8px; border-radius:0; }
+        .mp-indicador strong { font-size:14px; }
+        .card { border:0 !important; box-shadow:none !important; padding:0 !important; break-inside:auto !important; }
+        .table-wrapper { overflow:visible !important; }
+        .mp-table { width:100% !important; border-collapse:collapse; font-size:10px; }
+        .mp-table th,.mp-table td { border:1px solid #777 !important; padding:5px !important; }
+        .mp-table thead { display:table-header-group; }
+        .mp-table tfoot { display:table-row-group; }
+        .mp-table tr { break-inside:avoid; page-break-inside:avoid; }
+        .mp-table th,.mp-table tfoot td { background:#e5e7eb !important; print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+    }
+</style>
+{% if messages %}
+<div class="no-print">
+    {% for message in messages %}<div class="alert {% if message.tags == 'success' %}alert-success{% else %}alert-error{% endif %}">{{ message }}</div>{% endfor %}
+</div>
+{% endif %}
+<div class="card no-print">
+    <h2>Filtros</h2>
+    {% if restrito_escola and escola_vinculada %}<p class="mp-info">Visualização restrita à escola: <strong>{{ escola_vinculada.nome_escola }}</strong>.</p>{% endif %}
+    <form method="get">
+        <div class="mp-filtros">
+            <div class="form-group">
+                <label for="mp-tipo">Tipo de certame</label>
+                <select name="tipo" id="mp-tipo" onchange="document.getElementById('mp-certame').value=''; this.form.submit();">
+                    <option value="" {% if not tipo %}selected{% endif %}>Todos os tipos</option>
+                    <option value="pregao_presencial" {% if tipo == 'pregao_presencial' %}selected{% endif %}>Pregão Presencial</option>
+                    <option value="chamada_publica" {% if tipo == 'chamada_publica' %}selected{% endif %}>Chamada Pública</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="mp-certame">Certame</label>
+                <select name="pregao" id="mp-certame" required>
+                    <option value="">Selecione</option>
+                    {% for certame in certames %}
+                    <option value="{{ certame.id }}" {% if pregao.id == certame.id %}selected{% endif %}>{{ certame.get_tipo_certame_display }} {{ certame.numero }}/{{ certame.ano }} — {% for municipio in certame.municipios.all %}{{ municipio.nome }}{% if not forloop.last %}, {% endif %}{% endfor %} ({{ certame.get_status_display }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Carregar Relatório</button>
+            <a class="btn btn-secondary" href="{% url 'documentos:relatorios_media_precos_certame' %}">Limpar</a>
+        </div>
+    </form>
+</div>
+{% if pregao %}
+<div class="mp-print-title"><h1>Média de Preços por Certame</h1></div>
+<div class="card">
+    <h2>{{ pregao.get_tipo_certame_display }} {{ pregao.numero }}/{{ pregao.ano }}</h2>
+    <p class="mp-info"><strong>Municípios:</strong> {% for municipio in pregao.municipios.all %}{{ municipio.nome }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</p>
+    <p class="mp-info"><strong>Situação:</strong> {{ pregao.get_status_display }} &nbsp; | &nbsp; <strong>Data da pesquisa de preços:</strong> {{ pregao.data_pesquisa_precos|date:"d/m/Y"|default:"Não informada" }}</p>
+    {% if restrito_escola and escola_vinculada %}<p class="mp-info"><strong>Escola:</strong> {{ escola_vinculada.nome_escola }}</p>{% endif %}
+    <div class="actions no-print" style="margin-top:14px; flex-wrap:wrap;">
+        <a class="btn btn-success" href="?tipo={{ tipo }}&amp;pregao={{ pregao.id }}&amp;exportar=excel">📗 Excel</a>
+        <a class="btn btn-secondary" href="?tipo={{ tipo }}&amp;pregao={{ pregao.id }}&amp;exportar=pdf">📄 PDF</a>
+        <button class="btn btn-primary" type="button" onclick="window.print()">🖨️ Imprimir</button>
+    </div>
+    <div class="mp-resumo">
+        <div class="mp-indicador"><span>Itens do relatório</span><strong>{{ total_itens }}</strong></div>
+        <div class="mp-indicador"><span>Com média cadastrada</span><strong>{{ com_media }}</strong></div>
+        <div class="mp-indicador"><span>Sem média cadastrada</span><strong {% if sem_media %}style="color:#92400e"{% endif %}>{{ sem_media }}</strong></div>
+        <div class="mp-indicador"><span>{% if sem_media %}Subtotal dos itens com média{% else %}Valor total estimado{% endif %}</span><strong>{{ valor_total_texto }}</strong></div>
+    </div>
+    {% if sem_media %}<p class="mp-info mp-pendente">Atenção: há itens sem média de preço. O valor apresentado é parcial.</p>{% endif %}
+    <div class="table-wrapper">
+        <table class="mp-table">
+            <thead><tr><th>Nº</th><th>Gênero Alimentício</th><th>Unidade</th><th class="mp-num">Quantidade</th><th class="mp-num">Média de Preço</th><th class="mp-num">Valor Total</th></tr></thead>
+            <tbody>
+                {% for linha in linhas %}
+                <tr>
+                    <td>{{ linha.numero }}</td><td><strong>{{ linha.item.nome_item }}</strong></td><td>{{ linha.unidade }}</td>
+                    <td class="mp-num">{{ linha.quantidade|quantidade_br }}</td>
+                    <td class="mp-num {% if linha.sem_media %}mp-pendente{% endif %}">{{ linha.media_texto }}</td>
+                    <td class="mp-num">{{ linha.valor_total_texto }}</td>
+                </tr>
+                {% empty %}<tr><td colspan="6">Nenhum quantitativo encontrado para este certame.</td></tr>{% endfor %}
+            </tbody>
+            {% if linhas %}<tfoot><tr><td colspan="5" class="mp-num">{% if sem_media %}Subtotal dos itens com média{% else %}Valor total estimado{% endif %}</td><td class="mp-num">{{ valor_total_texto }}</td></tr></tfoot>{% endif %}
+        </table>
+    </div>
+    <p class="mp-info">Os totais são calculados multiplicando a quantidade pela média cadastrada, arredondados a centavos por item. Itens sem média não compõem a soma.</p>
+</div>
+{% endif %}
+{% endblock %}

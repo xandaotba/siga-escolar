@@ -70,6 +70,11 @@ urlpatterns = [
         name="relatorios_quantitativo_escola",
     ),
     path(
+        "relatorios/media-precos-certame/",
+        views.relatorios_media_precos_certame,
+        name="relatorios_media_precos_certame",
+    ),
+    path(
         "relatorios/saldo-certame/",
         views.relatorios_saldo_certame,
         name="relatorios_saldo_certame",
