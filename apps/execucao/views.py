@@ -785,7 +785,8 @@ def registrar_desistencia_fornecedor_atual(request, pregao, item_atual):
         messages.error(request, "Não há fornecedor ativo para desistir neste item.")
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
 
-    if fornecedor not in fornecedores_ativos_do_item(pregao, item_atual):
+    fornecedores_ativos = list(fornecedores_ativos_do_item(pregao, item_atual))
+    if fornecedor not in fornecedores_ativos:
         messages.error(request, "Este fornecedor não participa ou não está ativo para este item.")
         definir_fornecedor_atual_se_necessario(pregao, item_atual)
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
@@ -799,16 +800,33 @@ def registrar_desistencia_fornecedor_atual(request, pregao, item_atual):
         proximo_fornecedor_da_rodada(pregao, item_atual)
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
 
-    DesistenciaItem.objects.create(
-        pregao=pregao,
-        pregao_item=item_atual,
-        fornecedor=fornecedor,
-        registrado_por=request.user if request.user.is_authenticated else None,
-    )
+    # Calcula o próximo antes de excluir o desistente da lista de ativos.
+    # Assim, a posição na rodada não se perde quando o fornecedor desiste.
+    indice_atual = fornecedores_ativos.index(fornecedor)
+    proximo_fornecedor = None
+    nova_rodada = False
+
+    if len(fornecedores_ativos) > 1:
+        proximo_indice = indice_atual + 1
+        if proximo_indice == len(fornecedores_ativos):
+            proximo_indice = 0
+            nova_rodada = True
+        proximo_fornecedor = fornecedores_ativos[proximo_indice]
+
+    # A desistência e a mudança da vez são gravadas juntas.
+    with transaction.atomic():
+        DesistenciaItem.objects.create(
+            pregao=pregao,
+            pregao_item=item_atual,
+            fornecedor=fornecedor,
+            registrado_por=request.user if request.user.is_authenticated else None,
+        )
+        item_atual.fornecedor_atual = proximo_fornecedor
+        if nova_rodada:
+            item_atual.rodada_atual += 1
+        item_atual.save(update_fields=["fornecedor_atual", "rodada_atual"])
 
     nome_fornecedor = fornecedor.razao_social
-
-    proximo_fornecedor_da_rodada(pregao, item_atual)
 
     messages.success(request, f"Desistência registrada para {nome_fornecedor}.")
     return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
