@@ -579,7 +579,8 @@
 }
 
 @media print {
-    .modal-overlay {
+    .modal-overlay,
+    #modalAlertaAcimaMedia {
         display: none !important;
     }
 }
@@ -930,6 +931,62 @@
     </div>
 </div>
 
+
+{% if alerta_acima_media %}
+<div id="modalAlertaAcimaMedia" class="alerta-media-lance-overlay ativo"
+     role="dialog" aria-modal="true" aria-labelledby="tituloAlertaAcimaMedia">
+    <div class="alerta-media-lance-box" style="max-height:90vh;overflow-y:auto;">
+        <div class="alerta-media-lance-header">
+            <h2 id="tituloAlertaAcimaMedia">Atenção: 1º colocado acima da média de preços</h2>
+        </div>
+        <div class="alerta-media-lance-body">
+            <p><strong>{{ item_atual.item.nome_item }}</strong>
+                {% if alerta_acima_media.lance %}<br>
+                Fornecedor: <strong>{{ alerta_acima_media.lance.fornecedor.razao_social }}</strong>
+                {% endif %}
+            </p>
+            <div class="alerta-media-lance-grid">
+                <div class="alerta-media-lance-metrica">
+                    <span>Média de preços cadastrada</span>
+                    <strong>{{ alerta_acima_media.media|moeda_br }}</strong>
+                </div>
+                <div class="alerta-media-lance-metrica">
+                    <span>Valor do primeiro colocado</span>
+                    <strong style="color:#b91c1c;">{{ alerta_acima_media.valor|moeda_br }}</strong>
+                </div>
+                <div class="alerta-media-lance-metrica">
+                    <span>Diferença acima da média</span>
+                    <strong style="color:#b91c1c;">{{ alerta_acima_media.diferenca|moeda_br }}</strong>
+                </div>
+            </div>
+            <p><strong>O valor do primeiro colocado está acima da média cadastrada.</strong> Confira o valor antes de confirmar a finalização do item.</p>
+            {% if alerta_acima_media.alerta_percentual %}
+            <p>{{ alerta_acima_media.alerta_percentual.mensagem }}
+                (Alerta percentual: {{ alerta_acima_media.alerta_percentual.percentual|percentual_br }}%).</p>
+            {% endif %}
+            
+        </div>
+        <div class="alerta-media-lance-footer">
+            <a class="btn btn-secondary" href="{% url 'execucao:tela_lances' pregao.id item_atual.id %}">Voltar à disputa</a>
+            <form method="post" action="{% url 'execucao:tela_lances' pregao.id item_atual.id %}" style="margin:0;">
+                {% csrf_token %}
+                <input type="hidden" name="acao" value="finalizar_item">
+                <input type="hidden" name="confirmar_acima_media" value="sim">
+                <input type="hidden" name="fornecedor_confirmado" value="{{ alerta_acima_media.fornecedor_id }}">
+                <input type="hidden" name="valor_confirmado" value="{{ alerta_acima_media.valor_confirmacao }}">
+                <input type="hidden" name="media_confirmada" value="{{ alerta_acima_media.media_confirmacao }}">
+                <button class="btn btn-danger" type="submit">Confirmar e Finalizar Item</button>
+            </form>
+            {% if alerta_acima_media.lance and exibir_acoes_lance %}
+            <button type="button" class="btn btn-primary"
+                onclick="document.getElementById('modalAlertaAcimaMedia').classList.remove('ativo'); abrirModalEditarLance('{% url 'execucao:alterar_lance_conferencia' pregao.id item_atual.id alerta_acima_media.lance.id %}', '{{ alerta_acima_media.lance.valor_lance|valor_br|escapejs }}', '{{ alerta_acima_media.lance.fornecedor.razao_social|escapejs }}', '{{ alerta_acima_media.lance.ordem_lance }}');">
+                Corrigir Lance
+            </button>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
 
 {% if alerta_media %}
 <div class="card" style="margin-top: 22px; border: 2px solid #dc3545; background: #fef2f2;">

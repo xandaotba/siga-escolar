@@ -81,6 +81,16 @@ def calcular_alerta_media(item_atual, valor_adjudicado):
 
 
 
+def valor_vencedor_acima_da_media(item_atual, valor):
+    """Identifica valor acima da média, independentemente do alerta percentual.
+
+    Compara os valores Decimal na precisão armazenada, sem arredondar.
+    Sem média positiva cadastrada, conserva o comportamento anterior.
+    """
+    media = item_atual.media_preco
+    return media is not None and media > 0 and valor is not None and valor > media
+
+
 def _melhores_valores_fornecedores(pregao, item_atual):
     return list(
         Lance.objects.filter(
@@ -454,9 +464,43 @@ def tela_lances(request, pregao_id, item_id):
         menor_valor_origem = "proposta"
 
     alerta_media = None
+    alerta_acima_media = None
 
-    if request.GET.get("confirmar_media") == "1" and menor_lance_obj:
-        alerta_media = calcular_alerta_media(item_atual, menor_lance_obj.valor_lance)
+    # Usa a mesma classificação da finalização, inclusive em caso de empate.
+    if (
+        pregao.status != Pregao.STATUS_FINALIZADO
+        and item_atual.status == PregaoItem.STATUS_EM_DISPUTA
+        and (
+            request.GET.get("acima_media") == "1"
+            or request.GET.get("confirmar_media") == "1"
+        )
+    ):
+        classificados = _melhores_valores_fornecedores(pregao, item_atual)
+        if classificados:
+            primeiro = classificados[0]
+            valor_vencedor = primeiro["melhor_valor"]
+            alerta_percentual = calcular_alerta_media(item_atual, valor_vencedor)
+            if valor_vencedor_acima_da_media(item_atual, valor_vencedor):
+                lance_vencedor = (
+                    lances.filter(
+                        fornecedor_id=primeiro["fornecedor"],
+                        valor_lance=valor_vencedor,
+                    )
+                    .order_by("ordem_lance", "pk")
+                    .first()
+                )
+                alerta_acima_media = {
+                    "media": item_atual.media_preco,
+                    "valor": valor_vencedor,
+                    "diferenca": valor_vencedor - item_atual.media_preco,
+                    "lance": lance_vencedor,
+                    "alerta_percentual": alerta_percentual,
+                    "fornecedor_id": str(primeiro["fornecedor"]),
+                    "valor_confirmacao": str(valor_vencedor),
+                    "media_confirmacao": str(item_atual.media_preco),
+                }
+            elif request.GET.get("confirmar_media") == "1":
+                alerta_media = alerta_percentual
 
     propostas_pendentes = False
 
@@ -521,6 +565,7 @@ def tela_lances(request, pregao_id, item_id):
             "menor_valor_exibicao": menor_valor_exibicao,
             "menor_valor_origem": menor_valor_origem,
             "alerta_media": alerta_media,
+            "alerta_acima_media": alerta_acima_media,
             "modo_conferencia_alteracao": modo_conferencia_alteracao,
             "beneficio_me_epp_atual": beneficio_me_epp_atual,
             "beneficios_me_epp": beneficios_me_epp,
@@ -770,6 +815,10 @@ def registrar_desistencia_fornecedor_atual(request, pregao, item_atual):
 
 
 def finalizar_item(request, pregao, item_atual):
+    if pregao.status == Pregao.STATUS_FINALIZADO:
+        messages.error(request, "Este pregão já foi finalizado oficialmente.")
+        return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
     if item_atual.status != PregaoItem.STATUS_EM_DISPUTA:
         messages.error(request, "Este item não está em disputa.")
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
@@ -790,9 +839,25 @@ def finalizar_item(request, pregao, item_atual):
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
 
     valor_adjudicado = classificados[0]["melhor_valor"]
+
+    # Acima da média exige confirmação específica, mesmo que a diferença
+    # seja inferior ao percentual de alerta configurado. A confirmação
+    # vale apenas para o fornecedor, valor e média exibidos no aviso.
+    acima_media = valor_vencedor_acima_da_media(item_atual, valor_adjudicado)
+    confirmou_acima_media = (
+        acima_media
+        and request.POST.get("confirmar_acima_media") == "sim"
+        and request.POST.get("fornecedor_confirmado") == str(classificados[0]["fornecedor"])
+        and request.POST.get("valor_confirmado") == str(valor_adjudicado)
+        and request.POST.get("media_confirmada") == str(item_atual.media_preco)
+    )
+    if acima_media and not confirmou_acima_media:
+        return redirect(f"{request.path}?acima_media=1")
+
     alerta_media = calcular_alerta_media(item_atual, valor_adjudicado)
 
-    if alerta_media and request.POST.get("confirmar_media") != "sim":
+    # O novo aviso já apresenta o alerta percentual, quando aplicável.
+    if alerta_media and not confirmou_acima_media and request.POST.get("confirmar_media") != "sim":
         messages.error(
             request,
             f"{alerta_media['mensagem']} Confira os dados e confirme a finalização do item, se desejar prosseguir.",
@@ -887,6 +952,10 @@ def exercer_beneficio_me_epp(request, pregao_id, item_id, beneficio_id):
             f"Para exercer o benefício, a nova oferta da ME/EPP deve ser inferior ao melhor valor atual de R$ {beneficio.valor_referencia:.2f}.",
         )
         return redirect("execucao:tela_lances", pregao_id=pregao.id, item_id=item_atual.id)
+
+    # O benefício exige oferta inferior ao valor vencedor de referência.
+    # Não aplica veto absoluto pela média: o encerramento acima da média
+    # pode ser confirmado pelo usuário no fluxo de finalização do item.
 
     # Registra a oferta vencedora do benefício também como Lance.
     # Assim ela passa a integrar o histórico oficial e a Planilha de Lances,
@@ -1433,6 +1502,8 @@ def finalizar_pregao(request, pregao_id):
         )
         return redirect("execucao:conferencia_pregao", pregao_id=pregao.id)
 
+    # A média gera aviso e confirmação na finalização de cada item,
+    # mas não impede a finalização oficial de um pregão já conferido.
     pregao.status = Pregao.STATUS_FINALIZADO
     pregao.finalizado_em = timezone.now()
     pregao.save(update_fields=["status", "finalizado_em", "atualizado_em"])
