@@ -1289,6 +1289,9 @@ def excluir_lance_conferencia(request, pregao_id, item_id, lance_id):
 def proximo_item(request, pregao_id):
     pregao = get_object_or_404(Pregao, id=pregao_id)
 
+    if pregao.status == Pregao.STATUS_FINALIZADO:
+        return redirect("execucao:pregao_finalizado", pregao_id=pregao.id)
+
     beneficio_pendente = (
         BeneficioMEEPP.objects.filter(
             pregao=pregao,
@@ -1309,20 +1312,49 @@ def proximo_item(request, pregao_id):
             item_id=beneficio_pendente.pregao_item_id,
         )
 
-    proximo = PregaoItem.objects.filter(
+    # Itens visualizados anteriormente podem estar EM_DISPUTA mesmo sem
+    # lances. Eles não podem ser ignorados na navegação da execução.
+    status_abertos = (
+        PregaoItem.STATUS_PENDENTE,
+        PregaoItem.STATUS_EM_DISPUTA,
+    )
+    itens_abertos = PregaoItem.objects.filter(
         pregao=pregao,
-        status=PregaoItem.STATUS_PENDENTE,
-    ).order_by("ordem").first()
+        status__in=status_abertos,
+    ).order_by("ordem", "id")
 
-    if proximo:
-        proximo.status = PregaoItem.STATUS_EM_DISPUTA
-        proximo.iniciado_em = timezone.now()
-        proximo.rodada_atual = 1
-        proximo.fornecedor_atual = None
-        proximo.save(update_fields=["status", "iniciado_em", "rodada_atual", "fornecedor_atual"])
+    # O botão informa de qual item o usuário está avançando. Dessa forma,
+    # duas requisições do mesmo botão não consomem dois itens da fila.
+    item_atual_id = request.GET.get("item_atual")
+    if item_atual_id:
+        try:
+            item_atual_id = int(item_atual_id)
+        except (ValueError, TypeError):
+            messages.error(request, "Item de origem inválido.")
+            return redirect("execucao:execucao_pregao")
 
-        definir_fornecedor_atual_se_necessario(pregao, proximo)
+        item_origem = get_object_or_404(
+            PregaoItem, id=item_atual_id, pregao=pregao,
+        )
+        if item_origem.status in status_abertos:
+            return redirect(
+                "execucao:tela_lances", pregao_id=pregao.id,
+                item_id=item_origem.id,
+            )
 
+        # Prioriza o próximo item ainda não concluído na ordem do certame.
+        proximo = itens_abertos.filter(ordem__gt=item_origem.ordem).first()
+        if proximo is None:
+            # Ao chegar ao final, retoma os itens anteriores ainda abertos.
+            proximo = itens_abertos.first()
+    else:
+        # Compatibilidade com links antigos que não informam o item de origem.
+        proximo = itens_abertos.first()
+
+    if proximo is not None:
+        # Não altera o status nem reinicia a rodada aqui. A tela de lances
+        # já inicializa um item PENDENTE quando ele é efetivamente aberto.
+        # Um item EM_DISPUTA conserva seus lances, fornecedor e rodada.
         return redirect(
             "execucao:tela_lances",
             pregao_id=pregao.id,
@@ -1330,7 +1362,6 @@ def proximo_item(request, pregao_id):
         )
 
     return redirect("execucao:fim_pregao", pregao_id=pregao.id)
-
 
 
 def montar_linhas_conferencia_pregao(pregao):
