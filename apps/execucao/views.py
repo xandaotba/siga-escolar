@@ -281,7 +281,17 @@ def abrir_execucao(request, pregao_id):
             )
 
     try:
-        item_atual = iniciar_ou_continuar_pregao(pregao)
+        with transaction.atomic():
+            # Antes de iniciar, sincroniza a ordem oficial mesmo quando os
+            # últimos quantitativos foram importados sem abrir Média de Preços.
+            # O bloqueio do certame mantém esta operação junto do início.
+            pregao = Pregao.objects.select_for_update().get(pk=pregao.pk)
+            if pregao.status == Pregao.STATUS_NAO_INICIADO:
+                from apps.pregoes.views import garantir_itens_pregao_para_propostas
+
+                garantir_itens_pregao_para_propostas(pregao)
+
+            item_atual = iniciar_ou_continuar_pregao(pregao)
         return redirect(
             "execucao:tela_lances",
             pregao_id=pregao.id,

@@ -1140,13 +1140,16 @@ def garantir_itens_pregao_para_propostas(pregao):
 
     Depois que o pregão inicia, a ordem deixa de ser reorganizada.
     """
-    quantitativos_pregao = list(
-        QuantitativoPregao.objects.filter(pregao=pregao)
-        .select_related("item")
-        .order_by("item__nome_item", "item_id")
-    )
-
     with transaction.atomic():
+        # Serializa a sincronização com a abertura da execução e consulta
+        # o status atualizado, sem confiar em uma instância anterior.
+        pregao = Pregao.objects.select_for_update().get(pk=pregao.pk)
+        quantitativos_pregao = list(
+            QuantitativoPregao.objects.filter(pregao=pregao)
+            .select_related("item")
+            .order_by("item__nome_item", "item_id")
+        )
+
         itens_existentes = list(
             PregaoItem.objects.select_for_update()
             .filter(pregao=pregao)
@@ -1185,7 +1188,11 @@ def garantir_itens_pregao_para_propostas(pregao):
             itens_existentes.append(novo_item)
 
         # A ordem somente pode ser reorganizada antes do início do pregão.
-        if pregao.tipo_certame == Pregao.TIPO_PREGAO_PRESENCIAL and pregao.status == Pregao.STATUS_NAO_INICIADO:
+        if (
+            pregao.tipo_certame == Pregao.TIPO_PREGAO_PRESENCIAL
+            and pregao.status == Pregao.STATUS_NAO_INICIADO
+            and all(item.status == PregaoItem.STATUS_PENDENTE for item in itens_existentes)
+        ):
             ids_com_quantitativo = {
                 quantitativo.item_id
                 for quantitativo in quantitativos_pregao
@@ -1216,7 +1223,10 @@ def garantir_itens_pregao_para_propostas(pregao):
 
             itens_ordenados = itens_ativos + itens_sem_quantitativo
 
-            if itens_ordenados:
+            if any(
+                item_pregao.ordem != nova_ordem
+                for nova_ordem, item_pregao in enumerate(itens_ordenados, start=1)
+            ):
                 maior_ordem_atual = max(
                     item_pregao.ordem
                     for item_pregao in itens_ordenados
@@ -1294,7 +1304,9 @@ def media_precos(request):
                 item_id__in=itens_com_quantitativo,
             )
             .select_related("item")
-            .order_by("ordem", "item__nome_item")
+            # Ordenação da tela independente da numeração histórica do item.
+            # Também contempla Chamada Pública e itens incluídos posteriormente.
+            .order_by("item__nome_item", "item_id")
         )
 
     if request.method == "POST":
@@ -1503,6 +1515,22 @@ def _hash_estrutura_itens_proposta_digital(pregao):
         partes.append("|".join(str(valor) for valor in item))
     texto = ";".join(partes)
     return hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def _estrutura_atual_para_importacao_digital(pregao):
+    """Estrutura vigente, distinta da estrutura histórica da proposta."""
+    estrutura = _hash_estrutura_itens_proposta_digital(pregao)
+    ids_ativos = set(QuantitativoPregao.objects.filter(pregao=pregao).values_list("item_id", flat=True))
+    itens = [
+        {"pregao_item_id": pk, "item_id": item_id, "ativo": item_id in ids_ativos}
+        for pk, item_id in PregaoItem.objects.filter(pregao=pregao)
+        .order_by("id").values_list("id", "item_id")
+    ]
+    # Inclui a presença do quantitativo: a sincronização preserva registros antigos.
+    assinatura = hashlib.sha256(
+        json.dumps([estrutura, itens], sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return estrutura, assinatura, itens
 
 
 @login_required
@@ -2336,26 +2364,13 @@ def localizar_proposta_digital(request):
             status=409,
         )
 
-    estrutura_atual = _hash_estrutura_itens_proposta_digital(pregao)
-    quantidade_atual = PregaoItem.objects.filter(pregao=pregao).count()
-
-    if (
-        proposta.quantidade_itens != quantidade_atual
-        or not hmac.compare_digest(
-            proposta.estrutura_hash,
-            estrutura_atual,
-        )
-    ):
-        return _json_no_store(
-            {
-                "ok": False,
-                "mensagem": (
-                    "A relação de itens deste pregão foi alterada após o envio "
-                    "da proposta. A importação foi bloqueada para conferência."
-                ),
-            },
-            status=409,
-        )
+    estrutura_atual, assinatura_atual, itens_atuais = _estrutura_atual_para_importacao_digital(pregao)
+    estrutura_alterada = (
+        proposta.quantidade_itens != len(itens_atuais)
+        or not hmac.compare_digest(proposta.estrutura_hash, estrutura_atual)
+    )
+    # Divergência histórica é informativa: a abertura continua pelo código e
+    # a correspondência dos produtos será conferida por ID no navegador.
 
     try:
         pacote_bytes = base64.b64decode(
@@ -2410,6 +2425,7 @@ def localizar_proposta_digital(request):
             "fornecedor_id": fornecedor.id,
             "codigo_hash": proposta.codigo_hash,
             "estrutura_hash": proposta.estrutura_hash,
+            "assinatura_estrutura_atual": assinatura_atual,
         },
         salt=PROPOSTA_DIGITAL_IMPORTACAO_SALT,
         compress=True,
@@ -2425,6 +2441,8 @@ def localizar_proposta_digital(request):
             "conteudo_hash": proposta.conteudo_hash,
             "estrutura_hash": proposta.estrutura_hash,
             "quantidade_itens": proposta.quantidade_itens,
+            "estrutura_alterada": estrutura_alterada,
+            "itens_atuais": itens_atuais,
             "algoritmo": proposta.algoritmo,
             "token_importacao": token_importacao,
         }
@@ -3065,7 +3083,8 @@ def propostas_iniciais(request):
                     )
                 else:
                     if (
-                        str(dados_importacao.get("pregao_id")) != str(pregao.id)
+                        not pode_controlar_propostas_digitais
+                        or str(dados_importacao.get("pregao_id")) != str(pregao.id)
                         or str(dados_importacao.get("fornecedor_id"))
                         != str(fornecedor_selecionado.id)
                     ):
@@ -3111,12 +3130,16 @@ def propostas_iniciais(request):
                                 )
                                 or not hmac.compare_digest(
                                     proposta_digital_validacao.estrutura_hash,
-                                    _hash_estrutura_itens_proposta_digital(pregao),
+                                    str(dados_importacao.get("estrutura_hash") or ""),
+                                )
+                                or not hmac.compare_digest(
+                                    str(dados_importacao.get("assinatura_estrutura_atual") or ""),
+                                    _estrutura_atual_para_importacao_digital(pregao)[1],
                                 )
                             ):
                                 erros.append(
-                                    "A validação da Proposta Digital não confere. "
-                                    "Informe o código novamente."
+                                    "A validação da Proposta Digital não confere ou a estrutura mudou "
+                                    "durante a importação. Atualize a página e informe o código novamente."
                                 )
 
             # Primeiro valida tudo. Só grava depois que todas as linhas
@@ -3234,6 +3257,9 @@ def propostas_iniciais(request):
                     proposta_digital_bloqueada = None
 
                     if proposta_digital_para_importar_id:
+                        pregao_bloqueado = Pregao.objects.select_for_update().get(pk=pregao.pk)
+                        if pregao_bloqueado.status not in [Pregao.STATUS_NAO_INICIADO, Pregao.STATUS_EM_ANDAMENTO]:
+                            raise ValidationError("O pregão não está mais disponível para importação.")
                         proposta_digital_bloqueada = (
                             PropostaDigital.objects.select_for_update()
                             .filter(
@@ -3267,14 +3293,28 @@ def propostas_iniciais(request):
                                 cnpj_hash_fornecedor,
                             )
                             or not hmac.compare_digest(
+                                proposta_digital_bloqueada.codigo_hash,
+                                str(dados_importacao.get("codigo_hash") or ""),
+                            )
+                            or not hmac.compare_digest(
                                 proposta_digital_bloqueada.estrutura_hash,
-                                _hash_estrutura_itens_proposta_digital(pregao),
+                                str(dados_importacao.get("estrutura_hash") or ""),
+                            )
+                            or not hmac.compare_digest(
+                                str(dados_importacao.get("assinatura_estrutura_atual") or ""),
+                                _estrutura_atual_para_importacao_digital(pregao_bloqueado)[1],
                             )
                         ):
                             raise ValidationError(
                                 "A Proposta Digital não corresponde ao "
                                 "pregão/fornecedor selecionado."
                             )
+
+                    if proposta_digital_bloqueada:
+                        ids_validados = {dados["pregao_item"].pk for dados in dados_validados}
+                        ids_atuais = set(PregaoItem.objects.filter(pregao=pregao).values_list("pk", flat=True))
+                        if ids_validados != ids_atuais:
+                            raise ValidationError("A lista de itens mudou. Atualize a página e abra novamente a proposta.")
 
                     for dados in dados_validados:
                         PropostaInicialItem.objects.update_or_create(
