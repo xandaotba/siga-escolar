@@ -8,6 +8,32 @@
 
 {% block content %}
 
+<style>
+    .filtros-selecao-certame {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+        gap: 14px;
+        align-items: start;
+    }
+    .filtros-selecao-certame.com-escola {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 2fr);
+    }
+    .filtros-selecao-certame > .form-group {
+        min-width: 0;
+    }
+    .filtros-selecao-certame select {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+    @media (max-width: 760px) {
+        .filtros-selecao-certame,
+        .filtros-selecao-certame.com-escola {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+</style>
+
 {% if messages %}
 {% for message in messages %}
 {% if message.tags == "success" %}
@@ -28,14 +54,22 @@
     </div>
 
     <form method="get">
-        <div class="grid grid-2">
+        <div class="filtros-selecao-certame com-escola">
             <div class="form-group">
-                <label>Certame</label>
+                <label for="id_filtro_tipo_certame">Tipo de Certame</label>
+                <select id="id_filtro_tipo_certame">
+                    <option value="todos" selected>Todos</option>
+                    <option value="pregao_presencial">Pregão Presencial</option>
+                    <option value="chamada_publica">Chamada Pública</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="id_pregao">Certame</label>
                 <select name="pregao" id="id_pregao" required>
                     <option value="">Selecione um certame</option>
 
                     {% for p in pregoes %}
-                    <option value="{{ p.id }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
+                    <option value="{{ p.id }}" data-tipo-certame="{{ p.tipo_certame }}" {% if pregao and pregao.id == p.id %}selected{% endif %}>
                         {{ p.get_tipo_certame_display }} {{ p.numero }}/{{ p.ano }} — {% for municipio in p.municipios.all %}{{ municipio.nome }}{% if municipio.uf %}/{{ municipio.uf }}{% endif %}{% if not forloop.last %}, {% endif %}{% empty %}Sem município vinculado{% endfor %} — {{ p.get_status_display }}
                     </option>
                     {% endfor %}
@@ -46,12 +80,12 @@
                 <label>Escola</label>
                 <select name="escola" id="id_escola" required>
                     <option value="">Selecione primeiro o certame</option>
-                
-                    {% for escola in escolas %}
-                    <option value="{{ escola.id }}" {% if escola_selecionada and escola.id == escola_selecionada.id %}selected{% endif %}>
-                        {{ escola.nome_escola }}
-                        {% if escola.municipio %}
-                        - {{ escola.municipio.nome }}{% if escola.municipio.uf %}/{{ escola.municipio.uf }}{% endif %}
+
+                    {% for e in escolas %}
+                    <option value="{{ e.id }}" {% if escola and e.id == escola.id %}selected{% endif %}>
+                        {{ e.nome_escola }}
+                        {% if e.municipio %}
+                        - {{ e.municipio.nome }}{% if e.municipio.uf %}/{{ e.municipio.uf }}{% endif %}
                         {% endif %}
                     </option>
                     {% endfor %}
@@ -163,7 +197,10 @@
             campoEscola.appendChild(option);
         }
 
+        let requisicaoEscolas = 0;
+
         function carregarEscolasPorPregao(pregaoId) {
+            const requisicao = ++requisicaoEscolas;
             if (!pregaoId) {
                 limparEscolas("Selecione primeiro o certame");
                 return;
@@ -171,7 +208,7 @@
 
             limparEscolas("Carregando escolas...");
 
-            fetch(`/pregoes/ajax/escolas-por-pregao/${pregaoId}/`)
+            fetch("{% url 'pregoes:escolas_por_pregao' 0 %}".replace(/0\/$/, encodeURIComponent(pregaoId) + "/"))
                 .then(function (response) {
                     if (!response.ok) {
                         throw new Error("Erro ao buscar escolas.");
@@ -180,6 +217,7 @@
                     return response.json();
                 })
                 .then(function (data) {
+                    if (requisicao !== requisicaoEscolas || campoPregao.value !== pregaoId) return;
                     campoEscola.innerHTML = "";
 
                     const optionInicial = document.createElement("option");
@@ -212,6 +250,7 @@
                     });
                 })
                 .catch(function () {
+                    if (requisicao !== requisicaoEscolas || campoPregao.value !== pregaoId) return;
                     limparEscolas("Erro ao carregar escolas");
                 });
         }
@@ -221,4 +260,54 @@
         });
     });
 </script>
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const filtroTipo = document.getElementById("id_filtro_tipo_certame");
+        const campoPregao = document.getElementById("id_pregao");
+        if (!filtroTipo || !campoPregao) return;
+
+        // A lista completa já vem do servidor, com as permissões e situações
+        // válidas para esta tela. O filtro não altera essas regras.
+        const opcoes = Array.from(campoPregao.options)
+            .filter(opcao => opcao.value !== "")
+            .map(opcao => opcao.cloneNode(true));
+        const chaveFiltro = "siga.filtroTipoCertame:" + window.location.pathname;
+
+        function aplicarFiltro() {
+            const selecionado = campoPregao.value;
+            const tipo = filtroTipo.value;
+            const filtradas = opcoes.filter(opcao =>
+                tipo === "todos" || opcao.dataset.tipoCertame === tipo
+            );
+            const inicial = new Option(
+                filtradas.length ? "Selecione um certame" : "Nenhum certame disponível para este tipo", ""
+            );
+            campoPregao.replaceChildren(inicial, ...filtradas.map(opcao => opcao.cloneNode(true)));
+            campoPregao.value = filtradas.some(opcao => opcao.value === selecionado) ? selecionado : "";
+
+            // Quando a seleção deixa de ser válida, limpa também a lista de escolas.
+            if (selecionado !== campoPregao.value) {
+                campoPregao.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        }
+
+        // Mantém o filtro ao carregar/salvar itens, sem exigir mudanças no backend.
+        // Um link direto para outro tipo de certame continua mostrando sua seleção.
+        try {
+            const salvo = sessionStorage.getItem(chaveFiltro);
+            const atual = opcoes.find(opcao => opcao.value === campoPregao.value);
+            if (["todos", "pregao_presencial", "chamada_publica"].includes(salvo)
+                && (!atual || salvo === "todos" || atual.dataset.tipoCertame === salvo)) {
+                filtroTipo.value = salvo;
+            }
+        } catch (erro) { /* armazenamento indisponível: mantém Todos */ }
+
+        aplicarFiltro();
+        filtroTipo.addEventListener("change", function () {
+            try { sessionStorage.setItem(chaveFiltro, this.value); } catch (erro) { /* opcional */ }
+            aplicarFiltro();
+        });
+    });
+</script>
+
 {% endblock %}

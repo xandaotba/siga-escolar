@@ -233,25 +233,39 @@ def relacao_fornecedores_word(request, pregao_id):
 
 
 
+def _filtro_tipo_certame(request):
+    """Normaliza o filtro da listagem, sem alterar o formulário de cadastro."""
+    tipo = request.GET.get("tipo_certame", "todos")
+    if tipo in (Pregao.TIPO_PREGAO_PRESENCIAL, Pregao.TIPO_CHAMADA_PUBLICA):
+        return tipo
+    return "todos"
+
+
+def _pagina_certames_cadastrados(request, tipo):
+    queryset = Pregao.objects.all()
+    if tipo != "todos":
+        queryset = queryset.filter(tipo_certame=tipo)
+    queryset = queryset.prefetch_related("municipios", "fornecedores").order_by(
+        "-ano", "-numero", "-pk"
+    )
+    return paginar_queryset(request, queryset)
+
+
 def pregoes(request):
+    filtro_tipo_certame = _filtro_tipo_certame(request)
     if request.method == "POST":
         form = PregaoForm(request.POST)
 
         if form.is_valid():
             form.save(user=request.user)
             messages.success(request, "Certame cadastrado com sucesso.")
-            return redirect("pregoes:pregoes")
+            return redirect(f"{reverse('pregoes:pregoes')}?tipo_certame={filtro_tipo_certame}")
 
         messages.error(request, "Verifique os dados informados no formulário.")
     else:
         form = PregaoForm()
 
-    pregoes_queryset = (
-        Pregao.objects.all()
-        .prefetch_related("municipios", "fornecedores")
-        .order_by("-ano", "-numero")
-    )
-    pregoes_pagina = paginar_queryset(request, pregoes_queryset)
+    pregoes_pagina = _pagina_certames_cadastrados(request, filtro_tipo_certame)
 
     return render(
         request,
@@ -261,11 +275,14 @@ def pregoes(request):
             "pregoes": pregoes_pagina,
             "modo_edicao": False,
             "pregao_edicao": None,
+            "filtro_tipo_certame": filtro_tipo_certame,
         },
     )
 
 
 def editar_pregao(request, pregao_id):
+    filtro_tipo_certame = _filtro_tipo_certame(request)
+    url_lista = f"{reverse('pregoes:pregoes')}?tipo_certame={filtro_tipo_certame}"
     pregao = get_object_or_404(Pregao, id=pregao_id)
 
     if pregao.status != Pregao.STATUS_NAO_INICIADO:
@@ -273,7 +290,7 @@ def editar_pregao(request, pregao_id):
             request,
             "Este certame não pode ser editado porque já está em andamento ou finalizado.",
         )
-        return redirect("pregoes:pregoes")
+        return redirect(url_lista)
 
     if request.method == "POST":
         form = PregaoForm(request.POST, instance=pregao)
@@ -281,18 +298,13 @@ def editar_pregao(request, pregao_id):
         if form.is_valid():
             form.save(user=request.user)
             messages.success(request, "Certame atualizado com sucesso.")
-            return redirect("pregoes:pregoes")
+            return redirect(url_lista)
 
         messages.error(request, "Verifique os dados informados no formulário.")
     else:
         form = PregaoForm(instance=pregao)
 
-    pregoes_queryset = (
-        Pregao.objects.all()
-        .prefetch_related("municipios", "fornecedores")
-        .order_by("-ano", "-numero")
-    )
-    pregoes_pagina = paginar_queryset(request, pregoes_queryset)
+    pregoes_pagina = _pagina_certames_cadastrados(request, filtro_tipo_certame)
 
     return render(
         request,
@@ -302,6 +314,7 @@ def editar_pregao(request, pregao_id):
             "pregoes": pregoes_pagina,
             "modo_edicao": True,
             "pregao_edicao": pregao,
+            "filtro_tipo_certame": filtro_tipo_certame,
         },
     )
 

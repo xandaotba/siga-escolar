@@ -123,6 +123,58 @@
         line-height: 1.1;
         white-space: nowrap;
     }
+
+    .filtro-certames {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 16px;
+        border: 1px solid #dbe3ec;
+        border-radius: 10px;
+        background: #f8fafc;
+        padding: 10px 12px;
+        margin: 0 0 14px;
+        min-width: 0;
+    }
+
+    .filtro-certames legend {
+        font-size: 12px;
+        font-weight: 700;
+        color: #475569;
+        padding: 0 4px;
+    }
+
+    .filtro-certames label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 600;
+        font-size: 13px;
+        margin: 0;
+        cursor: pointer;
+    }
+
+    .filtro-certames input[type="radio"] {
+        appearance: auto;
+        width: 16px !important;
+        height: 16px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        accent-color: #2563eb;
+        cursor: pointer;
+    }
+
+    #certames-listagem[aria-busy="true"] {
+        opacity: .65;
+    }
+
+    #certames-filtro-status {
+        font-size: 12px;
+        color: #475569;
+    }
+
+    #certames-filtro-status:empty { display: none; }
+
 </style>
 
 
@@ -254,7 +306,7 @@
                     Salvar Alterações
                 </button>
 
-                <a class="btn btn-secondary" href="{% url 'pregoes:pregoes' %}">
+                <a class="btn btn-secondary" id="cancelar-edicao-certame" href="{% url 'pregoes:pregoes' %}?tipo_certame={{ filtro_tipo_certame|urlencode }}">
                     Cancelar Edição
                 </a>
                 {% else %}
@@ -269,6 +321,26 @@
     <div class="card">
         <h2>Certames Cadastrados</h2>
 
+        <fieldset class="filtro-certames" id="filtro-certames">
+            <legend>Filtrar por tipo de certame</legend>
+            <label>
+                <input type="radio" name="filtro_tipo_certame" value="todos"
+                       {% if filtro_tipo_certame == "todos" %}checked{% endif %}>
+                Todos
+            </label>
+            <label>
+                <input type="radio" name="filtro_tipo_certame" value="pregao_presencial"
+                       {% if filtro_tipo_certame == "pregao_presencial" %}checked{% endif %}>
+                Pregão Presencial
+            </label>
+            <label>
+                <input type="radio" name="filtro_tipo_certame" value="chamada_publica"
+                       {% if filtro_tipo_certame == "chamada_publica" %}checked{% endif %}>
+                Chamada Pública
+            </label>
+        </fieldset>
+        <p id="certames-filtro-status" role="status" aria-live="polite"></p>
+        <div id="certames-listagem" data-tipo="{{ filtro_tipo_certame }}" aria-busy="false">
         <div class="table-wrapper">
             <table>
                 <thead>
@@ -325,7 +397,7 @@
                                 {% endif %}
 
                                 {% if pregao.status == "nao_iniciado" %}
-                                <a class="btn btn-primary" href="{% url 'pregoes:editar_pregao' pregao.id %}">
+                                <a class="btn btn-primary" href="{% url 'pregoes:editar_pregao' pregao.id %}?tipo_certame={{ filtro_tipo_certame|urlencode }}">
                                     Editar
                                 </a>
                                 {% else %}
@@ -336,7 +408,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="6">Nenhum certame cadastrado.</td>
+                        <td colspan="6">{% if filtro_tipo_certame == "todos" %}Nenhum certame cadastrado.{% else %}Nenhum certame encontrado para o tipo selecionado.{% endif %}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -345,7 +417,7 @@
         {% if pregoes.has_other_pages %}
         <div class="pagination" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:16px; flex-wrap:wrap;">
             {% if pregoes.has_previous %}
-            <a class="btn btn-secondary" href="?page={{ pregoes.previous_page_number }}">Anterior</a>
+            <a class="btn btn-secondary" href="?tipo_certame={{ filtro_tipo_certame|urlencode }}&amp;page={{ pregoes.previous_page_number }}">Anterior</a>
             {% endif %}
 
             <span style="font-weight:700; color:#475569;">
@@ -353,11 +425,82 @@
             </span>
 
             {% if pregoes.has_next %}
-            <a class="btn btn-secondary" href="?page={{ pregoes.next_page_number }}">Próxima</a>
+            <a class="btn btn-secondary" href="?tipo_certame={{ filtro_tipo_certame|urlencode }}&amp;page={{ pregoes.next_page_number }}">Próxima</a>
             {% endif %}
         </div>
         {% endif %}
+        </div>
     </div>
 </div>
+
+<script>
+(function () {
+    "use strict";
+    const filtro = document.getElementById("filtro-certames");
+    const lista = document.getElementById("certames-listagem");
+    const status = document.getElementById("certames-filtro-status");
+    const cancelarEdicao = document.getElementById("cancelar-edicao-certame");
+    const radios = Array.from(filtro.querySelectorAll('input[type="radio"]'));
+    let requisicao = 0;
+    let controlador = null;
+
+    async function atualizarListagem(url) {
+        const numero = ++requisicao;
+        if (controlador) controlador.abort();
+        controlador = new AbortController();
+        lista.setAttribute("aria-busy", "true");
+        status.textContent = "Carregando certames...";
+        try {
+            const resposta = await fetch(url.toString(), {
+                credentials: "same-origin",
+                cache: "no-store",
+                signal: controlador.signal
+            });
+            if (!resposta.ok) throw new Error("Falha ao carregar a listagem.");
+            const html = await resposta.text();
+            if (numero !== requisicao) return;
+            const documento = new DOMParser().parseFromString(html, "text/html");
+            const novaLista = documento.getElementById("certames-listagem");
+            if (!novaLista || novaLista.dataset.tipo !== url.searchParams.get("tipo_certame")) {
+                throw new Error("Listagem indisponível.");
+            }
+            // Atualiza somente a tabela e sua paginação; o formulário à esquerda
+            // e os campos ainda não salvos permanecem intactos.
+            lista.innerHTML = novaLista.innerHTML;
+            lista.dataset.tipo = novaLista.dataset.tipo;
+            radios.forEach(radio => { radio.checked = radio.value === lista.dataset.tipo; });
+            if (cancelarEdicao) {
+                const destino = new URL(cancelarEdicao.href);
+                destino.searchParams.set("tipo_certame", lista.dataset.tipo);
+                cancelarEdicao.href = destino.toString();
+            }
+            // Mantém o filtro em um eventual salvamento/recarregamento da página.
+            window.history.replaceState(window.history.state, "", url.toString());
+            status.textContent = "";
+        } catch (erro) {
+            if (numero !== requisicao) return;
+            radios.forEach(radio => { radio.checked = radio.value === lista.dataset.tipo; });
+            status.textContent = "Não foi possível atualizar os certames. Tente novamente.";
+        } finally {
+            if (numero === requisicao) lista.setAttribute("aria-busy", "false");
+        }
+    }
+
+    filtro.addEventListener("change", function (evento) {
+        if (!radios.includes(evento.target)) return;
+        const url = new URL(window.location.href);
+        url.searchParams.set("tipo_certame", evento.target.value);
+        url.searchParams.delete("page");
+        atualizarListagem(url);
+    });
+
+    lista.addEventListener("click", function (evento) {
+        const link = evento.target.closest(".pagination a");
+        if (!link || evento.ctrlKey || evento.metaKey || evento.shiftKey || evento.altKey || evento.button !== 0) return;
+        evento.preventDefault();
+        atualizarListagem(new URL(link.href));
+    });
+})();
+</script>
 
 {% endblock %}
